@@ -1151,6 +1151,118 @@ button:disabled {
   line-height: 1.55;
 }
 
+.debate-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 26px;
+}
+
+.debate-case {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.debate-case.bull {
+  border-color: rgba(91, 226, 194, 0.28);
+}
+
+.debate-case.bear {
+  border-color: rgba(255, 140, 150, 0.28);
+}
+
+.debate-case > p {
+  margin: 0 0 16px;
+  color: #d9e2ff;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.debate-case ul {
+  margin: 8px 0 16px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.debate-case ul:last-child {
+  margin-bottom: 0;
+}
+
+.judgement-summary {
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.logout-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--faint);
+  font: 700 11px/1 var(--font-geist-mono), monospace;
+  cursor: pointer;
+}
+
+.logout-link:hover {
+  color: var(--ink);
+}
+
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: min(320px, calc(100% - 48px));
+  padding: 40px 32px;
+  border: 1px solid rgba(229, 235, 255, 0.16);
+  border-radius: 22px;
+  background: rgba(22, 29, 54, 0.58);
+  box-shadow: 0 22px 65px rgba(0, 0, 0, 0.26), inset 0 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(26px) saturate(145%);
+  text-align: center;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.login-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.028);
+  text-align: center;
+}
+
+.login-card .primary-button {
+  width: 100%;
+  min-height: 46px;
+  margin-left: 0;
+}
+
+.login-error {
+  color: var(--red);
+  font-size: 11px;
+}
+
 .backtest-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr);

@@ -379,6 +379,34 @@ it as `Authorization: Bearer <key>` (the header ChatGPT/OpenAI's `mcp` tool
 uses) or `X-API-Key: <key>`. `/health` and the MCP `stdio` transport (local
 process only) never require a key.
 
+### Frontend login gate
+
+The dashboard has its own password screen, separate from the API keys above.
+Set `DASHBOARD_PASSWORD` and `DASHBOARD_API_KEY` (a real key created with
+`quant-signal-manage-keys`) on the `api` service. `POST /api/v1/auth/login`
+checks the password and, on success, hands back `DASHBOARD_API_KEY`; the
+browser stores it and attaches it as `Authorization: Bearer <key>` on every
+request from then on. This only actually restricts data once
+`API_AUTH_ENABLED=true` — a password screen in front of an open API protects
+nothing, since the API would still answer direct requests either way.
+
+## Syncing data on demand
+
+`POST /api/v1/sync/symbol` (and the `sync_symbol_data` MCP tool) backfills one
+symbol's official daily bars synchronously, choosing TWSE or TPEx by suffix:
+
+```bash
+curl -X POST "http://127.0.0.1:18100/api/v1/sync/symbol" \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "3016.TW", "start": "2024-01-01"}'
+```
+
+This is the same path the `quant-signal-sync-data symbol` CLI uses, just
+reachable over HTTP/MCP instead of a shell exec, so a symbol with no history
+yet (the analysis tools require at least 60 point-in-time bars) can be synced
+without dashboard/server access. Large date ranges take longer than the
+request may want to wait on — for a full multi-year backfill, prefer the CLI.
+
 ## Local development
 
 The project requires Python 3.12 or newer. `uv` can install a managed Python:
@@ -425,6 +453,7 @@ The MCP server exposes:
 
 - `get_data_status`
 - `search_symbol`
+- `sync_symbol_data`
 - `analyze_symbol`
 - `get_market_regime`
 - `get_market_environment`

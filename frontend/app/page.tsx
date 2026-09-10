@@ -151,6 +151,21 @@ type LlmReport = {
   judgement: Judgement;
 };
 
+type DebateCase = {
+  stance: "bullish" | "bearish";
+  thesis: string;
+  key_evidence: string[];
+  counterpoints_to_address: string[];
+};
+
+type DebateReport = {
+  model: string;
+  prompt_version: string;
+  bull_case: DebateCase;
+  bear_case: DebateCase;
+  judgement: Judgement;
+};
+
 type LlmStreamPayload = {
   text?: string;
   model?: string;
@@ -236,8 +251,23 @@ const formatNumber = (value: number, digits = 1) =>
     minimumFractionDigits: digits,
   }).format(value);
 
+const AUTH_STORAGE_KEY = "quant_signal_api_key";
+
+// Set once after a successful login; read by every fetch call below. A
+// module-level variable (not React state) so fetchJson doesn't need the key
+// threaded through every call site.
+let authApiKey: string | null = null;
+
+function withAuthHeaders(init?: RequestInit): RequestInit {
+  if (!authApiKey) return init ?? {};
+  return {
+    ...init,
+    headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${authApiKey}` },
+  };
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetch(url, withAuthHeaders(init));
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const message =
@@ -247,7 +277,17 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export default function Home() {
+function Dashboard({
+  apiKey,
+  onLogout,
+}: {
+  apiKey: string;
+  onLogout: () => void;
+}) {
+  useEffect(() => {
+    authApiKey = apiKey;
+  }, [apiKey]);
+
   const [symbol, setSymbol] = useState("2330.TW");
   const [benchmark, setBenchmark] = useState("^TWII");
   const [asOf, setAsOf] = useState(today);
@@ -260,8 +300,10 @@ export default function Home() {
   const [llmReport, setLlmReport] = useState<LlmReport | null>(null);
   const [streamedGuide, setStreamedGuide] = useState("");
   const [streamModel, setStreamModel] = useState<string | null>(null);
+  const [debateReport, setDebateReport] = useState<DebateReport | null>(null);
   const [loadingSignal, setLoadingSignal] = useState(false);
   const [loadingLlm, setLoadingLlm] = useState(false);
+  const [loadingDebate, setLoadingDebate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"signal" | "backtest">("signal");
 
@@ -358,19 +400,22 @@ export default function Home() {
     setStreamedGuide("");
     setStreamModel(null);
     try {
-      const response = await fetch(`${API_URL}/api/v1/llm-analyses/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol: symbol.trim(),
-          as_of: asOf,
-          market: selectedMarket,
-          benchmark: benchmark.trim() || null,
-          strategy_version: "regime_v1",
-          backtest_job_id:
-            backtest?.status === "completed" ? backtest.id : null,
+      const response = await fetch(
+        `${API_URL}/api/v1/llm-analyses/stream`,
+        withAuthHeaders({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: symbol.trim(),
+            as_of: asOf,
+            market: selectedMarket,
+            benchmark: benchmark.trim() || null,
+            strategy_version: "regime_v1",
+            backtest_job_id:
+              backtest?.status === "completed" ? backtest.id : null,
+          }),
         }),
-      });
+      );
       if (!response.ok || !response.body) {
         const payload = await response.json().catch(() => null);
         throw new Error(
@@ -423,6 +468,37 @@ export default function Home() {
       );
     } finally {
       setLoadingLlm(false);
+    }
+  };
+
+  const runDebateAnalysis = async () => {
+    setLoadingDebate(true);
+    setError(null);
+    setDebateReport(null);
+    try {
+      const report = await fetchJson<DebateReport>(
+        `${API_URL}/api/v1/debate-analyses`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: symbol.trim(),
+            as_of: asOf,
+            market: selectedMarket,
+            benchmark: benchmark.trim() || null,
+            strategy_version: "regime_v1",
+            backtest_job_id:
+              backtest?.status === "completed" ? backtest.id : null,
+          }),
+        },
+      );
+      setDebateReport(report);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error ? nextError.message : "多空辯論分析失敗",
+      );
+    } finally {
+      setLoadingDebate(false);
     }
   };
 
@@ -530,6 +606,10 @@ export default function Home() {
           資料 {dataStatus?.real_data_ready ? "交易所官方" : "示範"}
           <span className="service-separator" />
           LLM {llmStatus?.configured ? "已連線" : "待設定"}
+          <span className="service-separator" />
+          <button className="logout-link" onClick={onLogout}>
+            登出
+          </button>
         </div>
       </header>
 
@@ -1016,6 +1096,120 @@ export default function Home() {
                 </div>
               )}
             </section>
+
+            <section className="llm-panel debate-panel">
+              <div className="llm-header">
+                <div>
+                  <p className="eyebrow">BULL / BEAR DEBATE</p>
+                  <h2>多空各自舉證，再由裁決者給出操作指南。</h2>
+                </div>
+                <div className="llm-actions">
+                  <span className={llmStatus?.configured ? "connected" : ""}>
+                    {llmStatus?.configured
+                      ? llmStatus.model
+                      : "OpenAI-compatible model 未設定"}
+                  </span>
+                  <button
+                    className="secondary-button"
+                    onClick={runDebateAnalysis}
+                    disabled={!signal || loadingDebate || !llmStatus?.configured}
+                  >
+                    {loadingDebate ? "辯論中…" : "啟動多空辯論"}
+                  </button>
+                </div>
+              </div>
+
+              {debateReport ? (
+                <div className="llm-result">
+                  <div className="debate-columns">
+                    <div className="debate-case bull">
+                      <span className="stance bullish">多方</span>
+                      <p>{debateReport.bull_case.thesis}</p>
+                      <span className="column-label">關鍵證據</span>
+                      <ul>
+                        {debateReport.bull_case.key_evidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                      <span className="column-label warning">預期空方反駁</span>
+                      <ul>
+                        {debateReport.bull_case.counterpoints_to_address.map(
+                          (item) => (
+                            <li key={item}>{item}</li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                    <div className="debate-case bear">
+                      <span className="stance bearish">空方</span>
+                      <p>{debateReport.bear_case.thesis}</p>
+                      <span className="column-label">關鍵證據</span>
+                      <ul>
+                        {debateReport.bear_case.key_evidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                      <span className="column-label warning">預期多方反駁</span>
+                      <ul>
+                        {debateReport.bear_case.counterpoints_to_address.map(
+                          (item) => (
+                            <li key={item}>{item}</li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="llm-summary judgement-summary">
+                    <span className={`stance ${debateReport.judgement.stance}`}>
+                      {debateReport.judgement.stance}
+                    </span>
+                    <h3>{debateReport.judgement.headline}</h3>
+                    <p>{debateReport.judgement.operation_guide}</p>
+                  </div>
+                  <div className="evidence-columns">
+                    <div>
+                      <span className="column-label">裁決證據</span>
+                      <ul>
+                        {debateReport.judgement.key_evidence.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div>
+                      <span className="column-label warning">風險與限制</span>
+                      <ul>
+                        {[
+                          ...debateReport.judgement.risk_warnings,
+                          ...debateReport.judgement.limitations,
+                        ].map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                  {debateReport.judgement.scenarios.length > 0 && (
+                    <div className="scenario-row">
+                      {debateReport.judgement.scenarios.map((scenario) => (
+                        <div key={scenario.name}>
+                          <strong>{scenario.name}</strong>
+                          <span>若 {scenario.condition}</span>
+                          <p>{scenario.response}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="llm-empty">
+                  <p>
+                    {llmStatus?.configured
+                      ? "按下「啟動多空辯論」，多方與空方研究員會各自基於同一份證據舉證，再由裁決者給出最終操作指南。"
+                      : "在後端設定 LLM 後，這裡會顯示多空辯論與最終操作指南。"}
+                  </p>
+                </div>
+              )}
+            </section>
           </>
         ) : (
           <section className="backtest-layout">
@@ -1162,4 +1356,76 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+export default function Home() {
+  const [apiKey, setApiKey] = useState<string | null>(() =>
+    typeof window === "undefined"
+      ? null
+      : window.localStorage.getItem(AUTH_STORAGE_KEY),
+  );
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  useEffect(() => {
+    authApiKey = apiKey;
+  }, [apiKey]);
+
+  const handleLogin = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoggingIn(true);
+    setLoginError(null);
+    try {
+      const response = await fetch(`${API_URL}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail ?? "密碼錯誤");
+      }
+      const key = payload.api_key as string;
+      window.localStorage.setItem(AUTH_STORAGE_KEY, key);
+      authApiKey = key;
+      setApiKey(key);
+      setPassword("");
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "登入失敗");
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleLogout = () => {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    authApiKey = null;
+    setApiKey(null);
+  };
+
+  if (!apiKey) {
+    return (
+      <main className="login-screen">
+        <form className="login-card" onSubmit={handleLogin}>
+          <span className="brand-mark">QS</span>
+          <h1>Quant Signal</h1>
+          <p>輸入密碼以進入研究控制台。</p>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="密碼"
+            autoFocus
+          />
+          {loginError && <span className="login-error">{loginError}</span>}
+          <button className="primary-button" disabled={loggingIn || !password}>
+            {loggingIn ? "登入中…" : "登入"}
+          </button>
+        </form>
+      </main>
+    );
+  }
+
+  return <Dashboard apiKey={apiKey} onLogout={handleLogout} />;
 }

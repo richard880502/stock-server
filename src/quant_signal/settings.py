@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120, gt=0)
     searxng_proxy_url: str | None = None
     searxng_proxy_key: SecretStr = SecretStr("")
+    dashboard_password: SecretStr = SecretStr("")
+    dashboard_api_key: SecretStr = SecretStr("")
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

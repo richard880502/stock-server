@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Annotated
@@ -15,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from quant_signal.adapters.rest.security import require_api_key
+from quant_signal.application.data_sync import TpexDataSyncService, TwseDataSyncService
 from quant_signal.application.llm_analysis import (
     DebateAnalysisService,
     LLMAnalysisService,
@@ -43,6 +45,7 @@ from quant_signal.domain.models import (
     SignalSnapshot,
 )
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
+from quant_signal.infrastructure.providers import TpexProvider, TwseProvider
 from quant_signal.settings import get_settings
 
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.^=_-]{1,32}$")
@@ -55,6 +58,16 @@ class LLMAnalysisRequest(BaseModel):
     benchmark: str | None = "^TWII"
     strategy_version: str = "regime_v1"
     backtest_job_id: UUID | None = None
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+class SymbolSyncRequest(BaseModel):
+    symbol: str
+    start: date
+    end: date | None = None
 
 
 async def get_repository() -> AsyncIterator[QuantRepository]:
@@ -89,6 +102,15 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "quant-signal-server"}
 
+    @application.post("/api/v1/auth/login")
+    async def login(request: LoginRequest) -> dict[str, str]:
+        dashboard_password = get_settings().dashboard_password.get_secret_value()
+        if not dashboard_password or not secrets.compare_digest(
+            request.password, dashboard_password
+        ):
+            raise HTTPException(status_code=401, detail="incorrect password")
+        return {"api_key": get_settings().dashboard_api_key.get_secret_value()}
+
     @router.get("/data/status", response_model=DataStatus)
     async def data_status(
         repository: Annotated[QuantRepository, Depends(get_repository)],
@@ -101,6 +123,32 @@ def create_app() -> FastAPI:
         q: Annotated[str, Query(min_length=1)],
     ) -> list[Instrument]:
         return await InstrumentSearchService(repository).search(q)
+
+    @router.post("/sync/symbol")
+    async def sync_symbol(
+        request: SymbolSyncRequest,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> dict:
+        normalized = normalize_symbol(request.symbol)
+        is_tpex = normalized.endswith(".TWO") or normalized == "^TWOII"
+        try:
+            async with (
+                TwseProvider() as twse_provider,
+                TpexProvider() as tpex_provider,
+            ):
+                service = (
+                    TpexDataSyncService(repository, tpex_provider)
+                    if is_tpex
+                    else TwseDataSyncService(repository, twse_provider)
+                )
+                report = await service.sync_symbol(
+                    normalized,
+                    start=request.start,
+                    end=request.end or date.today(),
+                )
+        except (ValueError, httpx.HTTPError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return report.model_dump(mode="json")
 
     @router.get("/signals/{symbol}", response_model=SignalSnapshot)
     async def analyze_symbol(

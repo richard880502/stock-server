@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from quant_signal.application.auth import ApiKeyService
+from quant_signal.application.data_sync import TpexDataSyncService, TwseDataSyncService
 from quant_signal.application.llm_analysis import (
     AnalysisContextService,
     DebateAnalysisService,
@@ -27,6 +28,7 @@ from quant_signal.application.services import (
 )
 from quant_signal.domain.models import BacktestSpec, JobStatus
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
+from quant_signal.infrastructure.providers import TpexProvider, TwseProvider
 from quant_signal.settings import get_settings
 
 settings = get_settings()
@@ -70,6 +72,34 @@ async def search_symbol(query: str) -> list[dict[str, Any]]:
             query
         )
         return [instrument.model_dump(mode="json") for instrument in matches]
+
+
+@mcp.tool()
+async def sync_symbol_data(
+    symbol: str,
+    start: str,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Backfill official TWSE/TPEx daily bars for one symbol before analyzing it."""
+    normalized = symbol.strip().upper()
+    is_tpex = normalized.endswith(".TWO") or normalized == "^TWOII"
+    async with (
+        session_factory() as session,
+        TwseProvider() as twse_provider,
+        TpexProvider() as tpex_provider,
+    ):
+        repository = PostgresQuantRepository(session)
+        service = (
+            TpexDataSyncService(repository, tpex_provider)
+            if is_tpex
+            else TwseDataSyncService(repository, twse_provider)
+        )
+        report = await service.sync_symbol(
+            normalized,
+            start=date.fromisoformat(start),
+            end=date.fromisoformat(end) if end else date.today(),
+        )
+        return report.model_dump(mode="json")
 
 
 async def _analyze_symbol(
