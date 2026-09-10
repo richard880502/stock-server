@@ -123,7 +123,7 @@ async def _analyze_symbol(
     analysis_date = _resolve_as_of(as_of)
     async with session_factory() as session:
         repository = PostgresQuantRepository(session)
-        snapshot = await SignalService(repository).analyze(
+        snapshot = await SignalService(repository, auto_sync=True).analyze(
             symbol.strip().upper(),
             as_of=analysis_date,
             benchmark=benchmark.strip().upper() if benchmark else None,
@@ -328,7 +328,9 @@ async def get_analysis_context(
 ) -> dict[str, Any]:
     """Build one evidence bundle for an external agent without invoking another LLM."""
     async with session_factory() as session:
-        context = await AnalysisContextService(PostgresQuantRepository(session)).build(
+        context = await AnalysisContextService(
+            PostgresQuantRepository(session), auto_sync=True
+        ).build(
             symbol=symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
             market=market.strip().upper(),
@@ -355,6 +357,7 @@ async def generate_llm_analysis(
         report = await LLMAnalysisService(
             PostgresQuantRepository(session),
             create_llm_client(settings),
+            auto_sync=True,
         ).analyze(
             symbol=symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
@@ -383,6 +386,7 @@ async def generate_debate_analysis(
             PostgresQuantRepository(session),
             create_llm_client(settings),
             judge_client=create_judge_llm_client(settings),
+            auto_sync=True,
         ).analyze(
             symbol=symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),

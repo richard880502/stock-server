@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
+from quant_signal.application.data_sync import ensure_symbol_bar_coverage
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import (
     BacktestJob,
@@ -25,9 +26,15 @@ class SignalService:
         self,
         repository: QuantRepository,
         engine: QuantSignalEngine | None = None,
+        *,
+        auto_sync: bool = False,
     ) -> None:
         self.repository = repository
         self.engine = engine or QuantSignalEngine()
+        # Off by default: only the live REST/MCP entry points opt in. A
+        # repository without real write/provider access (tests, workers)
+        # should never have this silently attempt a network call.
+        self.auto_sync = auto_sync
 
     async def analyze(
         self,
@@ -38,6 +45,10 @@ class SignalService:
         benchmark: str | None = None,
         persist: bool = True,
     ) -> SignalSnapshot:
+        if self.auto_sync:
+            await ensure_symbol_bar_coverage(self.repository, symbol, as_of=as_of)
+            if benchmark:
+                await ensure_symbol_bar_coverage(self.repository, benchmark, as_of=as_of)
         bars = await self.repository.list_bars(symbol, end=as_of)
         benchmark_bars = (
             await self.repository.list_bars(benchmark, end=as_of) if benchmark else None

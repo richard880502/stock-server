@@ -159,7 +159,7 @@ def create_app() -> FastAPI:
         benchmark: str | None = None,
         strategy_version: str = "regime_v1",
     ) -> SignalSnapshot:
-        service = SignalService(repository)
+        service = SignalService(repository, auto_sync=True)
         try:
             return await service.analyze(
                 normalize_symbol(symbol),
@@ -284,6 +284,7 @@ def create_app() -> FastAPI:
             service = LLMAnalysisService(
                 repository,
                 create_llm_client(settings),
+                auto_sync=True,
             )
             return await service.analyze(
                 symbol=normalize_symbol(request.symbol),
@@ -317,6 +318,7 @@ def create_app() -> FastAPI:
                 repository,
                 create_llm_client(settings),
                 judge_client=create_judge_llm_client(settings),
+                auto_sync=True,
             )
             return await service.analyze(
                 symbol=normalize_symbol(request.symbol),
@@ -349,7 +351,7 @@ def create_app() -> FastAPI:
         async def event_stream() -> AsyncIterator[str]:
             try:
                 client = create_llm_client(settings)
-                service = LLMAnalysisService(repository, client)
+                service = LLMAnalysisService(repository, client, auto_sync=True)
                 yield encode_event("meta", {"model": client.model_name})
                 async for token in service.stream_guidance(
                     symbol=normalize_symbol(request.symbol),

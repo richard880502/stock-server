@@ -85,7 +85,23 @@ class MemoryQuantRepository:
             branch_series=self._series_status(self.branch_flows),
         )
 
-    async def upsert_bars(self, bars: list[Bar]) -> int:
+    async def upsert_bars(
+        self,
+        bars: list[Bar],
+        *,
+        instrument_name: str | None = None,
+        market: str | None = None,
+    ) -> int:
+        if bars and (instrument_name is not None or market is not None):
+            symbol = bars[0].symbol.upper()
+            existing = self.instruments.get(symbol)
+            self.instruments[symbol] = Instrument(
+                symbol=symbol,
+                name=instrument_name if instrument_name is not None else (
+                    existing.name if existing else None
+                ),
+                market=market if market is not None else (existing.market if existing else None),
+            )
         for bar in bars:
             symbol_bars = self.bars.setdefault(bar.symbol.upper(), [])
             symbol_bars = [

@@ -318,8 +318,12 @@ def create_judge_llm_client(settings: Settings) -> OpenAICompatibleClient | None
 
 
 class AnalysisContextService:
-    def __init__(self, repository: QuantRepository) -> None:
+    def __init__(self, repository: QuantRepository, *, auto_sync: bool = False) -> None:
         self.repository = repository
+        # Off by default so this shared class stays safe for tests/workers
+        # against a MemoryQuantRepository; only the live REST/MCP entry
+        # points construct it with auto_sync=True.
+        self.auto_sync = auto_sync
 
     async def build(
         self,
@@ -331,7 +335,7 @@ class AnalysisContextService:
         strategy_version: str,
         backtest_job_id: UUID | None = None,
     ) -> LLMAnalysisContext:
-        signal_service = SignalService(self.repository)
+        signal_service = SignalService(self.repository, auto_sync=self.auto_sync)
         symbol_signal = await signal_service.analyze(
             symbol,
             as_of=as_of,
@@ -379,8 +383,10 @@ class LLMAnalysisService:
         self,
         repository: QuantRepository,
         client: LLMClient,
+        *,
+        auto_sync: bool = False,
     ) -> None:
-        self.context_service = AnalysisContextService(repository)
+        self.context_service = AnalysisContextService(repository, auto_sync=auto_sync)
         self.client = client
 
     async def analyze(
@@ -448,8 +454,9 @@ class DebateAnalysisService:
         client: LLMClient,
         *,
         judge_client: LLMClient | None = None,
+        auto_sync: bool = False,
     ) -> None:
-        self.context_service = AnalysisContextService(repository)
+        self.context_service = AnalysisContextService(repository, auto_sync=auto_sync)
         self.client = client
         # An independent model for the final synthesis reduces the risk of a
         # single model both arguing every side and then judging itself.

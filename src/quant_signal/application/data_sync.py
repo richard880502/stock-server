@@ -7,6 +7,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
+from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import (
     Bar,
     CorporateAction,
@@ -20,6 +21,7 @@ from quant_signal.infrastructure.providers.tpex import (
 from quant_signal.infrastructure.providers.twse import (
     TWSE_SOURCE,
     TwseDailyMarket,
+    TwseProvider,
 )
 from quant_signal.quant.adjustments import apply_forward_adjustments
 
@@ -381,3 +383,47 @@ class TpexDataSyncService(TwseDataSyncService):
         provider: TpexProvider,
     ) -> None:
         super().__init__(repository, provider)
+
+
+class SyncableRepository(QuantRepository, WritableMarketRepository, Protocol):
+    """A repository that can both serve and backfill point-in-time bars."""
+
+
+async def ensure_symbol_bar_coverage(
+    repository: SyncableRepository,
+    symbol: str,
+    *,
+    as_of: date,
+    minimum_bars: int = 60,
+    lookback_days: int = 500,
+) -> bool:
+    """Best-effort auto-backfill when a symbol has too little history yet.
+
+    Called from the live REST/MCP analysis entry points (never from
+    backtests, which must stay deterministic and not trigger surprise
+    network calls mid-run) right before running the signal engine. Returns
+    whether a sync was attempted; never raises -- the caller's own
+    downstream analysis call surfaces a clear error if data is still
+    insufficient afterward (e.g. a symbol that genuinely started trading
+    less than ``minimum_bars`` days ago, which no sync can fix).
+    """
+    normalized = symbol.strip().upper()
+    existing = await repository.list_bars(normalized, end=as_of)
+    if len(existing) >= minimum_bars:
+        return False
+    is_tpex = normalized.endswith(".TWO") or normalized == "^TWOII"
+    start = as_of - timedelta(days=lookback_days)
+    try:
+        if is_tpex:
+            async with TpexProvider() as provider:
+                await TpexDataSyncService(repository, provider).sync_symbol(
+                    normalized, start=start, end=as_of
+                )
+        else:
+            async with TwseProvider() as provider:
+                await TwseDataSyncService(repository, provider).sync_symbol(
+                    normalized, start=start, end=as_of
+                )
+    except Exception:
+        logger.exception("auto-sync failed for %s", normalized)
+    return True
