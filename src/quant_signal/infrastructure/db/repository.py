@@ -5,7 +5,7 @@ import json
 from datetime import UTC, date, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from quant_signal.domain.models import (
     DataSeriesStatus,
     DataStatus,
     InstitutionalFlow,
+    Instrument,
     JobStatus,
     MarketEnvironmentSnapshot,
     MarketObservation,
@@ -678,6 +679,50 @@ class PostgresQuantRepository:
             return
         row.last_used_at = datetime.now(UTC)
         await self.session.commit()
+
+    async def search_instruments(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[Instrument]:
+        normalized = query.strip()
+        if not normalized:
+            return []
+        pattern = f"%{normalized}%"
+        statement = (
+            select(InstrumentRow)
+            .where(
+                or_(
+                    InstrumentRow.symbol.ilike(pattern),
+                    InstrumentRow.name.ilike(pattern),
+                )
+            )
+            .limit(max(limit, 1) * 5)
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+
+        def rank(row: InstrumentRow) -> tuple[int, str]:
+            symbol = row.symbol.upper()
+            name = row.name or ""
+            needle = normalized.upper()
+            if symbol == needle:
+                score = 0
+            elif symbol.startswith(needle):
+                score = 1
+            elif name == normalized:
+                score = 2
+            elif name.startswith(normalized):
+                score = 3
+            else:
+                score = 4
+            return (score, symbol)
+
+        ranked = sorted(rows, key=rank)[:limit]
+        return [
+            Instrument(symbol=row.symbol, name=row.name, market=row.market)
+            for row in ranked
+        ]
 
     @staticmethod
     def _api_key_from_row(row: ApiKeyRow) -> ApiKey:

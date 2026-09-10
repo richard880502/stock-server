@@ -20,6 +20,7 @@ from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
     DataStatusService,
+    InstrumentSearchService,
     MarketEnvironmentService,
     SignalService,
 )
@@ -32,7 +33,9 @@ mcp = FastMCP(
     "Quant Signal Server",
     instructions=(
         "Use these tools for deterministic market signals and point-in-time backtests. "
-        "Always inspect data availability and sample size before presenting conclusions."
+        "Always inspect data availability and sample size before presenting conclusions. "
+        "If you only have a company name or an uncertain ticker, call search_symbol "
+        "first to resolve it to an exact symbol before calling any other tool."
     ),
     host=settings.mcp_host,
     port=settings.mcp_port,
@@ -45,7 +48,7 @@ mcp = FastMCP(
 def server_info() -> str:
     return (
         '{"name":"quant-signal-server","version":"0.1.0",'
-        '"capabilities":["data_status","signals","market_environment",'
+        '"capabilities":["data_status","symbol_search","signals","market_environment",'
         '"chip_flows","broker_branches","alerts","backtests","llm"]}'
     )
 
@@ -56,6 +59,16 @@ async def get_data_status() -> dict[str, Any]:
     async with session_factory() as session:
         status = await DataStatusService(PostgresQuantRepository(session)).get()
         return status.model_dump(mode="json")
+
+
+@mcp.tool()
+async def search_symbol(query: str) -> list[dict[str, Any]]:
+    """Resolve a company name or partial ticker (e.g. "台積電" or "2330") to exact symbols."""
+    async with session_factory() as session:
+        matches = await InstrumentSearchService(PostgresQuantRepository(session)).search(
+            query
+        )
+        return [instrument.model_dump(mode="json") for instrument in matches]
 
 
 async def _analyze_symbol(

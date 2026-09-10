@@ -25,6 +25,7 @@ from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
     DataStatusService,
+    InstrumentSearchService,
     MarketEnvironmentService,
     SignalService,
 )
@@ -34,6 +35,7 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataStatus,
     DebateAnalysisReport,
+    Instrument,
     LLMAnalysisReport,
     MarketEnvironmentSnapshot,
     SignalSnapshot,
@@ -90,6 +92,13 @@ def create_app() -> FastAPI:
         repository: Annotated[QuantRepository, Depends(get_repository)],
     ) -> DataStatus:
         return await DataStatusService(repository).get()
+
+    @router.get("/instruments/search", response_model=list[Instrument])
+    async def search_instruments(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        q: Annotated[str, Query(min_length=1)],
+    ) -> list[Instrument]:
+        return await InstrumentSearchService(repository).search(q)
 
     @router.get("/signals/{symbol}", response_model=SignalSnapshot)
     async def analyze_symbol(

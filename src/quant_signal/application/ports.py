@@ -14,6 +14,7 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataStatus,
     InstitutionalFlow,
+    Instrument,
     MarketEnvironmentSnapshot,
     MarketObservation,
     SignalSnapshot,
@@ -93,3 +94,10 @@ class QuantRepository(Protocol):
     async def revoke_api_key(self, key_id: UUID) -> bool: ...
 
     async def touch_api_key_last_used(self, key_id: UUID) -> None: ...
+
+    async def search_instruments(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[Instrument]: ...

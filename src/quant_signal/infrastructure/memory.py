@@ -14,6 +14,7 @@ from quant_signal.domain.models import (
     DataSeriesStatus,
     DataStatus,
     InstitutionalFlow,
+    Instrument,
     JobStatus,
     MarketEnvironmentSnapshot,
     MarketObservation,
@@ -35,6 +36,7 @@ class MemoryQuantRepository:
         self.jobs: dict[UUID, BacktestJob] = {}
         self.api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
+        self.instruments: dict[str, Instrument] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -319,6 +321,44 @@ class MemoryQuantRepository:
         self.api_keys[key_id] = key.model_copy(
             update={"last_used_at": datetime.now(UTC)}
         )
+
+    async def search_instruments(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[Instrument]:
+        normalized = query.strip()
+        if not normalized:
+            return []
+        needle = normalized.upper()
+
+        def rank(instrument: Instrument) -> tuple[int, str] | None:
+            symbol = instrument.symbol.upper()
+            name = instrument.name or ""
+            if needle not in symbol and normalized not in name:
+                return None
+            if symbol == needle:
+                score = 0
+            elif symbol.startswith(needle):
+                score = 1
+            elif name == normalized:
+                score = 2
+            elif name.startswith(normalized):
+                score = 3
+            else:
+                score = 4
+            return (score, symbol)
+
+        scored = [
+            (rank(instrument), instrument)
+            for instrument in self.instruments.values()
+        ]
+        matches = sorted(
+            (item for item in scored if item[0] is not None),
+            key=lambda item: item[0],
+        )
+        return [instrument for _, instrument in matches[:limit]]
 
     @staticmethod
     def _series_status(

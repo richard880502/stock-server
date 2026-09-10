@@ -395,6 +395,7 @@ available at `http://127.0.0.1:18100`.
 The MCP server exposes:
 
 - `get_data_status`
+- `search_symbol`
 - `analyze_symbol`
 - `get_market_regime`
 - `get_market_environment`
@@ -406,6 +407,14 @@ The MCP server exposes:
 - `get_analysis_context`
 - `generate_llm_analysis`
 - `generate_debate_analysis`
+
+`search_symbol` resolves a company name (e.g. `台積電`) or a partial ticker
+(e.g. `2330`) to exact symbols, ranked by match quality. An external agent
+should call it first whenever it only has a name or an uncertain ticker, then
+pass the resolved symbol to the other tools. Company names are only
+populated for symbols synced through `quant-signal-sync-data symbol`
+(the official TWSE/TPEx response carries the name); demo-seeded symbols have
+no name.
 
 `get_analysis_context` is intended for an external agent. It returns one
 validated evidence bundle without invoking the built-in LLM.

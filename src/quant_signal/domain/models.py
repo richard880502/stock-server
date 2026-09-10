@@ -44,6 +44,12 @@ class DataSeriesStatus(BaseModel):
     is_real: bool
 
 
+class Instrument(BaseModel):
+    symbol: str
+    name: str | None = None
+    market: str | None = None
+
+
 class DataStatus(BaseModel):
     generated_at: datetime
     real_data_ready: bool

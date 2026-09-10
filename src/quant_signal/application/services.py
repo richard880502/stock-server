@@ -9,6 +9,7 @@ from quant_signal.domain.models import (
     BacktestSpec,
     ChipFlowSnapshot,
     DataStatus,
+    Instrument,
     MarketEnvironmentSnapshot,
     SignalSnapshot,
 )
@@ -56,6 +57,14 @@ class DataStatusService:
 
     async def get(self) -> DataStatus:
         return await self.repository.get_data_status()
+
+
+class InstrumentSearchService:
+    def __init__(self, repository: QuantRepository) -> None:
+        self.repository = repository
+
+    async def search(self, query: str, *, limit: int = 10) -> list[Instrument]:
+        return await self.repository.search_instruments(query, limit=limit)
 
 
 class ChipFlowService:
