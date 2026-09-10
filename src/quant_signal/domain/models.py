@@ -430,6 +430,7 @@ class DebateAnalysisReport(BaseModel):
     symbol: str
     as_of: date
     model: str
+    judge_model: str
     prompt_version: str
     generated_at: datetime
     bull_case: DebateCase

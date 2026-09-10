@@ -101,10 +101,53 @@ async def test_debate_analysis_weighs_bull_and_bear_cases(
     )
 
     assert report.model == "fake-debater"
+    assert report.judge_model == "fake-debater"
     assert report.bull_case.stance == "bullish"
     assert report.bear_case.stance == "bearish"
     assert report.judgement.stance == "bullish"
     assert "合成資料" in " ".join(report.judgement.risk_warnings)
+
+
+class FakeJudgeLLMClient:
+    model_name = "fake-judge"
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        assert "裁決者" in system_prompt
+        assert payload["bull_case"]["stance"] == "bullish"
+        assert payload["bear_case"]["stance"] == "bearish"
+        return {
+            "headline": "獨立裁決模型：證據不足以支持任一方向",
+            "stance": "neutral",
+            "operation_guide": "維持觀望，等待真實資料補齊後再行判斷。",
+            "key_evidence": ["雙方證據都建立在合成資料上"],
+            "risk_warnings": ["合成資料不可作為投資依據"],
+            "scenarios": [],
+            "limitations": ["目前使用 synthetic_demo"],
+        }
+
+
+async def test_debate_analysis_uses_independent_judge_model(
+    trending_bars: list[Bar],
+    healthy_market: list[MarketObservation],
+) -> None:
+    repository = MemoryQuantRepository()
+    await repository.upsert_bars(trending_bars)
+    await repository.upsert_market_observations(healthy_market)
+
+    report = await DebateAnalysisService(
+        repository,
+        FakeDebateLLMClient(),
+        judge_client=FakeJudgeLLMClient(),
+    ).analyze(symbol="TEST", as_of=trending_bars[-1].trading_date)
+
+    assert report.model == "fake-debater"
+    assert report.judge_model == "fake-judge"
+    assert report.bull_case.stance == "bullish"
+    assert report.bear_case.stance == "bearish"
+    # The independent judge reached a different conclusion than the
+    # single-model fallback test above -- proving it's actually a separate
+    # call, not silently reusing the debaters' own client.
+    assert report.judgement.stance == "neutral"
 
 
 def test_openai_compatible_client_parses_fenced_json() -> None:

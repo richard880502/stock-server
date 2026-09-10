@@ -332,7 +332,15 @@ curl -X POST "http://127.0.0.1:18100/api/v1/debate-analyses" \
 ```
 
 The response includes `bull_case`, `bear_case`, and a final `judgement` in the
-same shape as `/api/v1/llm-analyses`.
+same shape as `/api/v1/llm-analyses`, plus `model` (the bull/bear researcher
+model) and `judge_model` (the synthesis model — the same as `model` unless
+configured otherwise).
+
+By default the same model argues every side of the debate and then judges
+it. Set `JUDGE_LLM_ENABLED=true` plus `JUDGE_LLM_BASE_URL`/`JUDGE_LLM_MODEL`/
+`JUDGE_LLM_API_KEY` to use an independent model for only the final synthesis
+call — reduces the risk of a single model rubber-stamping its own debate.
+Falls back to the bull/bear model when left disabled.
 
 ### News sentiment analyst
 

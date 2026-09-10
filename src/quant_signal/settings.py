@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_max_tokens: int = Field(default=1800, gt=0)
     llm_timeout_seconds: float = Field(default=120, gt=0)
+    judge_llm_enabled: bool = False
+    judge_llm_base_url: str = "http://127.0.0.1:11434/v1"
+    judge_llm_model: str | None = None
+    judge_llm_api_key: SecretStr = SecretStr("local")
+    judge_llm_temperature: float = Field(default=0.2, ge=0, le=2)
+    judge_llm_max_tokens: int = Field(default=1800, gt=0)
+    judge_llm_timeout_seconds: float = Field(default=120, gt=0)
     searxng_proxy_url: str | None = None
     searxng_proxy_key: SecretStr = SecretStr("")
     dashboard_password: SecretStr = SecretStr("")

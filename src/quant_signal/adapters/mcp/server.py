@@ -15,6 +15,7 @@ from quant_signal.application.llm_analysis import (
     AnalysisContextService,
     DebateAnalysisService,
     LLMAnalysisService,
+    create_judge_llm_client,
     create_llm_client,
 )
 from quant_signal.application.services import (
@@ -371,6 +372,7 @@ async def generate_debate_analysis(
         report = await DebateAnalysisService(
             PostgresQuantRepository(session),
             create_llm_client(settings),
+            judge_client=create_judge_llm_client(settings),
         ).analyze(
             symbol=symbol.strip().upper(),
             as_of=date.fromisoformat(as_of),

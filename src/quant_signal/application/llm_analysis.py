@@ -295,6 +295,28 @@ def create_llm_client(settings: Settings) -> OpenAICompatibleClient:
     )
 
 
+def create_judge_llm_client(settings: Settings) -> OpenAICompatibleClient | None:
+    """Optional second model for the debate's final synthesis call.
+
+    Returns ``None`` when unconfigured, so callers fall back to the same
+    client used for the bull/bear researchers -- today's default behavior.
+    """
+    if not settings.judge_llm_enabled:
+        return None
+    if not settings.judge_llm_base_url or not settings.judge_llm_model:
+        raise ValueError(
+            "Judge LLM is not configured: JUDGE_LLM_BASE_URL, JUDGE_LLM_MODEL"
+        )
+    return OpenAICompatibleClient(
+        base_url=settings.judge_llm_base_url,
+        model=settings.judge_llm_model,
+        api_key=settings.judge_llm_api_key.get_secret_value(),
+        temperature=settings.judge_llm_temperature,
+        max_tokens=settings.judge_llm_max_tokens,
+        timeout_seconds=settings.judge_llm_timeout_seconds,
+    )
+
+
 class AnalysisContextService:
     def __init__(self, repository: QuantRepository) -> None:
         self.repository = repository
@@ -424,9 +446,15 @@ class DebateAnalysisService:
         self,
         repository: QuantRepository,
         client: LLMClient,
+        *,
+        judge_client: LLMClient | None = None,
     ) -> None:
         self.context_service = AnalysisContextService(repository)
         self.client = client
+        # An independent model for the final synthesis reduces the risk of a
+        # single model both arguing every side and then judging itself.
+        # Falls back to the same client when no judge model is configured.
+        self.judge_client = judge_client or client
 
     async def analyze(
         self,
@@ -458,7 +486,7 @@ class DebateAnalysisService:
             "bull_case": bull_case.model_dump(mode="json"),
             "bear_case": bear_case.model_dump(mode="json"),
         }
-        judgement_payload = await self.client.complete_json(
+        judgement_payload = await self.judge_client.complete_json(
             DEBATE_SYNTHESIS_PROMPT,
             synthesis_payload,
         )
@@ -467,6 +495,7 @@ class DebateAnalysisService:
             symbol=symbol,
             as_of=as_of,
             model=self.client.model_name,
+            judge_model=self.judge_client.model_name,
             prompt_version=DEBATE_PROMPT_VERSION,
             generated_at=datetime.now(UTC),
             bull_case=bull_case,

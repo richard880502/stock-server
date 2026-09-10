@@ -1197,6 +1197,22 @@ button:disabled {
   border-top: 1px solid var(--line);
 }
 
+.judgement-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.judgement-heading .stance {
+  margin-bottom: 0;
+}
+
+.judgement-heading small {
+  color: var(--faint);
+  font: 10px/1 var(--font-geist-mono), monospace;
+}
+
 .logout-link {
   border: 0;
   padding: 0;

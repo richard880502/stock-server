@@ -20,6 +20,7 @@ from quant_signal.application.data_sync import TpexDataSyncService, TwseDataSync
 from quant_signal.application.llm_analysis import (
     DebateAnalysisService,
     LLMAnalysisService,
+    create_judge_llm_client,
     create_llm_client,
 )
 from quant_signal.application.ports import QuantRepository
@@ -315,6 +316,7 @@ def create_app() -> FastAPI:
             service = DebateAnalysisService(
                 repository,
                 create_llm_client(settings),
+                judge_client=create_judge_llm_client(settings),
             )
             return await service.analyze(
                 symbol=normalize_symbol(request.symbol),

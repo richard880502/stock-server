@@ -160,6 +160,7 @@ type DebateCase = {
 
 type DebateReport = {
   model: string;
+  judge_model: string;
   prompt_version: string;
   bull_case: DebateCase;
   bear_case: DebateCase;
@@ -1161,9 +1162,14 @@ function Dashboard({
                   </div>
 
                   <div className="llm-summary judgement-summary">
-                    <span className={`stance ${debateReport.judgement.stance}`}>
-                      {debateReport.judgement.stance}
-                    </span>
+                    <div className="judgement-heading">
+                      <span className={`stance ${debateReport.judgement.stance}`}>
+                        {debateReport.judgement.stance}
+                      </span>
+                      {debateReport.judge_model !== debateReport.model && (
+                        <small>獨立裁決模型 · {debateReport.judge_model}</small>
+                      )}
+                    </div>
                     <h3>{debateReport.judgement.headline}</h3>
                     <p>{debateReport.judgement.operation_guide}</p>
                   </div>
