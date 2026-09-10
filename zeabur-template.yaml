@@ -1,0 +1,148 @@
+# NOTE: deployed via `zeabur_deploy.py deploy-template --execute` into an EXISTING
+# project once. Re-running that command creates DUPLICATE services (it does not
+# upsert by name) -- to change a running service's start command afterward, use
+# the `updateServiceCommand(serviceID, command: String!)` GraphQL mutation or the
+# Zeabur dashboard instead of re-applying this file.
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+    name: quant-signal-server
+spec:
+    description: Point-in-time TW market signal server (REST, MCP, worker, dashboard)
+    services:
+        - name: postgres
+          template: PREBUILT
+          spec:
+              source:
+                  image: postgres:17-alpine
+              ports:
+                  - id: database
+                    port: 5432
+                    type: TCP
+              volumes:
+                  - id: data
+                    dir: /var/lib/postgresql/data
+              env:
+                  POSTGRES_DB:
+                      default: quant_signal
+                  POSTGRES_USER:
+                      default: quant
+                  POSTGRES_PASSWORD:
+                      default: ${PASSWORD}
+                      expose: true
+
+        - name: api
+          template: GIT
+          dependencies:
+              - postgres
+          spec:
+              source:
+                  source: GITHUB
+                  repo: 1322788197
+                  branch: main
+              command: sh -c "alembic upgrade head && uvicorn quant_signal.adapters.rest.main:app --host 0.0.0.0 --port 8000"
+              ports:
+                  - id: web
+                    port: 8000
+                    type: HTTP
+              env:
+                  DATABASE_URL:
+                      default: "postgresql+asyncpg://quant:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/quant_signal"
+                  API_HOST:
+                      default: "0.0.0.0"
+                  API_PORT:
+                      default: "8000"
+                  CORS_ORIGINS:
+                      default: "*"
+                  API_AUTH_ENABLED:
+                      default: "false"
+                  LLM_ENABLED:
+                      default: "false"
+                  LLM_BASE_URL:
+                      default: ""
+                  LLM_MODEL:
+                      default: ""
+                  LLM_API_KEY:
+                      default: ""
+                  LLM_TEMPERATURE:
+                      default: "0.2"
+                  LLM_MAX_TOKENS:
+                      default: "1800"
+                  LLM_TIMEOUT_SECONDS:
+                      default: "120"
+
+        - name: worker
+          template: GIT
+          dependencies:
+              - postgres
+          spec:
+              source:
+                  source: GITHUB
+                  repo: 1322788197
+                  branch: main
+              command: quant-signal-worker
+              env:
+                  DATABASE_URL:
+                      default: "postgresql+asyncpg://quant:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/quant_signal"
+                  BACKTEST_POLL_SECONDS:
+                      default: "2"
+
+        - name: mcp
+          template: GIT
+          dependencies:
+              - postgres
+          spec:
+              source:
+                  source: GITHUB
+                  repo: 1322788197
+                  branch: main
+              command: quant-signal-mcp
+              ports:
+                  - id: web
+                    port: 8001
+                    type: HTTP
+              env:
+                  DATABASE_URL:
+                      default: "postgresql+asyncpg://quant:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/quant_signal"
+                  MCP_HOST:
+                      default: "0.0.0.0"
+                  MCP_PORT:
+                      default: "8001"
+                  MCP_TRANSPORT:
+                      default: "streamable-http"
+                  MCP_STATELESS_HTTP:
+                      default: "true"
+                  API_AUTH_ENABLED:
+                      default: "false"
+                  LLM_ENABLED:
+                      default: "false"
+                  LLM_BASE_URL:
+                      default: ""
+                  LLM_MODEL:
+                      default: ""
+                  LLM_API_KEY:
+                      default: ""
+                  LLM_TEMPERATURE:
+                      default: "0.2"
+                  LLM_MAX_TOKENS:
+                      default: "1800"
+                  LLM_TIMEOUT_SECONDS:
+                      default: "120"
+
+        - name: frontend
+          template: GIT
+          dependencies:
+              - api
+          spec:
+              source:
+                  source: GITHUB
+                  repo: 1322788197
+                  branch: main
+                  rootDirectory: frontend
+              ports:
+                  - id: web
+                    port: 3000
+                    type: HTTP
+              env:
+                  NEXT_PUBLIC_QUANT_API_URL:
+                      default: "http://127.0.0.1:8000"
