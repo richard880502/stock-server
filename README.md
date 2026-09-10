@@ -483,6 +483,11 @@ populated for symbols synced through `quant-signal-sync-data symbol`
 (the official TWSE/TPEx response carries the name); demo-seeded symbols have
 no name.
 
+Every tool's `as_of` is optional and defaults to today, matching the REST
+API. If a symbol still doesn't have enough point-in-time history (the engine
+requires 60+ bars), the error names the earliest synced date for that symbol
+so an agent can retry with a valid `as_of`, or call `sync_symbol_data` first.
+
 `get_analysis_context` is intended for an external agent. It returns one
 validated evidence bundle without invoking the built-in LLM.
 

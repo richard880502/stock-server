@@ -74,8 +74,16 @@ class QuantSignalEngine:
             as_of=as_of,
         )
         if len(eligible) < self.minimum_observations:
+            earliest = min((bar.trading_date for bar in bars), default=None)
+            hint = (
+                f"; earliest synced bar for this symbol is {earliest} -- "
+                "try an as_of on or after that date, or call sync_symbol_data first"
+                if earliest is not None
+                else "; no bars are synced for this symbol yet -- call sync_symbol_data first"
+            )
             raise ValueError(
-                f"at least {self.minimum_observations} point-in-time bars are required"
+                f"at least {self.minimum_observations} point-in-time bars are required "
+                f"as of {as_of} (found {len(eligible)}){hint}"
             )
 
         closes = [bar.adjusted_close or bar.close for bar in eligible]

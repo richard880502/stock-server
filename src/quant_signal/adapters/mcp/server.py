@@ -57,6 +57,16 @@ def server_info() -> str:
     )
 
 
+def _resolve_as_of(as_of: str | None) -> date:
+    """Defaults to today, matching the REST API's ``as_of or date.today()``.
+
+    An external agent calling these tools often just wants "now" and may not
+    know this system's actual data coverage -- requiring an explicit date
+    was a real source of spurious "not enough history" failures.
+    """
+    return date.fromisoformat(as_of) if as_of else date.today()
+
+
 @mcp.tool()
 async def get_data_status() -> dict[str, Any]:
     """List real and synthetic series, date coverage, source, and observation counts."""
@@ -105,12 +115,12 @@ async def sync_symbol_data(
 
 async def _analyze_symbol(
     symbol: str,
-    as_of: str,
+    as_of: str | None,
     benchmark: str | None = None,
     strategy_version: str = "regime_v1",
 ) -> dict[str, Any]:
     """Analyze a market index, ETF, or stock using deterministic daily-bar factors."""
-    analysis_date = date.fromisoformat(as_of)
+    analysis_date = _resolve_as_of(as_of)
     async with session_factory() as session:
         repository = PostgresQuantRepository(session)
         snapshot = await SignalService(repository).analyze(
@@ -125,7 +135,7 @@ async def _analyze_symbol(
 @mcp.tool()
 async def analyze_symbol(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     benchmark: str | None = None,
     strategy_version: str = "regime_v1",
 ) -> dict[str, Any]:
@@ -136,7 +146,7 @@ async def analyze_symbol(
 @mcp.tool()
 async def get_market_regime(
     market_symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     strategy_version: str = "market_env_v1",
 ) -> dict[str, Any]:
     """Return breadth/capital regime; ^TWII is accepted as a TW compatibility alias."""
@@ -148,7 +158,7 @@ async def get_market_regime(
 
 async def _get_market_environment(
     market: str,
-    as_of: str,
+    as_of: str | None,
     strategy_version: str = "market_env_v1",
 ) -> dict[str, Any]:
     async with session_factory() as session:
@@ -156,7 +166,7 @@ async def _get_market_environment(
             PostgresQuantRepository(session)
         ).analyze(
             market.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
         )
         return snapshot.model_dump(mode="json")
@@ -165,7 +175,7 @@ async def _get_market_environment(
 @mcp.tool()
 async def get_market_environment(
     market: str,
-    as_of: str,
+    as_of: str | None = None,
     strategy_version: str = "market_env_v1",
 ) -> dict[str, Any]:
     """Return the complete point-in-time market breadth and capital environment."""
@@ -188,7 +198,7 @@ def _market_summary(result: dict[str, Any]) -> dict[str, Any]:
 @mcp.tool()
 async def get_signal_alerts(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     benchmark: str | None = None,
 ) -> dict[str, Any]:
     """Return anomaly alerts and their numeric evidence for one symbol."""
@@ -205,7 +215,7 @@ async def get_signal_alerts(
 @mcp.tool()
 async def analyze_chip_flow(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     strategy_version: str = "chip_flow_v1",
 ) -> dict[str, Any]:
     """Analyze official institutional flows and optional licensed branch activity."""
@@ -214,7 +224,7 @@ async def analyze_chip_flow(
             PostgresQuantRepository(session)
         ).analyze(
             symbol.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
         )
         return snapshot.model_dump(mode="json")
@@ -223,7 +233,7 @@ async def analyze_chip_flow(
 @mcp.tool()
 async def analyze_news_sentiment(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     strategy_version: str = "news_sentiment_v1",
 ) -> dict[str, Any]:
     """Aggregate point-in-time-classified news headlines into a sentiment score."""
@@ -232,7 +242,7 @@ async def analyze_news_sentiment(
             PostgresQuantRepository(session)
         ).analyze(
             symbol.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
         )
         return snapshot.model_dump(mode="json")
@@ -310,7 +320,7 @@ async def get_backtest_report(job_id: str) -> dict[str, Any]:
 @mcp.tool()
 async def get_analysis_context(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     market: str = "TW",
     benchmark: str | None = "^TWII",
     strategy_version: str = "regime_v1",
@@ -320,7 +330,7 @@ async def get_analysis_context(
     async with session_factory() as session:
         context = await AnalysisContextService(PostgresQuantRepository(session)).build(
             symbol=symbol.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             market=market.strip().upper(),
             benchmark=benchmark.strip().upper() if benchmark else None,
             strategy_version=strategy_version,
@@ -332,7 +342,7 @@ async def get_analysis_context(
 @mcp.tool()
 async def generate_llm_analysis(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     market: str = "TW",
     benchmark: str | None = "^TWII",
     strategy_version: str = "regime_v1",
@@ -347,7 +357,7 @@ async def generate_llm_analysis(
             create_llm_client(settings),
         ).analyze(
             symbol=symbol.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             market=market.strip().upper(),
             benchmark=benchmark.strip().upper() if benchmark else None,
             strategy_version=strategy_version,
@@ -359,7 +369,7 @@ async def generate_llm_analysis(
 @mcp.tool()
 async def generate_debate_analysis(
     symbol: str,
-    as_of: str,
+    as_of: str | None = None,
     market: str = "TW",
     benchmark: str | None = "^TWII",
     strategy_version: str = "regime_v1",
@@ -375,7 +385,7 @@ async def generate_debate_analysis(
             judge_client=create_judge_llm_client(settings),
         ).analyze(
             symbol=symbol.strip().upper(),
-            as_of=date.fromisoformat(as_of),
+            as_of=_resolve_as_of(as_of),
             market=market.strip().upper(),
             benchmark=benchmark.strip().upper() if benchmark else None,
             strategy_version=strategy_version,
