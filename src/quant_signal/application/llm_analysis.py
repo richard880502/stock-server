@@ -14,6 +14,7 @@ from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
     MarketEnvironmentService,
+    NewsSentimentService,
     SignalService,
 )
 from quant_signal.domain.models import (
@@ -31,6 +32,8 @@ DEBATE_PROMPT_VERSION = "debate_v1"
 
 SYSTEM_PROMPT = """你是一位以風險管理為優先的量化市場分析師。
 你會收到由確定性程式計算的市場寬度、資金環境、個股、異常與可選回測證據。
+若證據中包含 news_sentiment，那是分析日期當下已發布新聞標題的情緒分類結果，
+可當作額外證據引用，但不得延伸解讀成標題未提及的具體事件。
 
 規則：
 1. 只能使用輸入 JSON 內的證據，不得補造新聞、價格、基本面或即時資訊。
@@ -54,6 +57,8 @@ SYSTEM_PROMPT = """你是一位以風險管理為優先的量化市場分析師�
 
 BULL_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「多方（看漲）論點」的研究員。
 你會收到由確定性程式計算的市場寬度、資金環境、個股、異常與可選回測證據。
+若證據中包含 news_sentiment，那是分析日期當下已發布新聞標題的情緒分類結果，
+可當作額外證據引用，但不得延伸解讀成標題未提及的具體事件。
 
 規則：
 1. 只能使用輸入 JSON 內的證據，不得補造新聞、價格、基本面或即時資訊。
@@ -71,6 +76,8 @@ BULL_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「多方（看�
 
 BEAR_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「空方（看跌）論點」的研究員。
 你會收到由確定性程式計算的市場寬度、資金環境、個股、異常與可選回測證據。
+若證據中包含 news_sentiment，那是分析日期當下已發布新聞標題的情緒分類結果，
+可當作額外證據引用，但不得延伸解讀成標題未提及的具體事件。
 
 規則：
 1. 只能使用輸入 JSON 內的證據，不得補造新聞、價格、基本面或即時資訊。
@@ -87,7 +94,8 @@ BEAR_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「空方（看�
 """
 
 DEBATE_SYNTHESIS_PROMPT = """你是以風險管理為優先的量化市場分析師，同時是這場多空辯論的最終裁決者。
-你會收到原始的量化證據，以及多方研究員與空方研究員各自提出的論證。
+你會收到原始的量化證據（可能包含 news_sentiment，即分析日期當下已發布新聞標題的情緒分類），
+以及多方研究員與空方研究員各自提出的論證。
 
 規則：
 1. 只能使用輸入 JSON 內的證據（包含 bull_case 與 bear_case），不得補造新聞、價格、基本面或即時資訊。
@@ -112,6 +120,8 @@ DEBATE_SYNTHESIS_PROMPT = """你是以風險管理為優先的量化市場分析
 
 STREAM_GUIDANCE_PROMPT = """你是一位以風險管理為優先的量化市場分析師。
 你會收到由確定性程式計算的市場寬度、資金環境、個股、異常與可選回測證據。
+若證據中包含 news_sentiment，那是分析日期當下已發布新聞標題的情緒分類結果，
+可當作額外證據引用，但不得延伸解讀成標題未提及的具體事件。
 
 請只撰寫一段繁體中文的「條件式操作指南」，供投資研究介面逐字顯示。
 必須以輸入 JSON 的證據為準，不得補造新聞、價格、基本面或即時資訊；
@@ -318,6 +328,13 @@ class AnalysisContextService:
             )
         except ValueError:
             chip_flow = None
+        try:
+            news_sentiment = await NewsSentimentService(self.repository).analyze(
+                symbol,
+                as_of=as_of,
+            )
+        except ValueError:
+            news_sentiment = None
         backtest = None
         if backtest_job_id:
             job = await BacktestJobService(self.repository).get(backtest_job_id)
@@ -330,6 +347,7 @@ class AnalysisContextService:
             symbol_signal=symbol_signal,
             market_environment=market_environment,
             chip_flow=chip_flow,
+            news_sentiment=news_sentiment,
             backtest=backtest,
         )
 

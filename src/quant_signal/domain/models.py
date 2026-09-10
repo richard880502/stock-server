@@ -200,6 +200,41 @@ class ChipFlowSnapshot(BaseModel):
     data_available_at: datetime
 
 
+class NewsItem(BaseModel):
+    """One classified headline, point-in-time filterable by ``published_at``."""
+
+    symbol: str
+    headline: str
+    url: str
+    source: str
+    published_at: datetime
+    sentiment_score: float | None = Field(default=None, ge=-1, le=1)
+    sentiment_label: Literal["bullish", "neutral", "bearish"] | None = None
+    retrieved_at: datetime
+    revision: int = Field(default=1, ge=1)
+
+
+class NewsHeadlineRanking(BaseModel):
+    headline: str
+    url: str
+    source: str
+    published_at: datetime
+    sentiment_score: float | None = None
+    sentiment_label: Literal["bullish", "neutral", "bearish"] | None = None
+
+
+class NewsSentimentSnapshot(BaseModel):
+    symbol: str
+    as_of: date
+    strategy_version: str = "news_sentiment_v1"
+    score: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=1)
+    article_count: int = Field(ge=0)
+    sentiment_label: Literal["bullish", "neutral", "bearish"]
+    top_headlines: list[NewsHeadlineRanking] = Field(default_factory=list)
+    data_available_at: datetime
+
+
 class FactorScores(BaseModel):
     trend: float = Field(ge=0, le=100)
     momentum: float = Field(ge=0, le=100)
@@ -370,6 +405,7 @@ class LLMAnalysisContext(BaseModel):
     symbol_signal: SignalSnapshot
     market_environment: MarketEnvironmentSnapshot
     chip_flow: ChipFlowSnapshot | None = None
+    news_sentiment: NewsSentimentSnapshot | None = None
     backtest: BacktestReport | None = None
 
 

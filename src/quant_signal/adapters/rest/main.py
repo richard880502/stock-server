@@ -27,6 +27,7 @@ from quant_signal.application.services import (
     DataStatusService,
     InstrumentSearchService,
     MarketEnvironmentService,
+    NewsSentimentService,
     SignalService,
 )
 from quant_signal.domain.models import (
@@ -38,6 +39,7 @@ from quant_signal.domain.models import (
     Instrument,
     LLMAnalysisReport,
     MarketEnvironmentSnapshot,
+    NewsSentimentSnapshot,
     SignalSnapshot,
 )
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
@@ -131,6 +133,25 @@ def create_app() -> FastAPI:
     ) -> ChipFlowSnapshot:
         try:
             return await ChipFlowService(repository).analyze(
+                normalize_symbol(symbol),
+                as_of=as_of or date.today(),
+                strategy_version=strategy_version,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get(
+        "/news-sentiment/{symbol}",
+        response_model=NewsSentimentSnapshot,
+    )
+    async def analyze_news_sentiment(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+        strategy_version: str = "news_sentiment_v1",
+    ) -> NewsSentimentSnapshot:
+        try:
+            return await NewsSentimentService(repository).analyze(
                 normalize_symbol(symbol),
                 as_of=as_of or date.today(),
                 strategy_version=strategy_version,

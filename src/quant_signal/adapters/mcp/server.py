@@ -22,6 +22,7 @@ from quant_signal.application.services import (
     DataStatusService,
     InstrumentSearchService,
     MarketEnvironmentService,
+    NewsSentimentService,
     SignalService,
 )
 from quant_signal.domain.models import BacktestSpec, JobStatus
@@ -49,7 +50,7 @@ def server_info() -> str:
     return (
         '{"name":"quant-signal-server","version":"0.1.0",'
         '"capabilities":["data_status","symbol_search","signals","market_environment",'
-        '"chip_flows","broker_branches","alerts","backtests","llm"]}'
+        '"chip_flows","broker_branches","news_sentiment","alerts","backtests","llm"]}'
     )
 
 
@@ -179,6 +180,24 @@ async def analyze_chip_flow(
     """Analyze official institutional flows and optional licensed branch activity."""
     async with session_factory() as session:
         snapshot = await ChipFlowService(
+            PostgresQuantRepository(session)
+        ).analyze(
+            symbol.strip().upper(),
+            as_of=date.fromisoformat(as_of),
+            strategy_version=strategy_version,
+        )
+        return snapshot.model_dump(mode="json")
+
+
+@mcp.tool()
+async def analyze_news_sentiment(
+    symbol: str,
+    as_of: str,
+    strategy_version: str = "news_sentiment_v1",
+) -> dict[str, Any]:
+    """Aggregate point-in-time-classified news headlines into a sentiment score."""
+    async with session_factory() as session:
+        snapshot = await NewsSentimentService(
             PostgresQuantRepository(session)
         ).analyze(
             symbol.strip().upper(),

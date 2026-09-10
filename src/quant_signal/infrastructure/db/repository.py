@@ -24,6 +24,7 @@ from quant_signal.domain.models import (
     JobStatus,
     MarketEnvironmentSnapshot,
     MarketObservation,
+    NewsItem,
     SignalSnapshot,
 )
 from quant_signal.infrastructure.db.models import (
@@ -36,6 +37,7 @@ from quant_signal.infrastructure.db.models import (
     InstrumentRow,
     MarketEnvironmentSnapshotRow,
     MarketObservationRow,
+    NewsItemRow,
     SignalSnapshotRow,
 )
 
@@ -723,6 +725,67 @@ class PostgresQuantRepository:
             Instrument(symbol=row.symbol, name=row.name, market=row.market)
             for row in ranked
         ]
+
+    async def list_news_items(
+        self,
+        symbol: str,
+        *,
+        end: date | None = None,
+        start: date | None = None,
+    ) -> list[NewsItem]:
+        statement = (
+            select(NewsItemRow, InstrumentRow.symbol)
+            .join(InstrumentRow, NewsItemRow.instrument_id == InstrumentRow.id)
+            .where(InstrumentRow.symbol == symbol.upper())
+            .order_by(NewsItemRow.published_at.desc())
+        )
+        if start:
+            statement = statement.where(
+                NewsItemRow.published_at >= datetime.combine(start, datetime.min.time(), UTC)
+            )
+        if end:
+            statement = statement.where(
+                NewsItemRow.published_at
+                <= datetime.combine(end, datetime.max.time(), UTC)
+            )
+        rows = (await self.session.execute(statement)).all()
+        return [
+            NewsItem(
+                symbol=row_symbol,
+                headline=row.headline,
+                url=row.url,
+                source=row.source,
+                published_at=row.published_at,
+                sentiment_score=row.sentiment_score,
+                sentiment_label=row.sentiment_label,
+                retrieved_at=row.retrieved_at,
+                revision=row.revision,
+            )
+            for row, row_symbol in rows
+        ]
+
+    async def upsert_news_items(self, items: list[NewsItem]) -> int:
+        if not items:
+            return 0
+        symbol = items[0].symbol.upper()
+        if any(item.symbol.upper() != symbol for item in items):
+            raise ValueError("one news upsert may contain only one symbol")
+        instrument_id = await self._ensure_instrument(symbol)
+        inserted = 0
+        for item in items:
+            values = item.model_dump(mode="python", exclude={"symbol"})
+            statement = (
+                insert(NewsItemRow)
+                .values(instrument_id=instrument_id, **values)
+                .on_conflict_do_update(
+                    constraint="uq_news_item_version",
+                    set_=values,
+                )
+            )
+            result = await self.session.execute(statement)
+            inserted += result.rowcount or 0
+        await self.session.commit()
+        return inserted
 
     @staticmethod
     def _api_key_from_row(row: ApiKeyRow) -> ApiKey:

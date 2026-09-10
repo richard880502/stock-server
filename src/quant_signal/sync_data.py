@@ -10,8 +10,12 @@ from quant_signal.application.data_sync import (
     TpexDataSyncService,
     TwseDataSyncService,
 )
+from quant_signal.application.llm_analysis import create_llm_client
+from quant_signal.application.news_sync import NewsSentimentSyncService
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
 from quant_signal.infrastructure.providers import TpexProvider, TwseProvider
+from quant_signal.infrastructure.providers.news import SearxNgNewsProvider
+from quant_signal.settings import get_settings
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -52,6 +56,13 @@ def _parser() -> argparse.ArgumentParser:
     daily.add_argument("--symbols", nargs="+", default=["2330.TW", "6488.TWO"])
     daily.add_argument("--markets", nargs="+", choices=["TW", "TWO"], default=["TW"])
     daily.add_argument("--lookback-days", type=int, default=500)
+
+    news = subparsers.add_parser(
+        "news",
+        help="Fetch and classify point-in-time news sentiment for one symbol",
+    )
+    news.add_argument("--symbol", required=True)
+    news.add_argument("--limit", type=int, default=20)
     return parser
 
 
@@ -62,6 +73,30 @@ async def _run(args: argparse.Namespace) -> None:
         TpexProvider() as tpex_provider,
     ):
         repository = PostgresQuantRepository(session)
+        if args.command == "news":
+            settings = get_settings()
+            if settings.llm_errors():
+                raise SystemExit(
+                    f"LLM is not configured: {', '.join(settings.llm_errors())}"
+                )
+            searxng_provider = None
+            if settings.searxng_proxy_url and settings.searxng_proxy_key.get_secret_value():
+                searxng_provider = SearxNgNewsProvider(
+                    base_url=settings.searxng_proxy_url,
+                    api_key=settings.searxng_proxy_key.get_secret_value(),
+                )
+            inserted = await NewsSentimentSyncService(
+                repository,
+                create_llm_client(settings),
+                searxng_provider=searxng_provider,
+            ).sync_symbol(args.symbol, limit_per_source=args.limit)
+            print(
+                json.dumps(
+                    {"symbol": args.symbol.strip().upper(), "inserted": inserted},
+                    ensure_ascii=False,
+                )
+            )
+            return
         twse = TwseDataSyncService(repository, twse_provider)
         tpex = TpexDataSyncService(repository, tpex_provider)
         reports = []

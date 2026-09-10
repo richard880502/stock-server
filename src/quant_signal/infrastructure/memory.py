@@ -18,6 +18,7 @@ from quant_signal.domain.models import (
     JobStatus,
     MarketEnvironmentSnapshot,
     MarketObservation,
+    NewsItem,
     SignalSnapshot,
 )
 
@@ -37,6 +38,7 @@ class MemoryQuantRepository:
         self.api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
         self.instruments: dict[str, Instrument] = {}
+        self.news_items: dict[str, list[NewsItem]] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -359,6 +361,37 @@ class MemoryQuantRepository:
             key=lambda item: item[0],
         )
         return [instrument for _, instrument in matches[:limit]]
+
+    async def list_news_items(
+        self,
+        symbol: str,
+        *,
+        end: date | None = None,
+        start: date | None = None,
+    ) -> list[NewsItem]:
+        result = self.news_items.get(symbol.upper(), [])
+        if start:
+            start_dt = datetime.combine(start, datetime.min.time(), UTC)
+            result = [item for item in result if item.published_at >= start_dt]
+        if end:
+            end_dt = datetime.combine(end, datetime.max.time(), UTC)
+            result = [item for item in result if item.published_at <= end_dt]
+        return sorted(result, key=lambda item: item.published_at, reverse=True)
+
+    async def upsert_news_items(self, items: list[NewsItem]) -> int:
+        for item in items:
+            existing = self.news_items.setdefault(item.symbol.upper(), [])
+            existing = [
+                row
+                for row in existing
+                if not (
+                    row.url == item.url
+                    and row.source == item.source
+                    and row.revision == item.revision
+                )
+            ]
+            self.news_items[item.symbol.upper()] = [*existing, item]
+        return len(items)
 
     @staticmethod
     def _series_status(

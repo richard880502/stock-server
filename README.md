@@ -315,8 +315,10 @@ curl -N -X POST "http://127.0.0.1:18100/api/v1/llm-analyses/stream" \
 same evidence bundle through three calls instead of one: a bull-case
 researcher, a bear-case researcher, and a final synthesis that must explicitly
 weigh which side's evidence is stronger. All three calls are bound to the same
-deterministic JSON evidence as the single-shot analyst above — no live news or
-external tool calls are ever added to this path.
+deterministic JSON evidence as the single-shot analyst above — none of them
+ever make a live external call themselves; any news evidence they see was
+already fetched, classified, and persisted point-in-time beforehand (see
+below).
 
 ```bash
 curl -X POST "http://127.0.0.1:18100/api/v1/debate-analyses" \
@@ -331,6 +333,33 @@ curl -X POST "http://127.0.0.1:18100/api/v1/debate-analyses" \
 
 The response includes `bull_case`, `bear_case`, and a final `judgement` in the
 same shape as `/api/v1/llm-analyses`.
+
+### News sentiment analyst
+
+Unlike a live news-search tool call, this stays point-in-time-safe: headlines
+are fetched and classified once, ahead of time, into the `news_items` table
+with a real `published_at`, and analysis only ever reads headlines that were
+already published as of the requested `as_of` date.
+
+```bash
+uv run quant-signal-sync-data news --symbol 2330.TW
+curl "http://127.0.0.1:18100/api/v1/news-sentiment/2330.TW?as_of=2026-07-31"
+```
+
+`quant-signal-sync-data news` resolves the company name (via the instrument
+search below), pulls headlines from Google News RSS — `pubDate` is a genuine
+historical timestamp, safe for backfill — and, if `SEARXNG_PROXY_URL`/
+`SEARXNG_PROXY_KEY` are set, also from a self-hosted SearxNG instance behind
+the small authenticated proxy in `searxng-proxy/`. SearxNG's general search
+results carry no reliable historical publish date, so those are stamped with
+the sync run time and are only meaningful for *current* sentiment, never for
+backfilling history. Each new headline is classified into
+`bullish`/`neutral`/`bearish` by the configured LLM, bound only to the
+headline text itself. `analyze_news_sentiment` (MCP) and
+`GET /api/v1/news-sentiment/{symbol}` aggregate the point-in-time-filtered
+headlines into one `NewsSentimentSnapshot`, and it's automatically included as
+`news_sentiment` in the evidence bundle for the single-shot and debate
+analysts above whenever classified headlines exist for that symbol.
 
 ## API authentication
 
@@ -401,6 +430,7 @@ The MCP server exposes:
 - `get_market_environment`
 - `get_signal_alerts`
 - `analyze_chip_flow`
+- `analyze_news_sentiment`
 - `start_backtest`
 - `get_backtest_status`
 - `get_backtest_report`

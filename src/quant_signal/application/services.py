@@ -11,11 +11,13 @@ from quant_signal.domain.models import (
     DataStatus,
     Instrument,
     MarketEnvironmentSnapshot,
+    NewsSentimentSnapshot,
     SignalSnapshot,
 )
 from quant_signal.quant.chip_flow import ChipFlowEngine
 from quant_signal.quant.engine import QuantSignalEngine
 from quant_signal.quant.market_environment import MarketEnvironmentEngine
+from quant_signal.quant.news_sentiment import NewsSentimentEngine
 
 
 class SignalService:
@@ -65,6 +67,26 @@ class InstrumentSearchService:
 
     async def search(self, query: str, *, limit: int = 10) -> list[Instrument]:
         return await self.repository.search_instruments(query, limit=limit)
+
+
+class NewsSentimentService:
+    def __init__(
+        self,
+        repository: QuantRepository,
+        engine: NewsSentimentEngine | None = None,
+    ) -> None:
+        self.repository = repository
+        self.engine = engine or NewsSentimentEngine()
+
+    async def analyze(
+        self,
+        symbol: str,
+        *,
+        as_of: date,
+        strategy_version: str = "news_sentiment_v1",
+    ) -> NewsSentimentSnapshot:
+        items = await self.repository.list_news_items(symbol, end=as_of)
+        return self.engine.analyze(items, as_of=as_of, strategy_version=strategy_version)
 
 
 class ChipFlowService:

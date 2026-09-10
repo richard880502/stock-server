@@ -17,6 +17,7 @@ from quant_signal.domain.models import (
     Instrument,
     MarketEnvironmentSnapshot,
     MarketObservation,
+    NewsItem,
     SignalSnapshot,
 )
 
@@ -101,3 +102,11 @@ class QuantRepository(Protocol):
         *,
         limit: int = 10,
     ) -> list[Instrument]: ...
+
+    async def list_news_items(
+        self,
+        symbol: str,
+        *,
+        end: date | None = None,
+        start: date | None = None,
+    ) -> list[NewsItem]: ...

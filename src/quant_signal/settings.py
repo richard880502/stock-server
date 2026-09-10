@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_max_tokens: int = Field(default=1800, gt=0)
     llm_timeout_seconds: float = Field(default=120, gt=0)
+    searxng_proxy_url: str | None = None
+    searxng_proxy_key: SecretStr = SecretStr("")
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
