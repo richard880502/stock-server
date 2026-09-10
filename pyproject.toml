@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quant-signal-server"
+version = "0.1.0"
+description = "Point-in-time quantitative signals, alerts, backtests, REST, and MCP."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.16,<2",
+    "asyncpg>=0.30,<1",
+    "fastapi>=0.116,<1",
+    "httpx>=0.28,<1",
+    "mcp[cli]>=1.27,<2",
+    "numpy>=2.2,<3",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.10,<3",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.0,<2",
+    "ruff>=0.12,<1",
+]
+
+[project.scripts]
+quant-signal-api = "quant_signal.adapters.rest.main:run"
+quant-signal-mcp = "quant_signal.adapters.mcp.server:main"
+quant-signal-worker = "quant_signal.workers.backtests:main"
+quant-signal-seed-demo = "quant_signal.seed_demo:main"
+quant-signal-sync-data = "quant_signal.sync_data:main"
+quant-signal-import-branches = "quant_signal.import_branches:main"
+quant-signal-manage-keys = "quant_signal.manage_keys:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quant_signal"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

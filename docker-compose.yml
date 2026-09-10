@@ -1,0 +1,107 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: quant_signal
+      POSTGRES_USER: quant
+      POSTGRES_PASSWORD: quant
+    ports:
+      - "15432:5432"
+    volumes:
+      - quant_signal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant -d quant_signal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    environment: &app-env
+      DATABASE_URL: postgresql+asyncpg://quant:quant@postgres:5432/quant_signal
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
+      MCP_TRANSPORT: streamable-http
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000,http://127.0.0.1:13000}
+      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      LLM_API_KEY: ${LLM_API_KEY:-local}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1800}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn quant_signal.adapters.rest.main:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "18100:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mcp:
+    build: .
+    environment: *app-env
+    command: quant-signal-mcp
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "18101:8001"
+
+  worker:
+    build: .
+    environment: *app-env
+    command: quant-signal-worker
+    depends_on:
+      api:
+        condition: service_healthy
+
+  seed:
+    build: .
+    environment: *app-env
+    command: quant-signal-seed-demo
+    profiles: ["demo"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  sync:
+    build: .
+    environment: *app-env
+    command: >
+      quant-signal-sync-data daily
+      --symbols 2330.TW 6488.TWO
+      --lookback-days 1000
+    profiles: ["real-data"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_QUANT_API_URL: ${NEXT_PUBLIC_QUANT_API_URL:-http://127.0.0.1:18100}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "13000:3000"
+
+volumes:
+  quant_signal_pgdata:
