@@ -34,6 +34,127 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class MarketStockDay(BaseModel):
+    """One stock's official end-of-day quote, institutional flow and credit balance.
+
+    Flow and credit fields are ``None`` when the exchange had not published that
+    report for the day. Share counts are in shares; credit balances in lots.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    trading_date: date
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: int = Field(ge=0)
+    turnover_value: float = Field(ge=0)
+    change: float = 0.0
+    foreign_net: int | None = None
+    trust_net: int | None = None
+    dealer_net: int | None = None
+    total_net: int | None = None
+    margin_balance: int | None = None
+    margin_change: int | None = None
+    short_balance: int | None = None
+    short_change: int | None = None
+    available_at: datetime
+    source: str
+
+
+RankingMetric = Literal[
+    "foreign_net",
+    "trust_net",
+    "dealer_net",
+    "total_net",
+    "volume",
+    "turnover",
+    "change_pct",
+    "margin_change",
+    "short_change",
+]
+RANKING_METRICS: tuple[str, ...] = (
+    "foreign_net",
+    "trust_net",
+    "dealer_net",
+    "total_net",
+    "volume",
+    "turnover",
+    "change_pct",
+    "margin_change",
+    "short_change",
+)
+
+
+class RankingEntry(BaseModel):
+    rank: int
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    close: float
+    day_change_pct: float | None = None
+    value: float
+    volume_lots: int
+    turnover_value: float
+
+
+class MarketRanking(BaseModel):
+    metric: RankingMetric
+    market: Literal["ALL", "TW", "TWO"]
+    window: int
+    order: Literal["desc", "asc"]
+    as_of: date | None
+    data_through: date | None
+    window_start: date | None
+    trading_days: int
+    unit: str
+    # Newest session with quotes whose reports for this metric are not out yet.
+    awaiting_report_date: date | None = None
+    backfill_pending: bool = False
+    entries: list[RankingEntry]
+
+
+class MarketFlowDay(BaseModel):
+    trading_date: date
+    foreign_net_value: float
+    trust_net_value: float
+    dealer_net_value: float
+    foreign_net_shares: int
+    trust_net_shares: int
+    dealer_net_shares: int
+    turnover_value: float
+    margin_balance: int
+    short_balance: int
+    advancing: int
+    declining: int
+    unchanged: int
+    institutional_reported: bool = True
+    credit_reported: bool = True
+
+
+class MarketFlowSeries(BaseModel):
+    market: Literal["ALL", "TW", "TWO"]
+    as_of: date | None
+    data_through: date | None
+    value_basis: str = "net shares x that day's close (estimate, not the official NT$ amount)"
+    backfill_pending: bool = False
+    days: list[MarketFlowDay]
+
+
+class MarketDataStatus(BaseModel):
+    market: Literal["TW", "TWO"]
+    first_date: date | None
+    last_date: date | None
+    trading_days: int
+    stocks_on_last_day: int
+    institutional_coverage: float
+    credit_coverage: float
+
+
 class FetchCoverage(BaseModel):
     """Records that one slice of an upstream dataset has already been fetched.
 
@@ -54,6 +175,7 @@ class FetchCoverage(BaseModel):
 class SyncJobKind(StrEnum):
     SYMBOL = "symbol"
     INSTITUTIONS = "institutions"
+    MARKET = "market"
 
 
 class SyncJob(BaseModel):

@@ -16,7 +16,12 @@ import type {
   LlmStatus,
   LlmStreamPayload,
   LoginResponse,
+  MarketDataStatus,
   MarketEnvironment,
+  MarketFlows,
+  MarketMetric,
+  MarketRankings,
+  MarketScope,
   Signal,
   SyncSymbolRequest,
 } from "./types";
@@ -145,3 +150,36 @@ export async function streamLlmAnalysis(
   });
   if (streamError) throw streamError;
 }
+
+export type RankingsQuery = {
+  metric: MarketMetric;
+  market: MarketScope;
+  window: number;
+  order: "desc" | "asc";
+  limit?: number;
+  asOf?: string | null;
+};
+
+export function getMarketRankings(query: RankingsQuery, init?: Init): Promise<MarketRankings> {
+  const params = new URLSearchParams({
+    metric: query.metric,
+    market: query.market,
+    window: String(query.window),
+    order: query.order,
+    limit: String(query.limit ?? 20),
+  });
+  if (query.asOf) params.set("as_of", query.asOf);
+  return fetchJson<MarketRankings>(apiUrl(`/api/v1/market/rankings?${params}`), init);
+}
+
+export function getMarketFlows(
+  query: { market: MarketScope; days: number; asOf?: string | null },
+  init?: Init,
+): Promise<MarketFlows> {
+  const params = new URLSearchParams({ market: query.market, days: String(query.days) });
+  if (query.asOf) params.set("as_of", query.asOf);
+  return fetchJson<MarketFlows>(apiUrl(`/api/v1/market/flows?${params}`), init);
+}
+
+export const getMarketDataStatus = (init?: Init) =>
+  fetchJson<MarketDataStatus[]>(apiUrl("/api/v1/market/data-status"), init);

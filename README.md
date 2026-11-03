@@ -425,9 +425,11 @@ daily 15:30 Taipei (weekdays) ───────────┤
   `(kind, symbol)` — ten simultaneous requests for one symbol cause one crawl.
   Failed jobs retry up to `SYNC_MAX_ATTEMPTS` with backoff; jobs stuck in
   `running` are requeued after `SYNC_STALE_AFTER_SECONDS`.
-- **Daily refresh.** After `SYNC_DAILY_TIME` (Taipei, weekdays) the worker
-  queues one price job per tracked symbol and one institutional-flow job per
-  stock, once per day.
+- **Daily refresh.** After each time in `SYNC_DAILY_TIME` (Taipei, weekdays,
+  default `15:30,21:45`) the worker queues one price job per tracked symbol, one
+  institutional-flow job per stock, and one whole-market snapshot job per
+  exchange. The evening run exists because margin reports come out after the
+  institutional ones.
 - **Shared reports.** The market-wide TWSE T86/MI_QFIIS and TPEx daily-trade
   files are cached once settled, so N symbols cost one download per day.
 
@@ -453,7 +455,55 @@ curl -X POST "http://127.0.0.1:18100/api/v1/sync/symbol" \
 
 Not yet incremental: `quant-signal-sync-data market` (market breadth) still
 walks every trading day in its warm-up window, because the rolling breadth needs
-each day's quotes.
+each day's quotes. See *Market rankings and capital flow* for the stored
+whole-market table it can be rebuilt from.
+
+## Market rankings and capital flow
+
+The sync worker also stores every common stock's official end-of-day quote,
+three-institution net buy/sell, and margin/short balance in
+`market_stock_daily` (about 1,100 TWSE + 850 TPEx rows per trading day, from
+`MI_INDEX`/`T86`/`MI_MARGN` and the TPEx equivalents). The first run fills
+`SYNC_MARKET_LOOKBACK_DAYS` (default 520 calendar days, about 2,600 polite
+requests; measured at about 5 sessions per minute per exchange, so plan on an
+hour or more) of history automatically; afterwards only new days
+are fetched. A day fetched before its reports were published is refetched the
+next day, and holidays are remembered.
+
+```bash
+# Biggest foreign net buyers over 5 sessions, listed stocks (values in lots / 張)
+curl "http://127.0.0.1:18100/api/v1/market/rankings?metric=foreign_net&window=5&market=TW&limit=20"
+# Biggest net sellers: order=asc. Other metrics: trust_net, dealer_net, total_net,
+# volume, turnover, change_pct, margin_change, short_change
+curl "http://127.0.0.1:18100/api/v1/market/rankings?metric=change_pct&order=asc&window=20"
+# Daily capital-flow series (estimated NT$) for charts
+curl "http://127.0.0.1:18100/api/v1/market/flows?market=ALL&days=60"
+curl "http://127.0.0.1:18100/api/v1/market/data-status"
+```
+
+- Rankings are point-in-time: `as_of` only uses reports published by then.
+- Institutional and credit reports are published after the quotes. For those
+  metrics the ranking uses the newest session whose report exists and returns
+  `awaiting_report_date` for any newer session still waiting.
+- `*_net_value` in the flow series is **net shares x that day's close**, an
+  estimate and not the official NT$ amount. Sessions without a published
+  report are flagged (`institutional_reported`, `credit_reported`), never zeroed.
+- Names that did not trade on the latest session are not ranked.
+- Only common stocks (4-digit codes not starting with 0) are covered, so ETFs
+  are excluded. Broker-branch ("主力") data is a paid product and is not used.
+- MCP exposes the same data as `get_market_ranking` and `get_market_flows`.
+- **The market-environment score is derived from this table.** After each
+  whole-market snapshot the same job builds any missing daily observation:
+  advancers, MA20/MA60 participation, 52-week highs/lows and up/down volume come
+  from the stored closes; only the official market-level figures (index close,
+  total turnover, institutional NT$ flows, margin and short balances) are
+  requested, once per new session. A session is built only when 252 earlier
+  sessions of closes are stored (hence the 520-day first backfill) and a stock
+  counts once it has 60 closes, as in the full rebuild; existing
+  official observations are never rewritten, and a day whose capital reports
+  were not out yet is retried the next day. A freshly deployed worker therefore
+  backfills and keeps `/market-environments/TW` current on its own;
+  `quant-signal-sync-data market` remains only as a manual full rebuild.
 
 ## Local development
 
@@ -681,6 +731,7 @@ Current strategy mechanics:
 - `backtest_jobs`
 - `fetch_coverage`
 - `sync_jobs`
+- `market_stock_daily`
 
 The first migration is under `migrations/versions/0001_initial.py`.
 
@@ -745,6 +796,37 @@ before calculating their range. Startup downloads weights from Hugging Face.
 substitute another model. On macOS the same server can run directly with PyTorch
 MPS, `PYTHONPATH` pointing to the pinned Kronos checkout, and the API's
 `KRONOS_URL=http://127.0.0.1:18102`. `KRONOS_DEVICE=cpu` forces CPU inference.
+
+### Running Kronos on another machine
+
+The inference service in `kronos-service/` is a standalone image, so it does not
+have to share a host with the API. CI (`.github/workflows/kronos-image.yml`)
+publishes CPU images with the weights baked in, for `linux/amd64` and
+`linux/arm64`, to GitHub Container Registry:
+
+```text
+ghcr.io/<owner>/kronos-service:small   # NeoQuasar/Kronos-small (also :latest)
+ghcr.io/<owner>/kronos-service:base    # NeoQuasar/Kronos-base, the largest open model
+```
+
+```bash
+docker run -d --name kronos -p 8002:8002 \
+  -e KRONOS_API_KEY="$(openssl rand -hex 24)" \
+  ghcr.io/<owner>/kronos-service:small
+```
+
+Then point the API at it with `KRONOS_URL=https://your-host:8002` and the same
+`KRONOS_API_KEY`; the API sends it as `Authorization: Bearer`, and the service
+rejects `/predict` without it (`/health` stays open for probes). With no key set
+the service is open, which is only appropriate on a private network. Put TLS in
+front of it (a reverse proxy or tunnel) before exposing it publicly.
+
+Optional service settings: `KRONOS_MODEL`, `KRONOS_TOKENIZER`, `KRONOS_DEVICE`
+(`cpu`, `cuda:0`, `mps`), `KRONOS_THREADS`, `KRONOS_LOAD_MODEL=0` (start without
+weights for smoke tests). The published images are CPU-only; a GPU needs a CUDA
+build of PyTorch. Kronos-base is about 4x the size of small, so expect it to be
+several times slower on CPU. `/predict` returns `{"paths", "model"}` so every
+forecast records which model produced it.
 
 ## Coolify migration
 

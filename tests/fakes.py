@@ -81,3 +81,35 @@ class FakeProvider:
             )
             for day in _weekdays(start, end)
         ]
+
+
+class FakeMarketProvider:
+    """Whole-market snapshot provider: trades on weekdays except listed holidays."""
+
+    def __init__(self, holidays: set[date] | None = None) -> None:
+        self.holidays = holidays or set()
+        self.calls: list[date] = []
+
+    async def fetch_market_stock_day(self, trading_date: date):
+        from quant_signal.domain.models import MarketStockDay
+
+        self.calls.append(trading_date)
+        if trading_date.weekday() >= 5 or trading_date in self.holidays:
+            return []
+        return [
+            MarketStockDay(
+                symbol=f"{code}.TW",
+                name=f"stock{code}",
+                market="TW",
+                trading_date=trading_date,
+                open=10,
+                high=11,
+                low=9,
+                close=10,
+                volume=1000,
+                turnover_value=10_000,
+                available_at=datetime.combine(trading_date, time(10), tzinfo=UTC),
+                source="twse_official",
+            )
+            for code in ("1101", "1102")
+        ]

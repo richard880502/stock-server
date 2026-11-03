@@ -126,6 +126,7 @@ async def forecast(
     request: ForecastRequest,
     *,
     kronos_url: str | None = None,
+    kronos_api_key: str | None = None,
 ) -> ForecastReport:
     if not (request.symbol.endswith((".TW", ".TWO")) or request.symbol in ("^TWII", "^TWOII")):
         raise ValueError("目前預測僅支援台股、台股 ETF 與上市櫃指數")
@@ -149,9 +150,11 @@ async def forecast(
         if not kronos_url:
             raise ValueError("Kronos 尚未啟用，請先啟動模型服務並設定 KRONOS_URL")
         anchor = history[-1].adjustment_factor
+        headers = {"Authorization": f"Bearer {kronos_api_key}"} if kronos_api_key else {}
         async with httpx.AsyncClient(timeout=180) as client:
             response = await client.post(
                 f"{kronos_url.rstrip('/')}/predict",
+                headers=headers,
                 json={
                     "bars": [
                         {
@@ -167,6 +170,8 @@ async def forecast(
                     "dates": [d.isoformat() for d in dates],
                 },
             )
+            if response.status_code in (401, 403):
+                raise ValueError("Kronos 拒絕存取，請檢查 KRONOS_API_KEY 是否與模型服務一致")
             response.raise_for_status()
             paths = np.asarray(response.json()["paths"], dtype=float)
         if (

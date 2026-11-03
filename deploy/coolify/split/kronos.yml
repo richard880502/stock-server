@@ -3,6 +3,7 @@ services:
     build: ./kronos-service
     environment:
       HF_HUB_OFFLINE: ${KRONOS_OFFLINE:-0}
+      KRONOS_API_KEY: ${KRONOS_API_KEY:-}
     restart: unless-stopped
     volumes:
     - kronos_models:/models

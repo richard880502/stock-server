@@ -35,7 +35,7 @@ async def test_daily_refresh_queues_prices_and_flows_once_per_day() -> None:
         repository, now=AFTER_CLOSE, daily_time="15:30", lookback_days=500
     )
 
-    assert created == 5  # 3 price jobs + 2 flow jobs (the index has no flows)
+    assert created == 7  # 3 price + 2 flow jobs (the index has no flows) + 2 market jobs
     assert again == 0
     kinds = sorted((job.kind.value, job.symbol) for job in repository.sync_jobs.values())
     assert ("institutions", "^TWII") not in kinds

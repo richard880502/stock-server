@@ -394,3 +394,32 @@ class SyncJobRow(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MarketStockDayRow(Base):
+    __tablename__ = "market_stock_daily"
+    __table_args__ = (Index("ix_market_stock_daily_date_market", "trading_date", "market"),)
+
+    # Deliberately no foreign key to instruments: this table holds every listed
+    # stock, while instruments is the (small) set the sync worker tracks.
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    turnover_value: Mapped[float] = mapped_column(Float, nullable=False)
+    change: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    foreign_net: Mapped[int | None] = mapped_column(BigInteger)
+    trust_net: Mapped[int | None] = mapped_column(BigInteger)
+    dealer_net: Mapped[int | None] = mapped_column(BigInteger)
+    total_net: Mapped[int | None] = mapped_column(BigInteger)
+    margin_balance: Mapped[int | None] = mapped_column(BigInteger)
+    margin_change: Mapped[int | None] = mapped_column(BigInteger)
+    short_balance: Mapped[int | None] = mapped_column(BigInteger)
+    short_change: Mapped[int | None] = mapped_column(BigInteger)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

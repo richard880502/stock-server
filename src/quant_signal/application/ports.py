@@ -16,8 +16,11 @@ from quant_signal.domain.models import (
     FetchCoverage,
     InstitutionalFlow,
     Instrument,
+    MarketDataStatus,
     MarketEnvironmentSnapshot,
+    MarketFlowDay,
     MarketObservation,
+    MarketStockDay,
     NewsItem,
     SignalSnapshot,
     SyncJob,
@@ -141,3 +144,38 @@ class QuantRepository(Protocol):
     async def requeue_stale_sync_jobs(self, *, older_than_seconds: float) -> int: ...
 
     async def list_tracked_symbols(self) -> list[str]: ...
+
+    async def upsert_market_stock_days(self, rows: list[MarketStockDay]) -> int: ...
+
+    async def list_market_trading_dates(
+        self,
+        market: str | None,
+        *,
+        as_of: date | None,
+        limit: int,
+        require: str | None = None,
+    ) -> list[date]: ...
+
+    async def list_market_stock_days(
+        self,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None = None,
+    ) -> list[MarketStockDay]: ...
+
+    async def market_flow_totals(
+        self,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None = None,
+    ) -> list[MarketFlowDay]: ...
+
+    async def market_data_status(self) -> list[MarketDataStatus]: ...
+
+    async def list_market_closes(
+        self, dates: list[date], market: str
+    ) -> list[tuple[str, date, float, float, int]]: ...
+
+    async def has_active_sync_job(self, kind: SyncJobKind) -> bool: ...
