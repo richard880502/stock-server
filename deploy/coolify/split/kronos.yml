@@ -1,0 +1,31 @@
+services:
+  kronos:
+    build: ./kronos-service
+    environment:
+      HF_HUB_OFFLINE: ${KRONOS_OFFLINE:-0}
+    restart: unless-stopped
+    volumes:
+    - kronos_models:/models
+    mem_limit: 3g
+    cpus: 2
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+    networks:
+      stock-private:
+        aliases:
+        - stock-kronos
+networks:
+  stock-private:
+    external: true
+volumes:
+  kronos_models:
+    external: true
+    name: 0ytyhezcydrzg593nzpslkqs_kronos-models

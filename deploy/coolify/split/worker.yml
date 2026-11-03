@@ -1,0 +1,40 @@
+services:
+  worker:
+    build: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?required}
+      KRONOS_URL: http://stock-kronos:8002
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
+      MCP_TRANSPORT: streamable-http
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000,http://127.0.0.1:13000}
+      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-true}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      LLM_API_KEY: ${LLM_API_KEY:-local}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1800}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      JUDGE_LLM_ENABLED: ${JUDGE_LLM_ENABLED:-false}
+      JUDGE_LLM_BASE_URL: ${JUDGE_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      JUDGE_LLM_MODEL: ${JUDGE_LLM_MODEL:-}
+      JUDGE_LLM_API_KEY: ${JUDGE_LLM_API_KEY:-local}
+      JUDGE_LLM_TEMPERATURE: ${JUDGE_LLM_TEMPERATURE:-0.2}
+      JUDGE_LLM_MAX_TOKENS: ${JUDGE_LLM_MAX_TOKENS:-1800}
+      JUDGE_LLM_TIMEOUT_SECONDS: ${JUDGE_LLM_TIMEOUT_SECONDS:-120}
+      SEARXNG_PROXY_URL: ${SEARXNG_PROXY_URL:-}
+      SEARXNG_PROXY_KEY: ${SEARXNG_PROXY_KEY:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
+    command: quant-signal-worker
+    restart: unless-stopped
+    networks:
+      stock-private:
+        aliases:
+        - stock-worker
+networks:
+  stock-private:
+    external: true

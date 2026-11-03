@@ -1,0 +1,14 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_QUANT_API_URL: ''
+    restart: unless-stopped
+    networks:
+      stock-private:
+        aliases:
+        - stock-frontend
+networks:
+  stock-private:
+    external: true

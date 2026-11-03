@@ -1,0 +1,26 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/coolify/split/Dockerfile.gateway
+    expose:
+    - '8080'
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -q
+      - -O
+      - /dev/null
+      - http://127.0.0.1:8080/health
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      stock-private:
+        aliases:
+        - stock-gateway
+networks:
+  stock-private:
+    external: true

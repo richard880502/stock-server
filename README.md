@@ -722,3 +722,19 @@ source and backup until the new environment is accepted. The separate deployment
 file does not publish database or inference ports and does not run demo seeding.
 After preloading a complete verified model cache, `KRONOS_OFFLINE=1` skips Hub
 network lookups on startup; leave it unset for first-time weight downloads.
+
+### Independently managed Coolify services
+
+The `deploy/coolify/split/` files each define one application: API, worker, MCP,
+frontend, Kronos, and gateway. Configure each as its own GitHub-backed Coolify
+application with the corresponding Compose path and repository root as the base
+directory. The private `stock-private` network connects their unique `stock-*`
+aliases. PostgreSQL is a native Coolify PostgreSQL resource on that destination;
+its UUID is the database hostname. Only the gateway has a public domain.
+
+Use watch paths so frontend changes deploy the frontend, model-service changes
+deploy Kronos, and backend changes deploy API/worker/MCP. PostgreSQL never follows
+Git pushes. The gateway uses runtime Docker DNS and retains the existing website
+and MCP URLs. Kronos keeps the existing external model-cache volume. Database
+migration uses a fresh native database volume and a verified dump; the former
+stack's PostgreSQL volume is retained for recovery.
