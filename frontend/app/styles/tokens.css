@@ -1,0 +1,135 @@
+/*
+ * Design tokens.
+ *
+ * Every colour is a light-dark() pair, so one declaration covers both themes.
+ * `color-scheme` follows prefers-color-scheme by default; the manual toggle
+ * stamps <html data-theme="light|dark"> (see components/theme-toggle.tsx) and
+ * pins it.
+ *
+ * Taiwan market convention: red = up / gain, green = down / loss. The direction
+ * tokens (--up, --down) are the ONLY places red and green appear; everything
+ * else (accent, series, warning) avoids both hues so a colour never changes
+ * meaning. Direction is always paired with a sign, arrow or label.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- Surfaces & ink ------------------------------------------------ */
+  --bg: light-dark(#f5f4f0, #0e1014);
+  --surface: light-dark(#ffffff, #161920);
+  --surface-2: light-dark(#faf9f6, #1b1f27);
+  --surface-sunken: light-dark(#eeece6, #0b0d11);
+  --surface-overlay: light-dark(#ffffff, #1f232c);
+  --border: light-dark(#e1ded5, #272c36);
+  --border-strong: light-dark(#c4c0b4, #3b4250);
+  --control-border: light-dark(#85816f, #6d7585); /* >= 3:1 for form controls */
+  --text: light-dark(#1a1a17, #ecebe6);
+  --text-2: light-dark(#4f4d46, #b7b5ad);
+  --text-3: light-dark(#6a675e, #92908a);
+  --scrim: light-dark(rgb(20 20 16 / 0.35), rgb(0 0 0 / 0.55));
+
+  /* ---- Accent (interactive, brand) ----------------------------------- */
+  --accent: light-dark(#1d5ec4, #7aa8f7);
+  --accent-strong: light-dark(#154a9f, #a2c1fa);
+  --accent-soft: light-dark(#e7eefb, #1b2a47);
+  --accent-fill: light-dark(#1d5ec4, #2b61c7);
+  --accent-fill-hover: light-dark(#164c9f, #2554b0);
+  --on-accent: #ffffff;
+  --focus-ring: light-dark(#1d5ec4, #8db6fa);
+
+  /* ---- Direction: Taiwan convention (red up, green down) ------------- */
+  --up: light-dark(#c4241d, #ff7770);
+  --up-soft: light-dark(#fdecea, #3a1b1c);
+  --down: light-dark(#0a7440, #43d08a);
+  --down-soft: light-dark(#e2f3e9, #12301f);
+  --flat: var(--text-2);
+  --flat-soft: light-dark(#eceae4, #242831);
+
+  /* ---- Status (kept clear of red/green) ------------------------------ */
+  --warn: light-dark(#8a5700, #f2bd55);
+  --warn-soft: light-dark(#fff3d4, #33290f);
+  --warn-border: light-dark(#e6c26d, #5d4a1b);
+  --info: var(--accent);
+  --info-soft: var(--accent-soft);
+
+  /* ---- Data-viz series ------------------------------------------------ */
+  --series-strategy: light-dark(#246fd0, #4d93ec);
+  --series-baseline: light-dark(#7a766b, #9d9a90);
+  --series-history: light-dark(#4f4d46, #b7b5ad);
+  --series-band: light-dark(rgb(42 120 214 / 0.14), rgb(77 147 236 / 0.2));
+  --chart-grid: light-dark(#e8e5dd, #262a33);
+  --chart-axis: var(--text-3);
+
+  /* ---- Type ---------------------------------------------------------- */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", "PingFang TC",
+    "Microsoft JhengHei", "Noto Sans TC", "Heiti TC", "Hiragino Sans CNS",
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-base: 0.9375rem; /* 15 */
+  --text-md: 1.0625rem; /* 17 */
+  --text-lg: 1.25rem; /* 20 */
+  --text-xl: 1.625rem; /* 26 */
+  --text-2xl: 2.125rem; /* 34 */
+  --text-hero: clamp(3.25rem, 2.4rem + 4vw, 5rem);
+  --leading-tight: 1.2;
+  --leading-snug: 1.4;
+  --leading-body: 1.7; /* roomy: CJK glyphs need more line height */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-strong: 650;
+
+  /* ---- Space (4px grid) ---------------------------------------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* ---- Radius -------------------------------------------------------- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* ---- Elevation ----------------------------------------------------- */
+  --shadow-1: 0 1px 2px light-dark(rgb(40 36 20 / 0.06), rgb(0 0 0 / 0.4));
+  --shadow-2: 0 4px 14px light-dark(rgb(40 36 20 / 0.08), rgb(0 0 0 / 0.45)),
+    0 1px 3px light-dark(rgb(40 36 20 / 0.06), rgb(0 0 0 / 0.4));
+  --shadow-3: 0 16px 40px light-dark(rgb(40 36 20 / 0.14), rgb(0 0 0 / 0.6)),
+    0 2px 8px light-dark(rgb(40 36 20 / 0.08), rgb(0 0 0 / 0.5));
+
+  /* ---- Motion -------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 360ms;
+
+  /* ---- Layout -------------------------------------------------------- */
+  --content-max: 1200px;
+  --gutter: clamp(1rem, 0.5rem + 2vw, 2rem);
+  --header-h: 3.5rem;
+  --touch: 2.75rem; /* 44px minimum touch target */
+
+  --z-header: 30;
+  --z-popover: 50;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
