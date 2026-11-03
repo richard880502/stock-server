@@ -67,3 +67,17 @@ def test_buy_hold_and_sell_tax(trending_bars):
     assert taxed.excess_return == pytest.approx(
         taxed.total_return - taxed.buy_hold_return, abs=1e-6
     )
+
+
+def test_backtest_warns_when_requested_end_has_no_data(trending_bars):
+    from datetime import timedelta
+
+    report = BacktestEngine().run(
+        trending_bars,
+        BacktestSpec(
+            symbol="TEST",
+            start=trending_bars[80].trading_date,
+            end=trending_bars[-1].trading_date + timedelta(days=30),
+        ),
+    )
+    assert any("未涵蓋指定結束日" in warning for warning in report.warnings)

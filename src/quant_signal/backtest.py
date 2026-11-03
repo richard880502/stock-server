@@ -181,6 +181,11 @@ class BacktestEngine:
             max_drawdown = min(max_drawdown, value / running_peak - 1)
 
         warnings: list[str] = []
+        if (spec.end - period_bars[-1].trading_date).days > 7:
+            warnings.append(
+                f"價格資料僅到 {period_bars[-1].trading_date}，未涵蓋指定結束日；"
+                "績效僅根據實際可用交易日計算。"
+            )
         if any(b.source == "synthetic_demo" for b in all_bars):
             warnings.append("價格輸入包含合成示範資料，結果僅供功能展示。")
         if spec.market and any(o.source == "synthetic_demo" for o in (market_observations or [])):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
@@ -164,6 +165,7 @@ def create_app() -> FastAPI:
         is_tpex = normalized.endswith(".TWO") or normalized == "^TWOII"
         try:
             async with (
+                asyncio.timeout(90),
                 TwseProvider() as twse_provider,
                 TpexProvider() as tpex_provider,
             ):
@@ -177,8 +179,10 @@ def create_app() -> FastAPI:
                     start=request.start,
                     end=request.end or date.today(),
                 )
-        except (ValueError, httpx.HTTPError) as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="官方資料同步逾時，請稍後再試") from exc
+        except (ValueError, RuntimeError, httpx.HTTPError) as exc:
+            raise HTTPException(status_code=502, detail="官方資料同步失敗，請稍後再試") from exc
         return report.model_dump(mode="json")
 
     @router.get("/signals/{symbol}", response_model=SignalSnapshot)

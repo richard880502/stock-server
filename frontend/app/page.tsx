@@ -1403,7 +1403,9 @@ export default function Home() {
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(payload?.detail ?? "密碼錯誤");
+        throw new Error(response.status === 401
+          ? "密碼不正確，請使用 Quant Signal 的登入密碼。"
+          : `登入服務暫時無法使用（HTTP ${response.status}），請稍後重試。`);
       }
       const key = payload.api_key as string;
       window.localStorage.setItem(AUTH_STORAGE_KEY, key);
