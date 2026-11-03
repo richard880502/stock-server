@@ -332,3 +332,112 @@
     content: attr(data-label) " ";
   }
 }
+
+/* ---- Capital-flow trend ------------------------------------------------ */
+
+.flow-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-body,
+.flow-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.flow-card .chart-figure {
+  gap: var(--space-4);
+}
+
+.flow-card .callout {
+  margin-bottom: var(--space-4);
+}
+
+.flow-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+
+.flow-cumulative {
+  align-items: center;
+  min-height: var(--touch);
+}
+
+.estimate-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.estimate-note .chip {
+  flex: none;
+  padding-block: 0;
+  font-size: var(--text-xs);
+}
+
+.trend-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1000px) {
+  .trend-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.trend-card {
+  min-width: 0;
+}
+
+.trend-card .card-header {
+  margin-bottom: var(--space-2);
+}
+
+.trend-latest {
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+}
+
+.breadth-legend {
+  margin-top: var(--space-2);
+}
+
+.data-table tbody th {
+  font-weight: var(--weight-regular);
+  text-align: left;
+}
+
+/* ---- Footer notes ------------------------------------------------------- */
+
+.market-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.data-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.data-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+}
+
+.data-status-row dt {
+  font-weight: var(--weight-strong);
+  color: var(--text-2);
+}

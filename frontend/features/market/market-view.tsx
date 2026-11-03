@@ -3,8 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { ErrorBanner } from "@/components/error-banner";
-import { getMarketRankings } from "@/lib/api/endpoints";
+import { getMarketFlows, getMarketRankings } from "@/lib/api/endpoints";
 import { useDashboard } from "@/lib/dashboard-context";
+import { MarketDataFooter } from "./data-footer";
+import { FlowSection } from "./flow-section";
 import { MarketControls } from "./market-controls";
 import { AwaitingReportNotice, BackfillNotice, PartialHistoryNotice } from "./market-notices";
 import { METRICS } from "./metrics";
@@ -33,6 +35,10 @@ export function MarketView() {
   const top = useMarketResource(rankingKey("desc"), loadRanking("desc"));
   const bottom = useMarketResource(info.bottom ? rankingKey("asc") : null, loadRanking("asc"));
 
+  const flows = useMarketResource(`flows|${params.market}|${params.range}|${asOf}`, (signal) =>
+    getMarketFlows({ market: params.market, days: params.range, asOf }, { signal }),
+  );
+
   const pick = useCallback(
     (symbol: string) => {
       refresh({ symbol });
@@ -42,12 +48,15 @@ export function MarketView() {
   );
 
   const lead = top.data && top.data.metric === params.metric ? top.data : null;
-  const backfill = Boolean(lead?.backfill_pending || bottom.data?.backfill_pending);
+  const backfill = Boolean(
+    lead?.backfill_pending || bottom.data?.backfill_pending || flows.data?.backfill_pending,
+  );
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const error = top.error ?? bottom.error;
+  const error = top.error ?? bottom.error ?? flows.error;
   const retry = () => {
     if (top.error) top.retry();
     if (bottom.error) bottom.retry();
+    if (flows.error) flows.retry();
   };
 
   return (
@@ -105,6 +114,19 @@ export function MarketView() {
           />
         )}
       </div>
+
+      <FlowSection
+        scope={params.market}
+        range={params.range}
+        cumulative={params.cumulative}
+        onRange={(range) => update({ range })}
+        onCumulative={(cumulative) => update({ cumulative })}
+        data={flows.data}
+        loading={flows.loading}
+        stale={flows.stale}
+      />
+
+      <MarketDataFooter refreshKey={flows.data} />
     </>
   );
 }

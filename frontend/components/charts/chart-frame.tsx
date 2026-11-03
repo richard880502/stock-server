@@ -20,10 +20,13 @@ export type ChartCtx = {
   plot: { left: number; right: number; top: number; bottom: number };
 };
 
+/** Line style of a legend / tooltip key: true = dashed, "dotted" = dotted. */
+export type Dash = boolean | "dotted";
+
 export type Readout = {
   /** Heading line, usually the date. */
   title: string;
-  rows: { label: string; value: string; /** CSS colour of the line key */ color: string; dashed?: boolean }[];
+  rows: { label: string; value: string; /** CSS colour of the line key */ color: string; dashed?: Dash }[];
   /** Optional muted footnote line. */
   note?: string;
 };
@@ -45,6 +48,7 @@ export function ChartFrame({
   markers,
   readout,
   defaultIndex,
+  className = "",
 }: {
   count: number;
   /** x pixel for data index i given the plot bounds. */
@@ -59,6 +63,8 @@ export function ChartFrame({
   readout: (index: number) => Readout;
   /** Index announced to assistive tech before any interaction. */
   defaultIndex?: number;
+  /** Extra class on the wrapper, e.g. "chart-compact" for small multiples. */
+  className?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -126,7 +132,7 @@ export function ChartFrame({
 
   return (
     <div
-      className="chart"
+      className={`chart ${className}`.trim()}
       ref={wrapRef}
       role="group"
       aria-label={label}
@@ -152,7 +158,7 @@ export function ChartFrame({
           )}
         </svg>
       )}
-      {!ready && <div className="skeleton block" style={{ height: 280 }} />}
+      {!ready && <div className="skeleton block" style={{ height: Math.max(height - 20, 80) }} />}
       {info && (
         <div
           className="chart-tooltip"
@@ -187,13 +193,15 @@ export function ChartFrame({
 export function ChartLegend({
   items,
 }: {
-  items: { label: string; color: string; dashed?: boolean; band?: boolean }[];
+  items: { label: string; color: string; dashed?: Dash; band?: boolean; hatch?: boolean }[];
 }) {
   return (
     <ul className="chart-legend" aria-label="圖例">
       {items.map((item) => (
         <li key={item.label}>
-          {item.band ? (
+          {item.hatch ? (
+            <span className="hatch-key" aria-hidden="true" />
+          ) : item.band ? (
             <span className="band-key" style={{ background: item.color }} aria-hidden="true" />
           ) : (
             <span className="line-key" style={{ color: item.color }} data-dashed={item.dashed || undefined} aria-hidden="true" />
