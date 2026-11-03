@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
@@ -18,6 +18,7 @@ from quant_signal.application.llm_analysis import (
     create_judge_llm_client,
     create_llm_client,
 )
+from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
@@ -180,6 +181,67 @@ async def get_market_environment(
 ) -> dict[str, Any]:
     """Return the complete point-in-time market breadth and capital environment."""
     return await _get_market_environment(market, as_of, strategy_version)
+
+
+@mcp.tool()
+async def get_market_ranking(
+    metric: Literal[
+        "foreign_net",
+        "trust_net",
+        "dealer_net",
+        "total_net",
+        "volume",
+        "turnover",
+        "change_pct",
+        "margin_change",
+        "short_change",
+    ] = "foreign_net",
+    market: Literal["ALL", "TW", "TWO"] = "ALL",
+    window: int = 1,
+    order: Literal["desc", "asc"] = "desc",
+    limit: int = 20,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """Rank Taiwan stocks by institutional net buy/sell, volume, turnover, price change or credit.
+
+    Share-based values are in lots (張, 1,000 shares). ``window`` sums or compounds
+    over that many trading days ending at ``as_of`` (default: latest stored day).
+    Use order="asc" for the biggest net sellers or decliners. Results are
+    point-in-time: only reports published by ``as_of`` are used.
+    """
+    async with session_factory() as session:
+        result = await MarketRankingService(
+            PostgresQuantRepository(session),
+            backfill_days=settings.sync_market_lookback_days,
+        ).ranking(
+            metric,
+            market=market,
+            window=max(1, min(window, 60)),
+            order=order,
+            limit=max(1, min(limit, 100)),
+            as_of=date.fromisoformat(as_of) if as_of else None,
+        )
+        return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def get_market_flows(
+    market: Literal["ALL", "TW", "TWO"] = "ALL",
+    days: int = 60,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """Daily capital-flow series: foreign/trust/dealer net (estimated NT$), turnover,
+    margin and short balances, and advancing/declining counts."""
+    async with session_factory() as session:
+        result = await MarketRankingService(
+            PostgresQuantRepository(session),
+            backfill_days=settings.sync_market_lookback_days,
+        ).flows(
+            market=market,
+            days=max(5, min(days, 250)),
+            as_of=date.fromisoformat(as_of) if as_of else None,
+        )
+        return result.model_dump(mode="json")
 
 
 def _market_summary(result: dict[str, Any]) -> dict[str, Any]:

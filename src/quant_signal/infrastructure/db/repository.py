@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, func, or_, select, text, update
+from sqlalchemy import Select, case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,8 +24,11 @@ from quant_signal.domain.models import (
     InstitutionalFlow,
     Instrument,
     JobStatus,
+    MarketDataStatus,
     MarketEnvironmentSnapshot,
+    MarketFlowDay,
     MarketObservation,
+    MarketStockDay,
     NewsItem,
     SignalSnapshot,
     SyncJob,
@@ -41,6 +45,7 @@ from quant_signal.infrastructure.db.models import (
     InstrumentRow,
     MarketEnvironmentSnapshotRow,
     MarketObservationRow,
+    MarketStockDayRow,
     NewsItemRow,
     SignalSnapshotRow,
     SyncJobRow,
@@ -973,6 +978,189 @@ class PostgresQuantRepository:
             .order_by(InstrumentRow.symbol)
         )
         return list((await self.session.execute(statement)).scalars().all())
+
+    async def upsert_market_stock_days(self, rows: list[MarketStockDay]) -> int:
+        if not rows:
+            return 0
+        written = 0
+        for offset in range(0, len(rows), 500):
+            chunk = rows[offset : offset + 500]
+            statement = insert(MarketStockDayRow).values(
+                [item.model_dump(mode="python") for item in chunk]
+            )
+            excluded = statement.excluded
+            statement = statement.on_conflict_do_update(
+                index_elements=["symbol", "trading_date", "source"],
+                set_={
+                    column: getattr(excluded, column)
+                    for column in MarketStockDay.model_fields
+                    if column not in ("symbol", "trading_date", "source")
+                },
+            )
+            result = await self.session.execute(statement)
+            written += result.rowcount or 0
+        await self.session.commit()
+        return written
+
+    @staticmethod
+    def _market_filters(market: str | None, as_of: date | None) -> list:
+        filters: list = []
+        if market and market != "ALL":
+            filters.append(MarketStockDayRow.market == market)
+        if as_of is not None:
+            cutoff = datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei"))
+            filters.append(MarketStockDayRow.trading_date <= as_of)
+            filters.append(MarketStockDayRow.available_at <= cutoff)
+        return filters
+
+    async def list_market_trading_dates(
+        self,
+        market: str | None,
+        *,
+        as_of: date | None,
+        limit: int,
+        require: str | None = None,
+    ) -> list[date]:
+        statement = (
+            select(MarketStockDayRow.trading_date)
+            .where(*self._market_filters(market, as_of))
+            .group_by(MarketStockDayRow.trading_date)
+            .order_by(MarketStockDayRow.trading_date.desc())
+            .limit(limit)
+        )
+        if require is not None:
+            # Keep only sessions on which this report column is published.
+            statement = statement.having(func.count(getattr(MarketStockDayRow, require)) > 0)
+        return list((await self.session.execute(statement)).scalars().all())
+
+    async def list_market_stock_days(
+        self,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None = None,
+    ) -> list[MarketStockDay]:
+        if not dates:
+            return []
+        statement = select(MarketStockDayRow).where(
+            MarketStockDayRow.trading_date.in_(dates),
+            *self._market_filters(market, as_of),
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        return [
+            MarketStockDay.model_validate(
+                {column: getattr(row, column) for column in MarketStockDay.model_fields}
+            )
+            for row in rows
+        ]
+
+    async def market_flow_totals(
+        self,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None = None,
+    ) -> list[MarketFlowDay]:
+        if not dates:
+            return []
+        row = MarketStockDayRow
+
+        def shares(column) -> object:
+            return func.coalesce(func.sum(column), 0)
+
+        def value(column) -> object:
+            return func.coalesce(func.sum(column * row.close), 0.0)
+
+        statement = (
+            select(
+                row.trading_date,
+                value(row.foreign_net),
+                value(row.trust_net),
+                value(row.dealer_net),
+                shares(row.foreign_net),
+                shares(row.trust_net),
+                shares(row.dealer_net),
+                func.coalesce(func.sum(row.turnover_value), 0.0),
+                shares(row.margin_balance),
+                shares(row.short_balance),
+                func.coalesce(func.sum(case((row.change > 0, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((row.change < 0, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((row.change == 0, 1), else_=0)), 0),
+                func.count(row.total_net),
+                func.count(row.margin_balance),
+            )
+            .where(row.trading_date.in_(dates), *self._market_filters(market, as_of))
+            .group_by(row.trading_date)
+            .order_by(row.trading_date)
+        )
+        return [
+            MarketFlowDay(
+                trading_date=r[0],
+                foreign_net_value=float(r[1]),
+                trust_net_value=float(r[2]),
+                dealer_net_value=float(r[3]),
+                foreign_net_shares=int(r[4]),
+                trust_net_shares=int(r[5]),
+                dealer_net_shares=int(r[6]),
+                turnover_value=float(r[7]),
+                margin_balance=int(r[8]),
+                short_balance=int(r[9]),
+                advancing=int(r[10]),
+                declining=int(r[11]),
+                unchanged=int(r[12]),
+                institutional_reported=int(r[13]) > 0,
+                credit_reported=int(r[14]) > 0,
+            )
+            for r in (await self.session.execute(statement)).all()
+        ]
+
+    async def market_data_status(self) -> list[MarketDataStatus]:
+        row = MarketStockDayRow
+        summary = (
+            await self.session.execute(
+                select(
+                    row.market,
+                    func.min(row.trading_date),
+                    func.max(row.trading_date),
+                    func.count(func.distinct(row.trading_date)),
+                ).group_by(row.market)
+            )
+        ).all()
+        result: list[MarketDataStatus] = []
+        for market, first, last, days in summary:
+            latest = (
+                await self.session.execute(
+                    select(
+                        func.count(),
+                        func.count(row.total_net),
+                        func.count(row.margin_balance),
+                    ).where(row.market == market, row.trading_date == last)
+                )
+            ).one()
+            total = max(int(latest[0]), 1)
+            result.append(
+                MarketDataStatus(
+                    market=market,
+                    first_date=first,
+                    last_date=last,
+                    trading_days=int(days),
+                    stocks_on_last_day=int(latest[0]),
+                    institutional_coverage=latest[1] / total,
+                    credit_coverage=latest[2] / total,
+                )
+            )
+        return sorted(result, key=lambda item: item.market)
+
+    async def has_active_sync_job(self, kind: SyncJobKind) -> bool:
+        statement = (
+            select(func.count())
+            .select_from(SyncJobRow)
+            .where(
+                SyncJobRow.kind == kind.value,
+                SyncJobRow.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+            )
+        )
+        return bool((await self.session.execute(statement)).scalar_one())
 
     @staticmethod
     def _sync_job_from_row(row: SyncJobRow) -> SyncJob:

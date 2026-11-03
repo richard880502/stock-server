@@ -18,10 +18,11 @@ from quant_signal.application.data_sync import (
     TwseDataSyncService,
     _is_tpex_symbol,
 )
+from quant_signal.application.market_sync import MarketSnapshotSyncService
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import FetchCoverage, SyncJob, SyncJobKind
-from quant_signal.infrastructure.providers.tpex import TpexProvider
-from quant_signal.infrastructure.providers.twse import TwseProvider
+from quant_signal.infrastructure.providers.tpex import TPEX_SOURCE, TpexProvider
+from quant_signal.infrastructure.providers.twse import TWSE_SOURCE, TwseProvider
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,15 @@ async def run_sync_job(
 ) -> DataSyncReport:
     end = today or datetime.now(UTC).astimezone(TAIPEI).date()
     start = end - timedelta(days=job.lookback_days)
+    if job.kind is SyncJobKind.MARKET:
+        is_otc = job.symbol == "TWO"
+        snapshot = MarketSnapshotSyncService(
+            repository,  # type: ignore[arg-type]
+            tpex if is_otc else twse,
+            market="TWO" if is_otc else "TW",
+            source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
+        )
+        return await snapshot.sync(start=start, end=end)
     service: TwseDataSyncService = (
         TpexDataSyncService(repository, tpex)  # type: ignore[arg-type]
         if _is_tpex_symbol(job.symbol)
@@ -86,9 +96,35 @@ async def process_next_job(
         job.symbol,
         report.periods_fetched,
         report.periods_skipped,
-        report.bars_inserted + report.institutional_flows_inserted,
+        report.bars_inserted
+        + report.institutional_flows_inserted
+        + report.market_observations_inserted,
     )
     return True
+
+
+MARKET_CODES = ("TW", "TWO")
+
+
+async def enqueue_market_snapshots(
+    repository: QuantRepository, *, lookback_days: int
+) -> int:
+    created = 0
+    for market in MARKET_CODES:
+        _, was_created = await repository.enqueue_sync_job(
+            SyncJobKind.MARKET, market, lookback_days=lookback_days
+        )
+        created += was_created
+    return created
+
+
+async def ensure_market_snapshots(
+    repository: QuantRepository, *, lookback_days: int
+) -> int:
+    """Queue the first backfill when no whole-market data exists yet."""
+    if await repository.list_market_trading_dates(None, as_of=None, limit=1):
+        return 0
+    return await enqueue_market_snapshots(repository, lookback_days=lookback_days)
 
 
 async def enqueue_daily_refresh(
@@ -97,25 +133,31 @@ async def enqueue_daily_refresh(
     now: datetime,
     daily_time: str,
     lookback_days: int,
+    market_lookback_days: int = 260,
 ) -> int:
-    """Queue one incremental refresh per tracked symbol, once per trading day.
+    """Queue incremental refreshes for tracked symbols and both markets.
 
-    Runs after the configured Taipei time on weekdays. Returns the number of
-    jobs created; ``0`` when it is too early, a weekend, or already done today.
+    ``daily_time`` is one or more Taipei times (``"15:30,21:45"``). Each time
+    triggers at most one refresh per weekday once it has passed. Returns the
+    number of jobs created; ``0`` when nothing was due.
     """
     local = now.astimezone(TAIPEI)
     if local.weekday() >= 5:
         return 0
-    hour, minute = (int(part) for part in daily_time.split(":"))
-    if (local.hour, local.minute) < (hour, minute):
+    due: list[str] = []
+    for stamp in (part.strip() for part in daily_time.split(",") if part.strip()):
+        hour, minute = (int(part) for part in stamp.split(":"))
+        if (local.hour, local.minute) >= (hour, minute):
+            due.append(f"{local.date().isoformat()}@{stamp}")
+    if not due:
         return 0
-    period = local.date().isoformat()
     done = await repository.list_fetch_coverage(
-        SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", [period]
+        SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", due
     )
-    if period in done:
+    todo = [period for period in due if period not in done]
+    if not todo:
         return 0
-    created = 0
+    created = await enqueue_market_snapshots(repository, lookback_days=market_lookback_days)
     for symbol in await repository.list_tracked_symbols():
         _, was_created = await repository.enqueue_sync_job(
             SyncJobKind.SYMBOL, symbol, lookback_days=lookback_days
@@ -137,9 +179,10 @@ async def enqueue_daily_refresh(
                 row_count=created,
                 fetched_at=now,
             )
+            for period in todo
         ]
     )
-    logger.info("daily refresh queued %s sync jobs for %s", created, period)
+    logger.info("daily refresh queued %s sync jobs (%s)", created, ", ".join(todo))
     return created
 
 
@@ -150,6 +193,8 @@ def retry_delay_seconds(base: float, attempts: int, *, cap: float = 120.0) -> fl
 __all__ = [
     "INSTITUTION_LOOKBACK_DAYS",
     "enqueue_daily_refresh",
+    "enqueue_market_snapshots",
+    "ensure_market_snapshots",
     "process_next_job",
     "retry_delay_seconds",
     "run_sync_job",

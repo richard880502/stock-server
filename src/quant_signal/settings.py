@@ -25,8 +25,14 @@ class Settings(BaseSettings):
     sync_lookback_days: int = Field(default=500, ge=60)
     sync_max_attempts: int = Field(default=3, ge=1)
     sync_stale_after_seconds: float = Field(default=1800, gt=0)
-    # Taipei local time after which the daily refresh is queued (24h "HH:MM").
-    sync_daily_time: str = Field(default="15:30", pattern=r"^\d{2}:\d{2}$")
+    # Taipei local times (24h, comma separated) after which the daily refresh is
+    # queued. The second run picks up reports the exchanges publish late in the
+    # evening (credit balances).
+    sync_daily_time: str = Field(
+        default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
+    )
+    # How far back the whole-market snapshot is filled on first run.
+    sync_market_lookback_days: int = Field(default=260, ge=30)
     kronos_url: str | None = None
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:13000,http://127.0.0.1:13000"

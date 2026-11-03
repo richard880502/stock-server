@@ -6,7 +6,7 @@ import re
 import secrets
 from collections.abc import AsyncIterator
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import httpx
@@ -28,6 +28,7 @@ from quant_signal.application.llm_analysis import (
     create_judge_llm_client,
     create_llm_client,
 )
+from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
     BacktestJobService,
@@ -46,8 +47,12 @@ from quant_signal.domain.models import (
     DebateAnalysisReport,
     Instrument,
     LLMAnalysisReport,
+    MarketDataStatus,
     MarketEnvironmentSnapshot,
+    MarketFlowSeries,
+    MarketRanking,
     NewsSentimentSnapshot,
+    RankingMetric,
     SignalSnapshot,
 )
 from quant_signal.forecast import ForecastReport, ForecastRequest, forecast
@@ -292,6 +297,39 @@ def create_app() -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/market/rankings", response_model=MarketRanking)
+    async def market_rankings(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        metric: RankingMetric = "foreign_net",
+        market: Literal["ALL", "TW", "TWO"] = "ALL",
+        window: Annotated[int, Query(ge=1, le=60)] = 1,
+        order: Literal["desc", "asc"] = "desc",
+        limit: Annotated[int, Query(ge=1, le=100)] = 20,
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> MarketRanking:
+        return await MarketRankingService(
+            repository, backfill_days=get_settings().sync_market_lookback_days
+        ).ranking(
+            metric, market=market, window=window, order=order, limit=limit, as_of=as_of
+        )
+
+    @router.get("/market/flows", response_model=MarketFlowSeries)
+    async def market_flows(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        market: Literal["ALL", "TW", "TWO"] = "ALL",
+        days: Annotated[int, Query(ge=5, le=250)] = 60,
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> MarketFlowSeries:
+        return await MarketRankingService(
+            repository, backfill_days=get_settings().sync_market_lookback_days
+        ).flows(market=market, days=days, as_of=as_of)
+
+    @router.get("/market/data-status", response_model=list[MarketDataStatus])
+    async def market_data_status(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> list[MarketDataStatus]:
+        return await MarketRankingService(repository).status()
 
     @router.get("/backtests/{job_id}", response_model=BacktestJob)
     async def get_backtest(

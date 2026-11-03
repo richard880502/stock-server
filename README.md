@@ -425,9 +425,11 @@ daily 15:30 Taipei (weekdays) ───────────┤
   `(kind, symbol)` — ten simultaneous requests for one symbol cause one crawl.
   Failed jobs retry up to `SYNC_MAX_ATTEMPTS` with backoff; jobs stuck in
   `running` are requeued after `SYNC_STALE_AFTER_SECONDS`.
-- **Daily refresh.** After `SYNC_DAILY_TIME` (Taipei, weekdays) the worker
-  queues one price job per tracked symbol and one institutional-flow job per
-  stock, once per day.
+- **Daily refresh.** After each time in `SYNC_DAILY_TIME` (Taipei, weekdays,
+  default `15:30,21:45`) the worker queues one price job per tracked symbol, one
+  institutional-flow job per stock, and one whole-market snapshot job per
+  exchange. The evening run exists because margin reports come out after the
+  institutional ones.
 - **Shared reports.** The market-wide TWSE T86/MI_QFIIS and TPEx daily-trade
   files are cached once settled, so N symbols cost one download per day.
 
@@ -453,7 +455,44 @@ curl -X POST "http://127.0.0.1:18100/api/v1/sync/symbol" \
 
 Not yet incremental: `quant-signal-sync-data market` (market breadth) still
 walks every trading day in its warm-up window, because the rolling breadth needs
-each day's quotes.
+each day's quotes. See *Market rankings and capital flow* for the stored
+whole-market table it can be rebuilt from.
+
+## Market rankings and capital flow
+
+The sync worker also stores every common stock's official end-of-day quote,
+three-institution net buy/sell, and margin/short balance in
+`market_stock_daily` (about 1,100 TWSE + 850 TPEx rows per trading day, from
+`MI_INDEX`/`T86`/`MI_MARGN` and the TPEx equivalents). The first run fills
+`SYNC_MARKET_LOOKBACK_DAYS` of history automatically; afterwards only new days
+are fetched. A day fetched before its reports were published is refetched the
+next day, and holidays are remembered.
+
+```bash
+# Biggest foreign net buyers over 5 sessions, listed stocks (values in lots / 張)
+curl "http://127.0.0.1:18100/api/v1/market/rankings?metric=foreign_net&window=5&market=TW&limit=20"
+# Biggest net sellers: order=asc. Other metrics: trust_net, dealer_net, total_net,
+# volume, turnover, change_pct, margin_change, short_change
+curl "http://127.0.0.1:18100/api/v1/market/rankings?metric=change_pct&order=asc&window=20"
+# Daily capital-flow series (estimated NT$) for charts
+curl "http://127.0.0.1:18100/api/v1/market/flows?market=ALL&days=60"
+curl "http://127.0.0.1:18100/api/v1/market/data-status"
+```
+
+- Rankings are point-in-time: `as_of` only uses reports published by then.
+- Institutional and credit reports are published after the quotes. For those
+  metrics the ranking uses the newest session whose report exists and returns
+  `awaiting_report_date` for any newer session still waiting.
+- `*_net_value` in the flow series is **net shares x that day's close**, an
+  estimate and not the official NT$ amount. Sessions without a published
+  report are flagged (`institutional_reported`, `credit_reported`), never zeroed.
+- Names that did not trade on the latest session are not ranked.
+- Only common stocks (4-digit codes not starting with 0) are covered, so ETFs
+  are excluded. Broker-branch ("主力") data is a paid product and is not used.
+- MCP exposes the same data as `get_market_ranking` and `get_market_flows`.
+- The existing `market_observations_daily` environment (breadth score) is still
+  produced by `quant-signal-sync-data market`; it can now be derived from this
+  table, which is the next step to make it incremental.
 
 ## Local development
 
@@ -681,6 +720,7 @@ Current strategy mechanics:
 - `backtest_jobs`
 - `fetch_coverage`
 - `sync_jobs`
+- `market_stock_daily`
 
 The first migration is under `migrations/versions/0001_initial.py`.
 

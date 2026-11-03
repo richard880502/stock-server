@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
+    ensure_market_snapshots,
     process_next_job,
     retry_delay_seconds,
 )
@@ -27,11 +28,15 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
         )
         if recovered:
             logger.warning("requeued %s sync jobs stuck in running", recovered)
+        await ensure_market_snapshots(
+            repository, lookback_days=settings.sync_market_lookback_days
+        )
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),
             daily_time=settings.sync_daily_time,
             lookback_days=settings.sync_lookback_days,
+            market_lookback_days=settings.sync_market_lookback_days,
         )
         return await process_next_job(
             repository,
