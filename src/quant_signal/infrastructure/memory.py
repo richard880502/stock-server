@@ -567,9 +567,23 @@ class MemoryQuantRepository:
         require: str | None = None,
     ) -> list[date]:
         rows = self._market_rows(market, as_of)
+        by_day: dict[date, list[MarketStockDay]] = {}
+        for item in rows:
+            by_day.setdefault(item.trading_date, []).append(item)
         if require is not None:
-            rows = [item for item in rows if getattr(item, require) is not None]
-        return sorted({item.trading_date for item in rows}, reverse=True)[:limit]
+            by_day = {
+                day: group
+                for day, group in by_day.items()
+                if self._all_markets_reported(group, require)
+            }
+        return sorted(by_day, reverse=True)[:limit]
+
+    @staticmethod
+    def _all_markets_reported(group: list[MarketStockDay], attr: str) -> bool:
+        """A session counts once every market present that day has published it."""
+        markets = {item.market for item in group}
+        reported = {item.market for item in group if getattr(item, attr) is not None}
+        return markets == reported
 
     async def list_market_stock_days(
         self, dates: list[date], market: str | None, *, as_of: date | None = None
@@ -603,8 +617,8 @@ class MemoryQuantRepository:
                     advancing=sum(r.change > 0 for r in group),
                     declining=sum(r.change < 0 for r in group),
                     unchanged=sum(r.change == 0 for r in group),
-                    institutional_reported=any(r.total_net is not None for r in group),
-                    credit_reported=any(r.margin_balance is not None for r in group),
+                    institutional_reported=self._all_markets_reported(group, "total_net"),
+                    credit_reported=self._all_markets_reported(group, "margin_balance"),
                 )
             )
         return result
@@ -631,6 +645,16 @@ class MemoryQuantRepository:
                 )
             )
         return result
+
+    async def list_market_closes(
+        self, dates: list[date], market: str
+    ) -> list[tuple[str, date, float, float, int]]:
+        wanted = set(dates)
+        return [
+            (r.symbol, r.trading_date, r.close, r.change, r.volume)
+            for r in self.market_stock_days.values()
+            if r.market == market and r.trading_date in wanted
+        ]
 
     async def has_active_sync_job(self, kind: SyncJobKind) -> bool:
         return any(

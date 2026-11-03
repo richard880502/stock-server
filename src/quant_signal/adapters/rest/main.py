@@ -154,7 +154,13 @@ def create_app() -> FastAPI:
         normalized = request.model_copy(update={"symbol": normalize_symbol(request.symbol)})
         bars = await repository.list_bars(normalized.symbol, end=normalized.as_of)
         try:
-            return await forecast(bars, normalized, kronos_url=get_settings().kronos_url)
+            settings = get_settings()
+            return await forecast(
+                bars,
+                normalized,
+                kronos_url=settings.kronos_url,
+                kronos_api_key=settings.kronos_api_key.get_secret_value(),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except httpx.HTTPError as exc:

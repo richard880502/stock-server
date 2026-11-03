@@ -32,8 +32,9 @@ class Settings(BaseSettings):
         default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
     )
     # How far back the whole-market snapshot is filled on first run.
-    sync_market_lookback_days: int = Field(default=260, ge=30)
+    sync_market_lookback_days: int = Field(default=520, ge=30)
     kronos_url: str | None = None
+    kronos_api_key: SecretStr = SecretStr("")
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:13000,http://127.0.0.1:13000"
     api_auth_enabled: bool = False

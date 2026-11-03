@@ -18,6 +18,7 @@ from quant_signal.application.data_sync import (
     TwseDataSyncService,
     _is_tpex_symbol,
 )
+from quant_signal.application.market_observations import MarketObservationSyncService
 from quant_signal.application.market_sync import MarketSnapshotSyncService
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import FetchCoverage, SyncJob, SyncJobKind
@@ -51,7 +52,23 @@ async def run_sync_job(
             market="TWO" if is_otc else "TW",
             source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
         )
-        return await snapshot.sync(start=start, end=end)
+        report = await snapshot.sync(start=start, end=end)
+        # The environment score is derived from what was just stored.
+        observations = await MarketObservationSyncService(
+            repository,  # type: ignore[arg-type]
+            tpex if is_otc else twse,  # type: ignore[arg-type]
+            market="TWO" if is_otc else "TW",
+            source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
+        ).sync(end=end)
+        return report.model_copy(
+            update={
+                "market_observations_received": observations.market_observations_received,
+                "market_observations_inserted": report.market_observations_inserted
+                + observations.market_observations_inserted,
+                "incomplete_capital_dates": observations.incomplete_capital_dates,
+                "notes": [*report.notes, *observations.notes],
+            }
+        )
     service: TwseDataSyncService = (
         TpexDataSyncService(repository, tpex)  # type: ignore[arg-type]
         if _is_tpex_symbol(job.symbol)
@@ -133,7 +150,7 @@ async def enqueue_daily_refresh(
     now: datetime,
     daily_time: str,
     lookback_days: int,
-    market_lookback_days: int = 260,
+    market_lookback_days: int = 520,
 ) -> int:
     """Queue incremental refreshes for tracked symbols and both markets.
 

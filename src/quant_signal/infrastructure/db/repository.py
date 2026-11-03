@@ -1030,7 +1030,11 @@ class PostgresQuantRepository:
         )
         if require is not None:
             # Keep only sessions on which this report column is published.
-            statement = statement.having(func.count(getattr(MarketStockDayRow, require)) > 0)
+            column = getattr(MarketStockDayRow, require)
+            statement = statement.having(
+                func.count(func.distinct(case((column.is_not(None), MarketStockDayRow.market))))
+                == func.count(func.distinct(MarketStockDayRow.market))
+            )
         return list((await self.session.execute(statement)).scalars().all())
 
     async def list_market_stock_days(
@@ -1053,6 +1057,13 @@ class PostgresQuantRepository:
             )
             for row in rows
         ]
+
+    @staticmethod
+    def _reported(column) -> object:
+        """True when every market present that day has published this column."""
+        return func.count(
+            func.distinct(case((column.is_not(None), MarketStockDayRow.market)))
+        ) == func.count(func.distinct(MarketStockDayRow.market))
 
     async def market_flow_totals(
         self,
@@ -1086,8 +1097,8 @@ class PostgresQuantRepository:
                 func.coalesce(func.sum(case((row.change > 0, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((row.change < 0, 1), else_=0)), 0),
                 func.coalesce(func.sum(case((row.change == 0, 1), else_=0)), 0),
-                func.count(row.total_net),
-                func.count(row.margin_balance),
+                self._reported(row.total_net),
+                self._reported(row.margin_balance),
             )
             .where(row.trading_date.in_(dates), *self._market_filters(market, as_of))
             .group_by(row.trading_date)
@@ -1108,8 +1119,8 @@ class PostgresQuantRepository:
                 advancing=int(r[10]),
                 declining=int(r[11]),
                 unchanged=int(r[12]),
-                institutional_reported=int(r[13]) > 0,
-                credit_reported=int(r[14]) > 0,
+                institutional_reported=bool(r[13]),
+                credit_reported=bool(r[14]),
             )
             for r in (await self.session.execute(statement)).all()
         ]
@@ -1150,6 +1161,21 @@ class PostgresQuantRepository:
                 )
             )
         return sorted(result, key=lambda item: item.market)
+
+    async def list_market_closes(
+        self, dates: list[date], market: str
+    ) -> list[tuple[str, date, float, float, int]]:
+        """(symbol, date, close, change, volume) without building full models."""
+        if not dates:
+            return []
+        row = MarketStockDayRow
+        statement = select(
+            row.symbol, row.trading_date, row.close, row.change, row.volume
+        ).where(row.trading_date.in_(dates), row.market == market)
+        return [
+            (r[0], r[1], float(r[2]), float(r[3]), int(r[4]))
+            for r in (await self.session.execute(statement)).all()
+        ]
 
     async def has_active_sync_job(self, kind: SyncJobKind) -> bool:
         statement = (

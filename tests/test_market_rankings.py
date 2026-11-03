@@ -67,7 +67,7 @@ async def repository() -> MemoryQuantRepository:
             # OTC name
             _row("6488.TWO", D1, close=700, change=5, foreign=500_000, market="TWO"),
             _row("6488.TWO", D2, close=710, change=10, foreign=500_000, market="TWO"),
-            _row("6488.TWO", D3, close=720, change=10, foreign=None, market="TWO"),
+            _row("6488.TWO", D3, close=720, change=10, foreign=500_000, market="TWO"),
             # Stopped trading before the latest day: must never be ranked
             _row("1103.TW", D1, close=10, foreign=9_000_000),
             _row("1103.TW", D2, close=10, foreign=9_000_000),
@@ -83,13 +83,12 @@ async def test_one_day_foreign_net_ranks_buyers_then_sellers(repository) -> None
     sellers = await service.ranking("foreign_net", window=1, order="asc")
 
     assert buyers.data_through == D3 and buyers.trading_days == 1
-    # D3: 1101 -1,000 lots, 1102 -1,000 lots, 6488 unknown (excluded)
-    assert [e.symbol for e in buyers.entries] == ["1101.TW", "1102.TW"] or [
-        e.symbol for e in buyers.entries
-    ] == ["1102.TW", "1101.TW"]
-    assert all(e.value == -1000 for e in buyers.entries)
+    # D3 (lots): 6488 +500, 1101 -1,000, 1102 -1,000
+    assert [e.symbol for e in buyers.entries][0] == "6488.TWO"
+    assert buyers.entries[0].value == 500
+    assert {e.symbol for e in sellers.entries[:2]} == {"1101.TW", "1102.TW"}
     assert buyers.unit == "張"
-    assert [e.rank for e in sellers.entries] == [1, 2]
+    assert [e.rank for e in sellers.entries] == [1, 2, 3]
 
 
 async def test_window_sums_and_converts_shares_to_lots(repository) -> None:
@@ -100,7 +99,7 @@ async def test_window_sums_and_converts_shares_to_lots(repository) -> None:
     by_symbol = {e.symbol: e.value for e in ranking.entries}
     assert by_symbol["1101.TW"] == 4_000  # (2 + 3 - 1) million shares / 1000
     assert by_symbol["1102.TW"] == -10_000
-    assert by_symbol["6488.TWO"] == 1_000  # the unknown day adds nothing
+    assert by_symbol["6488.TWO"] == 1_500
     assert ranking.entries[0].symbol == "1101.TW"
     assert ranking.trading_days == 3 and ranking.window_start == D1
 
@@ -188,7 +187,7 @@ async def test_status_reports_coverage(repository) -> None:
 
     assert status["TW"].trading_days == 3
     assert status["TW"].last_date == D3
-    assert status["TWO"].institutional_coverage == 0  # the unknown latest day
+    assert status["TWO"].institutional_coverage == 1
 
 
 async def test_rest_endpoints(repository) -> None:
@@ -240,4 +239,29 @@ async def test_flow_rankings_fall_back_to_the_latest_published_report() -> None:
     assert flows.data_through == D3 and flows.awaiting_report_date == d4
     assert flows.entries[0].value == 2000
     assert volume.data_through == d4 and volume.awaiting_report_date is None
+    assert [d.institutional_reported for d in series.days] == [True, False]
+
+
+async def test_all_markets_must_report_before_a_session_counts() -> None:
+    repo = MemoryQuantRepository()
+    d4 = date(2026, 10, 31)
+    await repo.upsert_market_stock_days(
+        [
+            _row("1101.TW", D3, foreign=1_000_000),
+            _row("6488.TWO", D3, foreign=1_000_000, market="TWO"),
+            # d4: OTC has published, listed has not.
+            _row("1101.TW", d4, foreign=None),
+            _row("6488.TWO", d4, foreign=7_000_000, market="TWO"),
+        ]
+    )
+    service = MarketRankingService(repo)
+
+    everything = await service.ranking("foreign_net", market="ALL")
+    otc_only = await service.ranking("foreign_net", market="TWO")
+    listed = await service.ranking("foreign_net", market="TW")
+    series = await service.flows(market="ALL", days=5)
+
+    assert everything.data_through == D3 and everything.awaiting_report_date == d4
+    assert otc_only.data_through == d4 and otc_only.awaiting_report_date is None
+    assert listed.data_through == D3 and listed.awaiting_report_date == d4
     assert [d.institutional_reported for d in series.days] == [True, False]

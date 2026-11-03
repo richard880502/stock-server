@@ -464,7 +464,8 @@ The sync worker also stores every common stock's official end-of-day quote,
 three-institution net buy/sell, and margin/short balance in
 `market_stock_daily` (about 1,100 TWSE + 850 TPEx rows per trading day, from
 `MI_INDEX`/`T86`/`MI_MARGN` and the TPEx equivalents). The first run fills
-`SYNC_MARKET_LOOKBACK_DAYS` of history automatically; afterwards only new days
+`SYNC_MARKET_LOOKBACK_DAYS` (default 520 calendar days, about 2,600 polite
+requests, roughly 20 to 30 minutes) of history automatically; afterwards only new days
 are fetched. A day fetched before its reports were published is refetched the
 next day, and holidays are remembered.
 
@@ -490,9 +491,17 @@ curl "http://127.0.0.1:18100/api/v1/market/data-status"
 - Only common stocks (4-digit codes not starting with 0) are covered, so ETFs
   are excluded. Broker-branch ("主力") data is a paid product and is not used.
 - MCP exposes the same data as `get_market_ranking` and `get_market_flows`.
-- The existing `market_observations_daily` environment (breadth score) is still
-  produced by `quant-signal-sync-data market`; it can now be derived from this
-  table, which is the next step to make it incremental.
+- **The market-environment score is derived from this table.** After each
+  whole-market snapshot the same job builds any missing daily observation:
+  advancers, MA20/MA60 participation, 52-week highs/lows and up/down volume come
+  from the stored closes; only the official market-level figures (index close,
+  total turnover, institutional NT$ flows, margin and short balances) are
+  requested, once per new session. A session is built only when 252 earlier
+  sessions of closes are stored (hence the 520-day first backfill), existing
+  official observations are never rewritten, and a day whose capital reports
+  were not out yet is retried the next day. A freshly deployed worker therefore
+  backfills and keeps `/market-environments/TW` current on its own;
+  `quant-signal-sync-data market` remains only as a manual full rebuild.
 
 ## Local development
 
@@ -785,6 +794,37 @@ before calculating their range. Startup downloads weights from Hugging Face.
 substitute another model. On macOS the same server can run directly with PyTorch
 MPS, `PYTHONPATH` pointing to the pinned Kronos checkout, and the API's
 `KRONOS_URL=http://127.0.0.1:18102`. `KRONOS_DEVICE=cpu` forces CPU inference.
+
+### Running Kronos on another machine
+
+The inference service in `kronos-service/` is a standalone image, so it does not
+have to share a host with the API. CI (`.github/workflows/kronos-image.yml`)
+publishes CPU images with the weights baked in, for `linux/amd64` and
+`linux/arm64`, to GitHub Container Registry:
+
+```text
+ghcr.io/<owner>/kronos-service:small   # NeoQuasar/Kronos-small (also :latest)
+ghcr.io/<owner>/kronos-service:base    # NeoQuasar/Kronos-base, the largest open model
+```
+
+```bash
+docker run -d --name kronos -p 8002:8002 \
+  -e KRONOS_API_KEY="$(openssl rand -hex 24)" \
+  ghcr.io/<owner>/kronos-service:small
+```
+
+Then point the API at it with `KRONOS_URL=https://your-host:8002` and the same
+`KRONOS_API_KEY`; the API sends it as `Authorization: Bearer`, and the service
+rejects `/predict` without it (`/health` stays open for probes). With no key set
+the service is open, which is only appropriate on a private network. Put TLS in
+front of it (a reverse proxy or tunnel) before exposing it publicly.
+
+Optional service settings: `KRONOS_MODEL`, `KRONOS_TOKENIZER`, `KRONOS_DEVICE`
+(`cpu`, `cuda:0`, `mps`), `KRONOS_THREADS`, `KRONOS_LOAD_MODEL=0` (start without
+weights for smoke tests). The published images are CPU-only; a GPU needs a CUDA
+build of PyTorch. Kronos-base is about 4x the size of small, so expect it to be
+several times slower on CPU. `/predict` returns `{"paths", "model"}` so every
+forecast records which model produced it.
 
 ## Coolify migration
 

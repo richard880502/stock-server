@@ -55,7 +55,7 @@ def _day_change_pct(row: MarketStockDay) -> float | None:
 
 
 class MarketRankingService:
-    def __init__(self, repository: QuantRepository, *, backfill_days: int = 260) -> None:
+    def __init__(self, repository: QuantRepository, *, backfill_days: int = 520) -> None:
         self.repository = repository
         self.backfill_days = backfill_days
 
