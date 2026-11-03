@@ -99,6 +99,7 @@ export function MarketView() {
           data={top.data}
           loading={top.loading}
           stale={top.stale}
+          failed={top.error !== null}
           onPick={pick}
         />
         {info.bottom && (
@@ -110,6 +111,7 @@ export function MarketView() {
             data={bottom.data}
             loading={bottom.loading}
             stale={bottom.stale}
+            failed={bottom.error !== null}
             onPick={pick}
           />
         )}

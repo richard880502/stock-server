@@ -31,7 +31,7 @@ export function AwaitingReportNotice({
       <InfoIcon size={16} />
       <span>
         {shortDate(awaiting)} {report}資料尚未公布
-        {through ? `，顯示至 ${shortDate(through)}` : ""}。交易所通常在收盤後數小時才陸續公布，公布後會自動納入。
+        {through ? `，顯示至 ${shortDate(through)}` : ""}。交易所通常在收盤後數小時才陸續公布，公布後重新整理即可納入。
       </span>
     </p>
   );

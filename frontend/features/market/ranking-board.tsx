@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
 import { EmptyState } from "@/components/empty-state";
-import { ClockIcon, InfoIcon } from "@/components/icons";
+import { AlertIcon, ClockIcon, InfoIcon } from "@/components/icons";
 import type { MarketMetric, MarketRankings, MarketScope, RankingEntry } from "@/lib/api/types";
 import {
   directionOf,
@@ -117,6 +117,7 @@ export function RankingBoard({
   data,
   loading,
   stale,
+  failed,
   onPick,
 }: {
   title: string;
@@ -127,6 +128,8 @@ export function RankingBoard({
   loading: boolean;
   /** `data` answers an earlier query; dim it until the new one arrives. */
   stale: boolean;
+  /** The request failed and there is nothing to show; the error banner explains why. */
+  failed: boolean;
   onPick: (symbol: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -161,7 +164,13 @@ export function RankingBoard({
     >
       {!usable && (loading || data !== null) ? (
         <BoardSkeleton />
-      ) : !usable ? null : entries.length === 0 ? (
+      ) : !usable ? (
+        failed ? (
+          <EmptyState icon={<AlertIcon size={22} />} title="暫時無法載入這份排行">
+            詳細原因請見上方訊息，按「重試」即可重新載入。
+          </EmptyState>
+        ) : null
+      ) : entries.length === 0 ? (
         usable.backfill_pending ? (
           <EmptyState icon={<ClockIcon size={22} />} title="資料回補中" live>
             這個範圍的歷史資料還在下載，完成前列表可能是空的。頁面會每 15 秒自動更新。
