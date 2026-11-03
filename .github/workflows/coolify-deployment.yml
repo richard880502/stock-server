@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  deployments: write
 
 concurrency:
   group: coolify-report-${{ github.ref }}
@@ -21,8 +20,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Create Coolify reporter App token
+        id: app
+        uses: actions/create-github-app-token@v3.3.0
+        with:
+          app-id: ${{ vars.DEPLOY_APP_ID }}
+          private-key: ${{ secrets.DEPLOY_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-deployments: write
       - name: Report actual Coolify deployments
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           COOLIFY_API_TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: python scripts/report_coolify_deployments.py
