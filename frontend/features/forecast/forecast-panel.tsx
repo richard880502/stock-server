@@ -8,6 +8,8 @@ import { AlertIcon, ChevronDownIcon, FlaskIcon, InfoIcon } from "@/components/ic
 import { ResearchTable } from "@/components/research-table";
 import { Stat, StatGrid } from "@/components/stat";
 import { ScenarioChart } from "@/components/charts/scenario-chart";
+import { RateLimitNotice } from "@/components/rate-limit-notice";
+import { rateLimitInfo } from "@/lib/api/rate-limit";
 import { createForecast, getForecastStatus, syncSymbol } from "@/lib/api/endpoints";
 import type { ForecastReport } from "@/lib/api/types";
 import { useScrollIntoViewOnStart } from "@/lib/use-scroll-into-view";
@@ -169,7 +171,10 @@ export function ForecastPanel({ symbol, asOf }: { symbol: string; asOf: string }
           }
           className="result-card"
         >
-          {error && (
+          {error && rateLimitInfo(error) && (
+            <RateLimitNotice message={error} retryAfterSeconds={rateLimitInfo(error)?.retryAfterSeconds ?? null} />
+          )}
+          {error && !rateLimitInfo(error) && (
             <div className="inline-error" role="alert">
               <p>
                 <strong>無法完成這項預測。</strong> {error}

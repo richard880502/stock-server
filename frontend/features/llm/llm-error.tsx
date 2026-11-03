@@ -1,8 +1,14 @@
 import { AlertIcon } from "@/components/icons";
+import { RateLimitNotice } from "@/components/rate-limit-notice";
+import { rateLimitInfo } from "@/lib/api/rate-limit";
 import type { LlmError } from "./use-llm-analysis";
 
 /** Upstream model failures are common (cold start, overload); say so plainly. */
 export function LlmErrorNotice({ error, onRetry }: { error: LlmError; onRetry?: () => void }) {
+  const limit = error.status === 429 ? rateLimitInfo(error.message) : null;
+  if (limit) {
+    return <RateLimitNotice message={error.message} retryAfterSeconds={limit.retryAfterSeconds} />;
+  }
   const upstream = error.status !== null && error.status >= 500;
   return (
     <div className="notice notice-error" role="alert">

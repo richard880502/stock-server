@@ -1,4 +1,6 @@
+import { rateLimitInfo } from "@/lib/api/rate-limit";
 import { AlertIcon, XIcon } from "./icons";
+import { RateLimitNotice } from "./rate-limit-notice";
 
 /** Translate the common raw failures (network, short history) into plain Traditional Chinese. */
 function friendlyMessage(message: string): { text: string; detail?: string } {
@@ -27,6 +29,16 @@ export function ErrorBanner({
   onDismiss: () => void;
   onRetry?: () => void;
 }) {
+  const limit = rateLimitInfo(message);
+  if (limit) {
+    return (
+      <RateLimitNotice
+        message={message}
+        retryAfterSeconds={limit.retryAfterSeconds}
+        onDismiss={onDismiss}
+      />
+    );
+  }
   const { text, detail } = friendlyMessage(message);
   return (
     <div className="notice notice-error" role="alert">

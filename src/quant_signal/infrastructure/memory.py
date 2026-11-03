@@ -27,6 +27,7 @@ from quant_signal.domain.models import (
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
+    User,
 )
 
 
@@ -49,6 +50,9 @@ class MemoryQuantRepository:
         self.fetch_coverage: dict[tuple[str, str, str, str], FetchCoverage] = {}
         self.sync_jobs: dict[UUID, SyncJob] = {}
         self.market_stock_days: dict[tuple[str, date, str], MarketStockDay] = {}
+        self.users: dict[UUID, User] = {}
+        self.user_sessions: dict[str, tuple[UUID, datetime]] = {}
+        self.usage: dict[tuple[UUID, str, date], int] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -661,3 +665,55 @@ class MemoryQuantRepository:
             job.kind == kind and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
             for job in self.sync_jobs.values()
         )
+
+    async def upsert_google_user(
+        self,
+        *,
+        google_sub: str,
+        email: str,
+        name: str | None,
+        picture: str | None,
+    ) -> User:
+        now = datetime.now(UTC)
+        existing = next((u for u in self.users.values() if u.google_sub == google_sub), None)
+        if existing:
+            user = existing.model_copy(
+                update={"email": email, "name": name, "picture": picture, "last_login_at": now}
+            )
+        else:
+            user = User(
+                id=uuid4(),
+                google_sub=google_sub,
+                email=email,
+                name=name,
+                picture=picture,
+                created_at=now,
+                last_login_at=now,
+            )
+        self.users[user.id] = user
+        return user
+
+    async def create_user_session(
+        self, *, user_id: UUID, token_hash: str, expires_at: datetime
+    ) -> None:
+        self.user_sessions[token_hash] = (user_id, expires_at)
+
+    async def get_user_by_session(self, token_hash: str, *, now: datetime) -> User | None:
+        entry = self.user_sessions.get(token_hash)
+        if entry is None or entry[1] <= now:
+            return None
+        user = self.users.get(entry[0])
+        return user if user and user.is_active else None
+
+    async def delete_user_session(self, token_hash: str) -> None:
+        self.user_sessions.pop(token_hash, None)
+
+    async def consume_usage(
+        self, user_id: UUID, action: str, day: date, *, limit: int
+    ) -> tuple[bool, int]:
+        key = (user_id, action, day)
+        count = self.usage.get(key, 0)
+        if limit <= 0 or count >= limit:
+            return False, count
+        self.usage[key] = count + 1
+        return True, count + 1

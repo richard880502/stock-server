@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { clearApiKey } from "@/lib/api/auth";
+import { signOut, useSession } from "@/lib/api/session";
 import { useDashboard } from "@/lib/dashboard-context";
 import { BrandMark } from "./brand";
 import { LogoutIcon } from "./icons";
 import { ThemeToggle } from "./theme-toggle";
+import { UserMenu } from "./user-menu";
 import { ViewTabs } from "./view-tabs";
 
 function StatusPill({ ok, children }: { ok: boolean | null; children: string }) {
@@ -19,6 +20,7 @@ function StatusPill({ ok, children }: { ok: boolean | null; children: string }) 
 
 export function Topbar() {
   const { dataStatus, llmStatus } = useDashboard();
+  const { user } = useSession();
   return (
     <div className="topbar">
       <Link className="brand" href="/" aria-label="Quant Signal 首頁">
@@ -39,10 +41,14 @@ export function Topbar() {
           </StatusPill>
         </div>
         <ThemeToggle />
-        <button type="button" className="icon-button" onClick={clearApiKey} aria-label="登出">
-          <LogoutIcon />
-          <span className="icon-button-label">登出</span>
-        </button>
+        {user ? (
+          <UserMenu user={user} />
+        ) : (
+          <button type="button" className="icon-button" onClick={() => void signOut()} aria-label="登出">
+            <LogoutIcon />
+            <span className="icon-button-label">登出</span>
+          </button>
+        )}
       </div>
     </div>
   );

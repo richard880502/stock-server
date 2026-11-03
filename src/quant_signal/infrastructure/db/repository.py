@@ -33,6 +33,7 @@ from quant_signal.domain.models import (
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
+    User,
 )
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -49,6 +50,9 @@ from quant_signal.infrastructure.db.models import (
     NewsItemRow,
     SignalSnapshotRow,
     SyncJobRow,
+    UsageCounterRow,
+    UserRow,
+    UserSessionRow,
 )
 
 
@@ -1187,6 +1191,109 @@ class PostgresQuantRepository:
             )
         )
         return bool((await self.session.execute(statement)).scalar_one())
+
+    async def upsert_google_user(
+        self,
+        *,
+        google_sub: str,
+        email: str,
+        name: str | None,
+        picture: str | None,
+    ) -> User:
+        now = datetime.now(UTC)
+        statement = (
+            insert(UserRow)
+            .values(
+                google_sub=google_sub,
+                email=email,
+                name=name,
+                picture=picture,
+                last_login_at=now,
+            )
+            .on_conflict_do_update(
+                constraint="uq_users_google_sub",
+                set_={
+                    "email": email,
+                    "name": name,
+                    "picture": picture,
+                    "last_login_at": now,
+                },
+            )
+            .returning(UserRow.id)
+        )
+        user_id = (await self.session.execute(statement)).scalar_one()
+        await self.session.commit()
+        row = await self.session.get(UserRow, user_id)
+        assert row is not None
+        await self.session.refresh(row)
+        return self._user_from_row(row)
+
+    async def create_user_session(
+        self, *, user_id: UUID, token_hash: str, expires_at: datetime
+    ) -> None:
+        self.session.add(
+            UserSessionRow(token_hash=token_hash, user_id=user_id, expires_at=expires_at)
+        )
+        # Opportunistic cleanup keeps the table from growing without a scheduler.
+        await self.session.execute(
+            text("DELETE FROM user_sessions WHERE expires_at < now() - interval '1 day'")
+        )
+        await self.session.commit()
+
+    async def get_user_by_session(self, token_hash: str, *, now: datetime) -> User | None:
+        statement = (
+            select(UserRow)
+            .join(UserSessionRow, UserSessionRow.user_id == UserRow.id)
+            .where(
+                UserSessionRow.token_hash == token_hash,
+                UserSessionRow.expires_at > now,
+                UserRow.is_active.is_(True),
+            )
+        )
+        row = (await self.session.execute(statement)).scalar_one_or_none()
+        return self._user_from_row(row) if row else None
+
+    async def delete_user_session(self, token_hash: str) -> None:
+        await self.session.execute(
+            text("DELETE FROM user_sessions WHERE token_hash = :h"), {"h": token_hash}
+        )
+        await self.session.commit()
+
+    async def consume_usage(
+        self, user_id: UUID, action: str, day: date, *, limit: int
+    ) -> tuple[bool, int]:
+        """Atomically count one use; refuses (without counting) once ``limit`` is reached."""
+        statement = (
+            insert(UsageCounterRow)
+            .values(user_id=user_id, action=action, day=day, count=1)
+            .on_conflict_do_update(
+                index_elements=["user_id", "action", "day"],
+                set_={"count": UsageCounterRow.count + 1},
+                where=UsageCounterRow.count < limit,
+            )
+            .returning(UsageCounterRow.count)
+        )
+        if limit <= 0:
+            return False, 0
+        count = (await self.session.execute(statement)).scalar_one_or_none()
+        await self.session.commit()
+        if count is not None:
+            return True, count
+        current = await self.session.get(UsageCounterRow, (user_id, action, day))
+        return False, current.count if current else 0
+
+    @staticmethod
+    def _user_from_row(row: UserRow) -> User:
+        return User(
+            id=row.id,
+            google_sub=row.google_sub,
+            email=row.email,
+            name=row.name,
+            picture=row.picture,
+            is_active=row.is_active,
+            created_at=row.created_at,
+            last_login_at=row.last_login_at,
+        )
 
     @staticmethod
     def _sync_job_from_row(row: SyncJobRow) -> SyncJob:

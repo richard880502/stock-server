@@ -46,6 +46,7 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await session.execute(text("DELETE FROM fetch_coverage WHERE source = 'scheduler'"))
         await session.execute(text("DELETE FROM instruments WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM market_stock_daily WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(text("DELETE FROM users WHERE google_sub LIKE 'zz-%'"))
         await session.commit()
     await engine.dispose()
 
@@ -260,3 +261,45 @@ async def test_active_market_job_is_reported(sessions) -> None:
         assert created and await repo.has_active_sync_job(SyncJobKind.MARKET)
         # Close it directly: claiming would grab whichever job is oldest.
         await repo.fail_sync_job(job.id, "x", retry=False)
+
+
+async def test_users_sessions_and_atomic_usage_counters(sessions) -> None:
+    from datetime import timedelta
+
+    sub = f"zz-{uuid4().hex}"
+    now = datetime.now(UTC)
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        first = await repo.upsert_google_user(
+            google_sub=sub, email="a@x.com", name="A", picture=None
+        )
+        again = await repo.upsert_google_user(
+            google_sub=sub, email="a2@x.com", name="A2", picture="p"
+        )
+        assert again.id == first.id and again.email == "a2@x.com"
+
+        await repo.create_user_session(
+            user_id=first.id, token_hash="h" * 64, expires_at=now + timedelta(days=1)
+        )
+        assert (await repo.get_user_by_session("h" * 64, now=now)).id == first.id
+        assert await repo.get_user_by_session("h" * 64, now=now + timedelta(days=2)) is None
+        await repo.delete_user_session("h" * 64)
+        assert await repo.get_user_by_session("h" * 64, now=now) is None
+
+    day = date(2099, 3, 4)
+
+    async def use() -> bool:
+        async with sessions() as session:
+            allowed, _ = await PostgresQuantRepository(session).consume_usage(
+                first.id, "llm", day, limit=3
+            )
+            return allowed
+
+    results = await asyncio.gather(*(use() for _ in range(10)))
+    assert sum(results) == 3  # exactly the limit is granted under concurrency
+
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert await repo.consume_usage(first.id, "llm", day, limit=3) == (False, 3)
+        assert await repo.consume_usage(first.id, "forecast", day, limit=1) == (True, 1)
+        assert await repo.consume_usage(first.id, "forecast", day, limit=0) == (False, 0)
