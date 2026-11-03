@@ -4,6 +4,7 @@ import { EmptyState } from "@/components/empty-state";
 import { SparkIcon } from "@/components/icons";
 import { SyncPendingNotice } from "@/components/sync-pending-notice";
 import { useDashboard } from "@/lib/dashboard-context";
+import { LlmErrorNotice } from "./llm-error";
 
 const CONTEXT_ITEMS = ["個股訊號", "市場寬度與資金", "法人與分點籌碼", "異常證據"];
 
@@ -30,6 +31,10 @@ export function LlmGuidancePanel() {
         </button>
       </div>
 
+      {llm.streamError && !streaming && (
+        <LlmErrorNotice error={llm.streamError} onRetry={llm.runStream} />
+      )}
+
       {streamSyncWait ? (
         <SyncPendingNotice wait={streamSyncWait} onCancel={llm.cancelStreamSync} />
       ) : streamedGuide || streaming ? (
@@ -49,7 +54,7 @@ export function LlmGuidancePanel() {
             </div>
           )}
         </div>
-      ) : (
+      ) : llm.streamError ? null : (
         <EmptyState icon={<SparkIcon size={22} />} title={llmStatus?.configured ? "尚未產生操作指南" : "LLM 尚未設定"}>
           {llmStatus?.configured
             ? "量化證據已備妥。按下「產生操作指南」，模型會用繁體中文整理成條件式的情境與風險提醒。"

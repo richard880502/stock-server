@@ -6,6 +6,7 @@ import { StanceChip } from "@/components/status-chip";
 import { SyncPendingNotice } from "@/components/sync-pending-notice";
 import type { DebateCase } from "@/lib/api/types";
 import { useDashboard } from "@/lib/dashboard-context";
+import { LlmErrorNotice } from "./llm-error";
 import { EvidenceColumns, JudgementSummary, ScenarioRow } from "./judgement-detail";
 
 function DebateCaseColumn({
@@ -60,6 +61,10 @@ export function DebatePanel() {
         </button>
       </div>
 
+      {llm.debateError && !debating && (
+        <LlmErrorNotice error={llm.debateError} onRetry={llm.runDebate} />
+      )}
+
       {debateSyncWait ? (
         <SyncPendingNotice wait={debateSyncWait} onCancel={llm.cancelDebateSync} />
       ) : debating ? (
@@ -104,7 +109,7 @@ export function DebatePanel() {
             <ScenarioRow scenarios={debateReport.judgement.scenarios} />
           </div>
         </div>
-      ) : (
+      ) : llm.debateError ? null : (
         <EmptyState icon={<SparkIcon size={22} />} title={llmStatus?.configured ? "尚未啟動辯論" : "LLM 尚未設定"}>
           {llmStatus?.configured
             ? "按下「啟動多空辯論」，兩位研究員會基於同一份證據各自舉證，再由裁決者給出操作指南。"

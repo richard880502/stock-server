@@ -42,7 +42,6 @@ function useDashboardState() {
   const llm = useLlmAnalysis(
     query,
     backtest.job?.status === "completed" ? backtest.job.id : null,
-    setError,
   );
 
   const [recentSymbols, setRecentSymbols] = useState<RecentSymbol[]>([]);
