@@ -77,3 +77,18 @@ export const severityCopy: Record<Alert["severity"], string> = {
   medium: "中",
   info: "資訊",
 };
+
+/** `?login_error=<code>` returned by the API after a failed Google sign-in. */
+export const loginErrorCopy: Record<string, string> = {
+  access_denied: "你在 Google 取消了登入。需要時可以再試一次。",
+  state: "登入逾時或連線已失效，請重新按一次「使用 Google 帳戶登入」。",
+  failed: "登入沒有完成，請再試一次。",
+  token_exchange_failed: "與 Google 確認身分時發生問題，請稍後再試一次。",
+  google_unreachable: "目前連不上 Google，請稍後再試一次。",
+  invalid_token: "Google 回傳的登入資料無法驗證，請再試一次。",
+  email_unverified: "這個 Google 帳戶的 Email 尚未通過驗證，請先在 Google 完成驗證，或改用其他帳戶。",
+  email_not_allowed: "這個帳戶沒有使用此控制台的權限。若你應該有權限，請聯絡管理員，或改用其他 Google 帳戶。",
+  disabled: "這個帳戶目前已停用，請聯絡管理員。",
+};
+
+export const loginErrorFallback = loginErrorCopy.failed;

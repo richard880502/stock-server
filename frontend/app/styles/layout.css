@@ -356,3 +356,96 @@
     display: inline;
   }
 }
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.login-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.login-note[data-tone="info"] {
+  border-color: var(--border);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.login-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.login-note strong {
+  font-weight: var(--weight-strong);
+}
+
+.login-note p {
+  color: var(--text);
+}
+
+/* Google's sign-in button: neutral surface, 1px outline, four-colour "G". */
+.google-button {
+  --g-bg: light-dark(#ffffff, #131314);
+  --g-border: light-dark(#747775, #8e918f);
+  --g-text: light-dark(#1f1f1f, #e3e3e3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--touch);
+  padding-inline: 12px;
+  border: 1px solid var(--g-border);
+  border-radius: var(--radius-full);
+  background: var(--g-bg);
+  color: var(--g-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.google-button:hover {
+  background: color-mix(in srgb, var(--g-text) 8%, var(--g-bg));
+  box-shadow: var(--shadow-1);
+}
+
+.google-button:active {
+  background: color-mix(in srgb, var(--g-text) 12%, var(--g-bg));
+}
+
+.google-button[aria-disabled="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
