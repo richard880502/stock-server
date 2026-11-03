@@ -13,12 +13,15 @@ from quant_signal.domain.models import (
     BrokerBranchFlow,
     ChipFlowSnapshot,
     DataStatus,
+    FetchCoverage,
     InstitutionalFlow,
     Instrument,
     MarketEnvironmentSnapshot,
     MarketObservation,
     NewsItem,
     SignalSnapshot,
+    SyncJob,
+    SyncJobKind,
 )
 
 
@@ -110,3 +113,31 @@ class QuantRepository(Protocol):
         end: date | None = None,
         start: date | None = None,
     ) -> list[NewsItem]: ...
+
+    async def list_fetch_coverage(
+        self,
+        source: str,
+        dataset: str,
+        symbol: str,
+        periods: list[str],
+    ) -> dict[str, FetchCoverage]: ...
+
+    async def record_fetch_coverage(self, entries: list[FetchCoverage]) -> None: ...
+
+    async def enqueue_sync_job(
+        self,
+        kind: SyncJobKind,
+        symbol: str,
+        *,
+        lookback_days: int = 500,
+    ) -> tuple[SyncJob, bool]: ...
+
+    async def claim_next_sync_job(self) -> SyncJob | None: ...
+
+    async def complete_sync_job(self, job_id: UUID) -> None: ...
+
+    async def fail_sync_job(self, job_id: UUID, error: str, *, retry: bool) -> None: ...
+
+    async def requeue_stale_sync_jobs(self, *, older_than_seconds: float) -> int: ...
+
+    async def list_tracked_symbols(self) -> list[str]: ...

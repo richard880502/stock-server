@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     mcp_transport: str = "streamable-http"
     mcp_stateless_http: bool = True
     backtest_poll_seconds: float = Field(default=2.0, gt=0)
+    sync_enabled: bool = True
+    sync_poll_seconds: float = Field(default=5.0, gt=0)
+    sync_lookback_days: int = Field(default=500, ge=60)
+    sync_max_attempts: int = Field(default=3, ge=1)
+    sync_stale_after_seconds: float = Field(default=1800, gt=0)
+    # Taipei local time after which the daily refresh is queued (24h "HH:MM").
+    sync_daily_time: str = Field(default="15:30", pattern=r"^\d{2}:\d{2}$")
     kronos_url: str | None = None
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:13000,http://127.0.0.1:13000"

@@ -34,6 +34,41 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class FetchCoverage(BaseModel):
+    """Records that one slice of an upstream dataset has already been fetched.
+
+    ``period`` is a month (``2026-07``) or a day (``2026-07-31``). An ``empty``
+    status means the upstream answered but had nothing, e.g. a holiday or a
+    month before the symbol was listed, so it must not be requested again.
+    """
+
+    source: str
+    dataset: str
+    symbol: str
+    period: str
+    status: Literal["ok", "empty"]
+    row_count: int = Field(default=0, ge=0)
+    fetched_at: datetime
+
+
+class SyncJobKind(StrEnum):
+    SYMBOL = "symbol"
+    INSTITUTIONS = "institutions"
+
+
+class SyncJob(BaseModel):
+    id: UUID
+    kind: SyncJobKind
+    symbol: str
+    status: JobStatus
+    lookback_days: int = Field(default=500, ge=1)
+    attempts: int = Field(default=0, ge=0)
+    error: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
 class DataSeriesStatus(BaseModel):
     key: str
     source: str

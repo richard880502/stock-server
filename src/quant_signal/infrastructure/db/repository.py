@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataSeriesStatus,
     DataStatus,
+    FetchCoverage,
     InstitutionalFlow,
     Instrument,
     JobStatus,
@@ -26,6 +27,8 @@ from quant_signal.domain.models import (
     MarketObservation,
     NewsItem,
     SignalSnapshot,
+    SyncJob,
+    SyncJobKind,
 )
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -33,12 +36,14 @@ from quant_signal.infrastructure.db.models import (
     BrokerBranchFlowRow,
     ChipFlowSnapshotRow,
     DailyBarRow,
+    FetchCoverageRow,
     InstitutionalFlowRow,
     InstrumentRow,
     MarketEnvironmentSnapshotRow,
     MarketObservationRow,
     NewsItemRow,
     SignalSnapshotRow,
+    SyncJobRow,
 )
 
 
@@ -805,6 +810,179 @@ class PostgresQuantRepository:
             status=JobStatus(row.status),
             spec=BacktestSpec.model_validate(row.spec),
             result=BacktestReport.model_validate(row.result) if row.result else None,
+            error=row.error,
+            created_at=row.created_at,
+            started_at=row.started_at,
+            completed_at=row.completed_at,
+        )
+
+    async def list_fetch_coverage(
+        self,
+        source: str,
+        dataset: str,
+        symbol: str,
+        periods: list[str],
+    ) -> dict[str, FetchCoverage]:
+        if not periods:
+            return {}
+        statement = select(FetchCoverageRow).where(
+            FetchCoverageRow.source == source,
+            FetchCoverageRow.dataset == dataset,
+            FetchCoverageRow.symbol == symbol.upper(),
+            FetchCoverageRow.period.in_(periods),
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        return {
+            row.period: FetchCoverage(
+                source=row.source,
+                dataset=row.dataset,
+                symbol=row.symbol,
+                period=row.period,
+                status=row.status,  # type: ignore[arg-type]
+                row_count=row.row_count,
+                fetched_at=row.fetched_at,
+            )
+            for row in rows
+        }
+
+    async def record_fetch_coverage(self, entries: list[FetchCoverage]) -> None:
+        if not entries:
+            return
+        for entry in entries:
+            values = {
+                "source": entry.source,
+                "dataset": entry.dataset,
+                "symbol": entry.symbol.upper(),
+                "period": entry.period,
+                "status": entry.status,
+                "row_count": entry.row_count,
+                "fetched_at": entry.fetched_at,
+            }
+            statement = (
+                insert(FetchCoverageRow)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["source", "dataset", "symbol", "period"],
+                    set_={
+                        "status": entry.status,
+                        "row_count": entry.row_count,
+                        "fetched_at": entry.fetched_at,
+                    },
+                )
+            )
+            await self.session.execute(statement)
+        await self.session.commit()
+
+    async def enqueue_sync_job(
+        self,
+        kind: SyncJobKind,
+        symbol: str,
+        *,
+        lookback_days: int = 500,
+    ) -> tuple[SyncJob, bool]:
+        normalized = symbol.upper()
+        statement = (
+            insert(SyncJobRow)
+            .values(
+                kind=kind.value,
+                symbol=normalized,
+                status=JobStatus.QUEUED.value,
+                lookback_days=lookback_days,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["kind", "symbol"],
+                index_where=text("status IN ('queued', 'running')"),
+            )
+            .returning(SyncJobRow.id)
+        )
+        created_id = (await self.session.execute(statement)).scalar_one_or_none()
+        await self.session.commit()
+        if created_id is not None:
+            row = await self.session.get(SyncJobRow, created_id)
+            assert row is not None
+            return self._sync_job_from_row(row), True
+        existing = (
+            await self.session.execute(
+                select(SyncJobRow).where(
+                    SyncJobRow.kind == kind.value,
+                    SyncJobRow.symbol == normalized,
+                    SyncJobRow.status.in_(
+                        [JobStatus.QUEUED.value, JobStatus.RUNNING.value]
+                    ),
+                )
+            )
+        ).scalar_one()
+        return self._sync_job_from_row(existing), False
+
+    async def claim_next_sync_job(self) -> SyncJob | None:
+        statement = (
+            select(SyncJobRow)
+            .where(SyncJobRow.status == JobStatus.QUEUED.value)
+            .order_by(SyncJobRow.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        row = (await self.session.execute(statement)).scalar_one_or_none()
+        if row is None:
+            return None
+        row.status = JobStatus.RUNNING.value
+        row.started_at = datetime.now(UTC)
+        row.attempts += 1
+        await self.session.commit()
+        await self.session.refresh(row)
+        return self._sync_job_from_row(row)
+
+    async def complete_sync_job(self, job_id: UUID) -> None:
+        row = await self.session.get(SyncJobRow, job_id)
+        if row is None:
+            raise LookupError(f"sync job {job_id} not found")
+        row.status = JobStatus.COMPLETED.value
+        row.error = None
+        row.completed_at = datetime.now(UTC)
+        await self.session.commit()
+
+    async def fail_sync_job(self, job_id: UUID, error: str, *, retry: bool) -> None:
+        row = await self.session.get(SyncJobRow, job_id)
+        if row is None:
+            raise LookupError(f"sync job {job_id} not found")
+        row.error = error[:4000]
+        if retry:
+            row.status = JobStatus.QUEUED.value
+        else:
+            row.status = JobStatus.FAILED.value
+            row.completed_at = datetime.now(UTC)
+        await self.session.commit()
+
+    async def requeue_stale_sync_jobs(self, *, older_than_seconds: float) -> int:
+        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+        result = await self.session.execute(
+            update(SyncJobRow)
+            .where(
+                SyncJobRow.status == JobStatus.RUNNING.value,
+                SyncJobRow.started_at < cutoff,
+            )
+            .values(status=JobStatus.QUEUED.value)
+        )
+        await self.session.commit()
+        return result.rowcount or 0
+
+    async def list_tracked_symbols(self) -> list[str]:
+        statement = (
+            select(InstrumentRow.symbol)
+            .where(InstrumentRow.market.in_(["TW", "TWO"]))
+            .order_by(InstrumentRow.symbol)
+        )
+        return list((await self.session.execute(statement)).scalars().all())
+
+    @staticmethod
+    def _sync_job_from_row(row: SyncJobRow) -> SyncJob:
+        return SyncJob(
+            id=row.id,
+            kind=SyncJobKind(row.kind),
+            symbol=row.symbol,
+            status=JobStatus(row.status),
+            lookback_days=row.lookback_days,
+            attempts=row.attempts,
             error=row.error,
             created_at=row.created_at,
             started_at=row.started_at,

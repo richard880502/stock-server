@@ -398,10 +398,52 @@ request from then on. This only actually restricts data once
 `API_AUTH_ENABLED=true` — a password screen in front of an open API protects
 nothing, since the API would still answer direct requests either way.
 
-## Syncing data on demand
+## Syncing data
 
-`POST /api/v1/sync/symbol` (and the `sync_symbol_data` MCP tool) backfills one
-symbol's official daily bars synchronously, choosing TWSE or TPEx by suffix:
+The database is the source of truth. Analysis, forecasts, backtests and the LLM
+analyst read only PostgreSQL; **no request path calls TWSE or TPEx.**
+
+```text
+request ──► missing history? ──► enqueue one deduplicated sync job ──► 503 "資料同步中" + Retry-After
+                                         │
+daily 15:30 Taipei (weekdays) ───────────┤
+                                         ▼
+                          sync worker (single, throttled) ──► fetch only missing months ──► PostgreSQL
+```
+
+- **Coverage ledger (`fetch_coverage`).** Each fetched month (prices) or day
+  (institutional flows) is recorded as `ok` or `empty`. A slice counts as
+  covered only if it was fetched *after* it fully closed, so closed months are
+  requested once and the open month is refreshed. Empty slices (holidays,
+  months before a listing) are remembered too. A past month cut short by the
+  requested `end` is never marked complete.
+- **Incremental adjustments.** Forward-adjustment factors resume from the last
+  stored exchange bar, so a refresh asks for corporate actions since that point
+  instead of re-downloading everything since 2003. Synthetic demo bars never
+  seed the factor.
+- **Durable queue (`sync_jobs`).** At most one queued/running job per
+  `(kind, symbol)` — ten simultaneous requests for one symbol cause one crawl.
+  Failed jobs retry up to `SYNC_MAX_ATTEMPTS` with backoff; jobs stuck in
+  `running` are requeued after `SYNC_STALE_AFTER_SECONDS`.
+- **Daily refresh.** After `SYNC_DAILY_TIME` (Taipei, weekdays) the worker
+  queues one price job per tracked symbol and one institutional-flow job per
+  stock, once per day.
+- **Shared reports.** The market-wide TWSE T86/MI_QFIIS and TPEx daily-trade
+  files are cached once settled, so N symbols cost one download per day.
+
+The sync loop runs inside `quant-signal-worker` next to the backtest loop; set
+`SYNC_ENABLED=false` to disable it. Run **one** worker instance: the request
+interval lives in the providers, so replicas would multiply the load.
+
+When a symbol has fewer than 60 point-in-time bars, the analysis endpoints
+return `503` with `{"detail": "...", "sync_pending": true, "symbol": "..."}` and
+a `Retry-After` header; MCP tools return the same message as a tool error. If a
+sync already ran this month and the symbol is still short (a new listing), the
+normal "insufficient history" error is returned instead of waiting forever.
+
+`POST /api/v1/sync/symbol` (and the `sync_symbol_data` MCP tool) still run a
+synchronous backfill for one symbol, but now through the same incremental
+logic, so repeating it is cheap:
 
 ```bash
 curl -X POST "http://127.0.0.1:18100/api/v1/sync/symbol" \
@@ -409,11 +451,9 @@ curl -X POST "http://127.0.0.1:18100/api/v1/sync/symbol" \
   -d '{"symbol": "3016.TW", "start": "2024-01-01"}'
 ```
 
-This is the same path the `quant-signal-sync-data symbol` CLI uses, just
-reachable over HTTP/MCP instead of a shell exec, so a symbol with no history
-yet (the analysis tools require at least 60 point-in-time bars) can be synced
-without dashboard/server access. Large date ranges take longer than the
-request may want to wait on — for a full multi-year backfill, prefer the CLI.
+Not yet incremental: `quant-signal-sync-data market` (market breadth) still
+walks every trading day in its warm-up window, because the rolling breadth needs
+each day's quotes.
 
 ## Local development
 
@@ -639,6 +679,8 @@ Current strategy mechanics:
 - `bars_daily`
 - `signal_snapshots`
 - `backtest_jobs`
+- `fetch_coverage`
+- `sync_jobs`
 
 The first migration is under `migrations/versions/0001_initial.py`.
 
@@ -661,7 +703,7 @@ authorization scopes, rate limits, and audit logging are added.
 2. Historical benchmark and event-study reports
 3. Strategy definitions and immutable version hashes
 4. Authentication and tool scopes
-5. Daily scheduler and notification adapters
+5. Notification adapters (the daily sync scheduler is done)
 6. News evidence and multi-step agent policies
 
 This software is a research scaffold, not investment advice or an automated

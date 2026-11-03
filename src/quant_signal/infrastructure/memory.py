@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 from quant_signal.domain.models import (
@@ -13,6 +13,7 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataSeriesStatus,
     DataStatus,
+    FetchCoverage,
     InstitutionalFlow,
     Instrument,
     JobStatus,
@@ -20,6 +21,8 @@ from quant_signal.domain.models import (
     MarketObservation,
     NewsItem,
     SignalSnapshot,
+    SyncJob,
+    SyncJobKind,
 )
 
 
@@ -39,6 +42,8 @@ class MemoryQuantRepository:
         self._api_key_hashes: dict[UUID, str] = {}
         self.instruments: dict[str, Instrument] = {}
         self.news_items: dict[str, list[NewsItem]] = {}
+        self.fetch_coverage: dict[tuple[str, str, str, str], FetchCoverage] = {}
+        self.sync_jobs: dict[UUID, SyncJob] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -428,3 +433,103 @@ class MemoryQuantRepository:
                     )
                 )
         return result
+
+    async def list_fetch_coverage(
+        self,
+        source: str,
+        dataset: str,
+        symbol: str,
+        periods: list[str],
+    ) -> dict[str, FetchCoverage]:
+        found: dict[str, FetchCoverage] = {}
+        for period in periods:
+            entry = self.fetch_coverage.get((source, dataset, symbol.upper(), period))
+            if entry is not None:
+                found[period] = entry
+        return found
+
+    async def record_fetch_coverage(self, entries: list[FetchCoverage]) -> None:
+        for entry in entries:
+            key = (entry.source, entry.dataset, entry.symbol.upper(), entry.period)
+            self.fetch_coverage[key] = entry
+
+    async def enqueue_sync_job(
+        self,
+        kind: SyncJobKind,
+        symbol: str,
+        *,
+        lookback_days: int = 500,
+    ) -> tuple[SyncJob, bool]:
+        normalized = symbol.upper()
+        for job in self.sync_jobs.values():
+            if (
+                job.kind == kind
+                and job.symbol == normalized
+                and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+            ):
+                return job, False
+        job = SyncJob(
+            id=uuid4(),
+            kind=kind,
+            symbol=normalized,
+            status=JobStatus.QUEUED,
+            lookback_days=lookback_days,
+            created_at=datetime.now(UTC),
+        )
+        self.sync_jobs[job.id] = job
+        return job, True
+
+    async def claim_next_sync_job(self) -> SyncJob | None:
+        queued = sorted(
+            (job for job in self.sync_jobs.values() if job.status == JobStatus.QUEUED),
+            key=lambda job: job.created_at,
+        )
+        if not queued:
+            return None
+        claimed = queued[0].model_copy(
+            update={
+                "status": JobStatus.RUNNING,
+                "started_at": datetime.now(UTC),
+                "attempts": queued[0].attempts + 1,
+            }
+        )
+        self.sync_jobs[claimed.id] = claimed
+        return claimed
+
+    async def complete_sync_job(self, job_id: UUID) -> None:
+        self.sync_jobs[job_id] = self.sync_jobs[job_id].model_copy(
+            update={
+                "status": JobStatus.COMPLETED,
+                "error": None,
+                "completed_at": datetime.now(UTC),
+            }
+        )
+
+    async def fail_sync_job(self, job_id: UUID, error: str, *, retry: bool) -> None:
+        update: dict = {"error": error[:4000]}
+        if retry:
+            update["status"] = JobStatus.QUEUED
+        else:
+            update["status"] = JobStatus.FAILED
+            update["completed_at"] = datetime.now(UTC)
+        self.sync_jobs[job_id] = self.sync_jobs[job_id].model_copy(update=update)
+
+    async def requeue_stale_sync_jobs(self, *, older_than_seconds: float) -> int:
+        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
+        count = 0
+        for job_id, job in list(self.sync_jobs.items()):
+            if (
+                job.status == JobStatus.RUNNING
+                and job.started_at is not None
+                and job.started_at < cutoff
+            ):
+                self.sync_jobs[job_id] = job.model_copy(update={"status": JobStatus.QUEUED})
+                count += 1
+        return count
+
+    async def list_tracked_symbols(self) -> list[str]:
+        return sorted(
+            symbol
+            for symbol, instrument in self.instruments.items()
+            if instrument.market in ("TW", "TWO")
+        )

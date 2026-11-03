@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow
+from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
 
 TWSE_BASE_URL = "https://www.twse.com.tw"
 TWSE_SOURCE = "twse_official"
@@ -114,6 +115,7 @@ class TwseProvider:
         )
         self.request_interval_seconds = request_interval_seconds
         self.instrument_names: dict[str, str] = {}
+        self._report_cache = ReportCache()
 
     async def __aenter__(self) -> TwseProvider:
         return self
@@ -137,6 +139,22 @@ class TwseProvider:
                 last_error = exc
                 await asyncio.sleep(min(1.5 * (2**attempt), 15))
         raise RuntimeError(f"TWSE request failed after retries: {path}") from last_error
+
+    async def _get_daily_report(
+        self,
+        path: str,
+        params: dict[str, str],
+        trading_date: date,
+    ) -> dict[str, Any]:
+        """Market-wide daily reports are identical for every symbol once settled."""
+        if not is_settled(trading_date):
+            return await self._get_json(path, params)
+        cached = self._report_cache.get(path, params)
+        if cached is not None:
+            return cached
+        payload = await self._get_json(path, params)
+        self._report_cache.put(path, params, payload)
+        return payload
 
     async def fetch_symbol_bars(
         self,
@@ -236,13 +254,14 @@ class TwseProvider:
     ) -> InstitutionalFlow | None:
         code = symbol.strip().upper().removesuffix(".TW")
         requested = trading_date.strftime("%Y%m%d")
-        flow_payload = await self._get_json(
+        flow_payload = await self._get_daily_report(
             "/rwd/zh/fund/T86",
             {
                 "date": requested,
                 "selectType": "ALLBUT0999",
                 "response": "json",
             },
+            trading_date,
         )
         holding_ratio = (
             await self.fetch_foreign_holding_ratio(code, trading_date)
@@ -261,13 +280,14 @@ class TwseProvider:
         code: str,
         trading_date: date,
     ) -> float | None:
-        payload = await self._get_json(
+        payload = await self._get_daily_report(
             "/rwd/zh/fund/MI_QFIIS",
             {
                 "date": trading_date.strftime("%Y%m%d"),
                 "selectType": "ALLBUT0999",
                 "response": "json",
             },
+            trading_date,
         )
         return self.parse_foreign_holding_ratio(payload, code)
 

@@ -11,13 +11,17 @@ from uuid import UUID
 
 import httpx
 import uvicorn
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from quant_signal.adapters.rest.security import require_api_key
-from quant_signal.application.data_sync import TpexDataSyncService, TwseDataSyncService
+from quant_signal.application.data_sync import (
+    DataSyncPending,
+    TpexDataSyncService,
+    TwseDataSyncService,
+)
 from quant_signal.application.llm_analysis import (
     DebateAnalysisService,
     LLMAnalysisService,
@@ -100,6 +104,14 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
     )
     router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
+
+    @application.exception_handler(DataSyncPending)
+    async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc), "sync_pending": True, "symbol": exc.symbol},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
 
     @application.get("/health")
     async def health() -> dict[str, str]:
@@ -397,6 +409,8 @@ def create_app() -> FastAPI:
                 ):
                     yield encode_event("delta", {"text": token})
                 yield encode_event("done", {})
+            except DataSyncPending as exc:
+                yield encode_event("error", {"message": str(exc), "status": 503})
             except LookupError as exc:
                 yield encode_event("error", {"message": str(exc), "status": 404})
             except (ValueError, httpx.HTTPError) as exc:

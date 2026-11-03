@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow
+from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
 from quant_signal.infrastructure.providers.twse import (
     TwseDailyMarket,
     TwseSecurityQuote,
@@ -45,6 +46,7 @@ class TpexProvider:
         self.request_interval_seconds = request_interval_seconds
         self.instrument_names: dict[str, str] = {}
         self._index_month_cache: dict[date, dict[date, float]] = {}
+        self._report_cache = ReportCache()
 
     async def __aenter__(self) -> TpexProvider:
         return self
@@ -68,6 +70,22 @@ class TpexProvider:
                 last_error = exc
                 await asyncio.sleep(min(1.5 * (2**attempt), 15))
         raise RuntimeError(f"TPEx request failed after retries: {path}") from last_error
+
+    async def _get_daily_report(
+        self,
+        path: str,
+        params: dict[str, str],
+        trading_date: date,
+    ) -> dict[str, Any]:
+        """Market-wide daily reports are identical for every symbol once settled."""
+        if not is_settled(trading_date):
+            return await self._get_json(path, params)
+        cached = self._report_cache.get(path, params)
+        if cached is not None:
+            return cached
+        payload = await self._get_json(path, params)
+        self._report_cache.put(path, params, payload)
+        return payload
 
     async def fetch_symbol_bars(
         self,
@@ -185,7 +203,7 @@ class TpexProvider:
         trading_date: date,
     ) -> InstitutionalFlow | None:
         code = symbol.strip().upper().removesuffix(".TWO")
-        payload = await self._get_json(
+        payload = await self._get_daily_report(
             "/www/zh-tw/insti/dailyTrade",
             {
                 "type": "Daily",
@@ -193,6 +211,7 @@ class TpexProvider:
                 "date": trading_date.strftime("%Y/%m/%d"),
                 "response": "json",
             },
+            trading_date,
         )
         return self.parse_stock_institutional_flow(
             payload,

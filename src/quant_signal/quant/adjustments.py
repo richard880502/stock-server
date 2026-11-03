@@ -6,11 +6,16 @@ from quant_signal.domain.models import Bar, CorporateAction
 def apply_forward_adjustments(
     bars: list[Bar],
     actions: list[CorporateAction],
+    *,
+    initial_factor: float = 1.0,
 ) -> list[Bar]:
     """Return a point-in-time-safe, forward-adjusted bar series.
 
     The factor is 1 before an event and changes on the ex-date. A historical
     signal therefore never contains an adjustment caused by a later event.
+
+    ``initial_factor`` resumes an earlier series: pass the factor of the last
+    stored bar before ``bars`` together with only the actions dated after it.
     """
 
     if not bars:
@@ -24,7 +29,7 @@ def apply_forward_adjustments(
         key=lambda item: (item.ex_date, item.revision, item.source),
     )
 
-    factor = 1.0
+    factor = initial_factor
     event_index = 0
     adjusted: list[Bar] = []
     for bar in sorted(bars, key=lambda item: item.trading_date):

@@ -7,6 +7,7 @@ import logging
 from quant_signal.backtest import BacktestEngine
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
 from quant_signal.settings import get_settings
+from quant_signal.workers import sync as sync_worker
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +65,20 @@ async def process_once() -> bool:
         return True
 
 
-async def run_forever() -> None:
+async def run_backtests_forever() -> None:
     settings = get_settings()
     while True:
         processed = await process_once()
         if not processed:
             await asyncio.sleep(settings.backtest_poll_seconds)
+
+
+async def run_forever() -> None:
+    """Run backtests and, unless disabled, the upstream sync queue side by side."""
+    if get_settings().sync_enabled:
+        await asyncio.gather(run_backtests_forever(), sync_worker.run_forever())
+    else:
+        await run_backtests_forever()
 
 
 def main() -> None:
