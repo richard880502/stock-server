@@ -29,6 +29,22 @@ export class SyncPendingError extends ApiError {
   }
 }
 
+/**
+ * HTTP 429: the signed-in user's daily quota for an expensive action is used
+ * up. Not a fault, and never retried automatically; `message` is the backend's
+ * Traditional Chinese `detail`.
+ */
+export class RateLimitError extends ApiError {
+  /** Seconds from the Retry-After header; null when absent or unreadable. */
+  readonly retryAfterSeconds: number | null;
+
+  constructor(message: string, retryAfterSeconds: number | null = null) {
+    super(message, 429);
+    this.name = "RateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 /** Automatic retries were exhausted while the data was still syncing. */
 export class SyncTimeoutError extends Error {
   constructor(attempts: number, symbol: string | null) {

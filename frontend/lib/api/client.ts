@@ -1,5 +1,6 @@
 import { withAuthHeaders } from "./auth";
-import { ApiError, SyncPendingError } from "./errors";
+import { ApiError, RateLimitError, SyncPendingError } from "./errors";
+import { rememberRateLimit } from "./rate-limit";
 
 export const API_URL =
   process.env.NEXT_PUBLIC_QUANT_API_URL ?? "http://127.0.0.1:18100";
@@ -19,6 +20,13 @@ export function parseRetryAfter(value: string | null): number | null {
   return delta > 0 ? delta : null;
 }
 
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Registered by the session store: called when an API call answers HTTP 401. */
+export function onUnauthorized(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
 /** Turn a non-2xx response (and its already-parsed JSON body) into an Error. */
 export function errorFromResponse(response: Response, payload: unknown): ApiError {
   const body =
@@ -32,6 +40,15 @@ export function errorFromResponse(response: Response, payload: unknown): ApiErro
       symbol: typeof body.symbol === "string" ? body.symbol : null,
     });
   }
+  if (response.status === 429) {
+    const error = new RateLimitError(
+      detail ?? "今日使用次數已達上限，請稍後再試。",
+      parseRetryAfter(response.headers.get("Retry-After")),
+    );
+    rememberRateLimit(error);
+    return error;
+  }
+  if (response.status === 401) unauthorizedHandler?.();
   return new ApiError(
     detail ?? `服務回應異常（HTTP ${response.status}）`,
     response.status,

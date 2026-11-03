@@ -58,10 +58,15 @@ export function subscribeApiKey(listener: () => void): () => void {
   };
 }
 
+/**
+ * Every API call sends cookies (the Google sign-in session lives in the
+ * HttpOnly `qs_session` cookie) and, for the legacy password flow, the stored
+ * key as `Authorization: Bearer`.
+ */
 export function withAuthHeaders(init?: RequestInit): RequestInit {
   const key = getApiKey();
-  if (!key) return init ?? {};
+  if (!key) return { ...init, credentials: "include" };
   const headers = new Headers(init?.headers);
   headers.set("Authorization", `Bearer ${key}`);
-  return { ...init, headers };
+  return { ...init, headers, credentials: "include" };
 }

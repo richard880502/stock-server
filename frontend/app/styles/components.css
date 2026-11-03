@@ -951,3 +951,13 @@ kbd {
   min-width: 0;
   max-width: 100%;
 }
+
+/* Daily quota reached (HTTP 429): informational, not a failure. */
+.notice-limit {
+  border-color: var(--border);
+  background: var(--accent-soft);
+}
+
+.notice-limit .notice-icon {
+  color: var(--accent);
+}
