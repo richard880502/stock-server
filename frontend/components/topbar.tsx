@@ -12,7 +12,7 @@ function StatusPill({ ok, children }: { ok: boolean | null; children: string }) 
   return (
     <span className="status-pill" data-state={ok === null ? "unknown" : ok ? "ok" : "idle"}>
       <span className="status-dot" aria-hidden="true" />
-      {children}
+      <span className="status-label">{children}</span>
     </span>
   );
 }

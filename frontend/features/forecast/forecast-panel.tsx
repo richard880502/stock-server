@@ -4,12 +4,13 @@ import { FormEvent, useEffect, useState } from "react";
 import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
 import { EmptyState } from "@/components/empty-state";
-import { AlertIcon, FlaskIcon, InfoIcon } from "@/components/icons";
+import { AlertIcon, ChevronDownIcon, FlaskIcon, InfoIcon } from "@/components/icons";
 import { ResearchTable } from "@/components/research-table";
 import { Stat, StatGrid } from "@/components/stat";
 import { ScenarioChart } from "@/components/charts/scenario-chart";
 import { createForecast, getForecastStatus, syncSymbol } from "@/lib/api/endpoints";
 import type { ForecastReport } from "@/lib/api/types";
+import { useScrollIntoViewOnStart } from "@/lib/use-scroll-into-view";
 import { formatPrice, formatRatio, formatSignedPct } from "@/lib/format";
 
 /** Plain-language read of the walk-forward numbers (never "beats the market"). */
@@ -82,6 +83,7 @@ export function ForecastPanel({ symbol, asOf }: { symbol: string; asOf: string }
     }
   }
 
+  useScrollIntoViewOnStart(loading, "forecast-result");
   const lastPoint = report?.points[report.points.length - 1];
   const verdict = report ? validationVerdict(report.evaluation) : null;
 
@@ -155,123 +157,128 @@ export function ForecastPanel({ symbol, asOf }: { symbol: string; asOf: string }
         </form>
       </Card>
 
-      <Card
-        as="div"
-        title="價格情境與驗證"
-        sub={report ? `資料截止 ${report.data_through}` : undefined}
-        aside={
-          <span className="chip plain">
-            {report ? (report.model === "kronos" ? "Kronos-small" : "統計基準") : "研究模式"}
-          </span>
-        }
-        className="result-card"
-      >
-        {error && (
-          <div className="inline-error" role="alert">
-            <p>
-              <strong>無法完成這項預測。</strong> {error}
-            </p>
-            <p className="field-hint">
-              若是歷史資料不足，可先按左側「同步官方日 K」，完成後再產生預測。
-            </p>
-          </div>
-        )}
-        {loading ? (
-          <div className="result-stack" aria-busy="true" role="status" aria-label="正在計算預測路徑">
-            <div className="progress-line" />
-            <span className="skeleton block" style={{ height: 88 }} />
-            <span className="skeleton block" style={{ height: 300 }} />
-            <p className="note">Kronos 首次運算可能需要較長時間。</p>
-          </div>
-        ) : report && lastPoint ? (
-          <div className="result-stack">
-            <div className="result-hero">
-              <Stat
-                label={`${report.horizon} 日後中位情境`}
-                valueClassName="result-hero-value"
-                value={formatPrice(lastPoint.median)}
-                note={
-                  <>
-                    相對最後收盤 {formatPrice(report.last_close)}{" "}
-                    <Direction value={report.expected_return}>{formatSignedPct(report.expected_return)}</Direction>
-                  </>
-                }
-              />
-              <Stat
-                label="10–90% 情境區間"
-                value={`${formatPrice(lastPoint.lower)} – ${formatPrice(lastPoint.upper)}`}
-                note="約八成的模擬路徑落在此範圍"
-              />
+      <div id="forecast-result" className="scroll-target">
+        <Card
+          as="div"
+          title="價格情境與驗證"
+          sub={report ? `資料截止 ${report.data_through}` : undefined}
+          aside={
+            <span className="chip plain">
+              {report ? (report.model === "kronos" ? "Kronos-small" : "統計基準") : "研究模式"}
+            </span>
+          }
+          className="result-card"
+        >
+          {error && (
+            <div className="inline-error" role="alert">
+              <p>
+                <strong>無法完成這項預測。</strong> {error}
+              </p>
+              <p className="field-hint">
+                若是歷史資料不足，可先按左側「同步官方日 K」，完成後再產生預測。
+              </p>
             </div>
-
-            <ScenarioChart report={report} />
-
-            <details className="disclosure">
-              <summary>每日情境價格表（{report.points.length} 日）</summary>
-              <div className="disclosure-body">
-                <ResearchTable label="預測情境價格表" headers={["交易日", "偏低情境", "中位情境", "偏高情境"]}>
-                  {report.points.map((p) => (
-                    <tr key={p.trading_date}>
-                      <td>{p.trading_date}</td>
-                      <td>{formatPrice(p.lower)}</td>
-                      <td>{formatPrice(p.median)}</td>
-                      <td>{formatPrice(p.upper)}</td>
-                    </tr>
-                  ))}
-                </ResearchTable>
+          )}
+          {loading ? (
+            <div className="result-stack" aria-busy="true" role="status" aria-label="正在計算預測路徑">
+              <div className="progress-line" />
+              <span className="skeleton block" style={{ height: 88 }} />
+              <span className="skeleton block" style={{ height: 300 }} />
+              <p className="note">Kronos 首次運算可能需要較長時間。</p>
+            </div>
+          ) : report && lastPoint ? (
+            <div className="result-stack">
+              <div className="result-hero">
+                <Stat
+                  label={`${report.horizon} 日後中位情境`}
+                  valueClassName="result-hero-value"
+                  value={formatPrice(lastPoint.median)}
+                  note={
+                    <>
+                      相對最後收盤 {formatPrice(report.last_close)}{" "}
+                      <Direction value={report.expected_return}>{formatSignedPct(report.expected_return)}</Direction>
+                    </>
+                  }
+                />
+                <Stat
+                  label="10–90% 情境區間"
+                  value={`${formatPrice(lastPoint.lower)} – ${formatPrice(lastPoint.upper)}`}
+                  note="約八成的模擬路徑落在此範圍"
+                />
               </div>
-            </details>
 
-            <section className="validation" aria-labelledby="validation-title">
-              <div className="card-header">
-                <div>
-                  <h3 className="card-title" id="validation-title">
-                    逐期驗證：這個方法過去準不準
-                  </h3>
-                  <p className="card-sub">
-                    最多 24 個不重疊的歷史窗口，每次只使用當時已知的資料，與「價格維持不變」比較。
-                  </p>
+              <ScenarioChart report={report} />
+
+              <details className="disclosure">
+                <summary>
+                <span>每日情境價格表（{report.points.length} 日）</span>
+                <ChevronDownIcon size={16} />
+              </summary>
+                <div className="disclosure-body">
+                  <ResearchTable label="預測情境價格表" headers={["交易日", "偏低情境", "中位情境", "偏高情境"]}>
+                    {report.points.map((p) => (
+                      <tr key={p.trading_date}>
+                        <td>{p.trading_date}</td>
+                        <td>{formatPrice(p.lower)}</td>
+                        <td>{formatPrice(p.median)}</td>
+                        <td>{formatPrice(p.upper)}</td>
+                      </tr>
+                    ))}
+                  </ResearchTable>
                 </div>
-              </div>
-              <StatGrid>
-                <Stat label="驗證窗口" value={report.evaluation.windows} />
-                <Stat label="方向命中率" value={formatRatio(report.evaluation.direction_accuracy)} note="猜對漲跌方向的比例" />
-                <Stat label="模型平均誤差" value={formatRatio(report.evaluation.mae_pct)} note="平均絕對誤差 / 當期價格" />
-                <Stat label="價格不變誤差" value={formatRatio(report.evaluation.naive_mae_pct)} note="比較基準" />
-                <Stat label="80% 區間涵蓋率" value={formatRatio(report.evaluation.interval_coverage)} note="實際落在區間內的比例" />
-              </StatGrid>
-              {verdict && (
-                <p className={`callout${verdict.tone === "flat" ? " info" : ""}`}>
-                  <InfoIcon size={16} />
-                  <span>{verdict.text}</span>
-                </p>
-              )}
-              {report.model === "kronos" && (
-                <p className="callout">
-                  <AlertIcon size={16} />
-                  <span>這組驗證數據屬於統計基準，Kronos 的台股樣本外績效尚未驗證。</span>
-                </p>
-              )}
-            </section>
+              </details>
 
-            {report.warnings.length > 0 && (
-              <div className="note-list">
-                {report.warnings.map((w) => (
-                  <p className="note" key={w}>
-                    {w}
+              <section className="validation" aria-labelledby="validation-title">
+                <div className="card-header">
+                  <div>
+                    <h3 className="card-title" id="validation-title">
+                      逐期驗證：這個方法過去準不準
+                    </h3>
+                    <p className="card-sub">
+                      最多 24 個不重疊的歷史窗口，每次只使用當時已知的資料，與「價格維持不變」比較。
+                    </p>
+                  </div>
+                </div>
+                <StatGrid>
+                  <Stat label="驗證窗口" value={report.evaluation.windows} />
+                  <Stat label="方向命中率" value={formatRatio(report.evaluation.direction_accuracy)} note="猜對漲跌方向的比例" />
+                  <Stat label="模型平均誤差" value={formatRatio(report.evaluation.mae_pct)} note="平均絕對誤差 / 當期價格" />
+                  <Stat label="價格不變誤差" value={formatRatio(report.evaluation.naive_mae_pct)} note="比較基準" />
+                  <Stat label="80% 區間涵蓋率" value={formatRatio(report.evaluation.interval_coverage)} note="實際落在區間內的比例" />
+                </StatGrid>
+                {verdict && (
+                  <p className={`callout${verdict.tone === "flat" ? " info" : ""}`}>
+                    <InfoIcon size={16} />
+                    <span>{verdict.text}</span>
                   </p>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          !error && (
-            <EmptyState icon={<FlaskIcon size={22} />} title="先有預測，再看證據">
-              選擇模型與期間，查看未來價格情境，以及統計基準在歷史上的表現。預測是情境，不是答案。
-            </EmptyState>
-          )
-        )}
-      </Card>
+                )}
+                {report.model === "kronos" && (
+                  <p className="callout">
+                    <AlertIcon size={16} />
+                    <span>這組驗證數據屬於統計基準，Kronos 的台股樣本外績效尚未驗證。</span>
+                  </p>
+                )}
+              </section>
+
+              {report.warnings.length > 0 && (
+                <div className="note-list">
+                  {report.warnings.map((w) => (
+                    <p className="note" key={w}>
+                      {w}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            !error && (
+              <EmptyState icon={<FlaskIcon size={22} />} title="先有預測，再看證據">
+                選擇模型與期間，查看未來價格情境，以及統計基準在歷史上的表現。預測是情境，不是答案。
+              </EmptyState>
+            )
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

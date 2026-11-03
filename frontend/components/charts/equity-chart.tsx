@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { ChevronDownIcon } from "@/components/icons";
 import type { EquityPoint } from "@/lib/api/types";
 import { formatNumber, formatPrice, shortDate } from "@/lib/format";
 import { ChartFrame, ChartLegend } from "./chart-frame";
@@ -137,7 +138,10 @@ export function EquityChart({
         ]}
       />
       <details className="disclosure chart-table">
-        <summary>以表格檢視淨值（取樣）</summary>
+        <summary>
+          <span>以表格檢視淨值（取樣）</span>
+          <ChevronDownIcon size={16} />
+        </summary>
         <div className="disclosure-body">
           <div className="table-wrap" tabIndex={0} role="region" aria-label="淨值取樣表">
             <table className="data-table">

@@ -816,3 +816,8 @@ fieldset.field-row,
   flex-direction: column;
   gap: var(--space-2);
 }
+
+.scroll-target {
+  min-width: 0;
+  scroll-margin-top: var(--space-4);
+}

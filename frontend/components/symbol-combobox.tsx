@@ -114,7 +114,14 @@ export function SymbolCombobox({
         kind: "recent" as const,
       }));
     }
-    const rows = search?.rows ?? [];
+    // While a newer query is in flight, keep only earlier rows that still match it.
+    const needle = query.toUpperCase();
+    const rows =
+      search?.query === query
+        ? search.rows
+        : (search?.rows ?? []).filter(
+            (row) => row.symbol.includes(needle) || row.name.toUpperCase().includes(needle),
+          );
     const list: Option[] = rows.map((row) => ({
       key: `result:${row.symbol}`,
       symbol: row.symbol,
@@ -126,7 +133,7 @@ export function SymbolCombobox({
       list.push({ key: `typed:${typedSymbol}`, symbol: typedSymbol, kind: "typed" });
     }
     return list;
-  }, [pristine, recents, search, typedSymbol]);
+  }, [pristine, recents, search, typedSymbol, query]);
 
   const searching = !pristine && (search?.query !== query || search.status === "loading");
   const activeIndex = Math.min(active, options.length - 1);

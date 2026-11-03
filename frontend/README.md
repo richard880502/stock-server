@@ -13,9 +13,53 @@ The default API URL is `http://127.0.0.1:8000`. Configure
 
 ## Layout
 
-- `app/` – routes only: `/` (今日訊號), `/backtest`, `/forecast`, plus the root layout and `globals.css`.
-- `components/` – app shell (login gate, top bar, query bar, tabs) and small shared UI (metric grid, charts, tables, chips, sync notice).
+- `app/` – routes only: `/` (今日訊號), `/backtest`, `/forecast`, plus the root layout, `globals.css` (Tailwind entry) and `styles/` (the design system, below).
+- `components/` – app shell (login gate, sticky header, query bar with the symbol combobox, view tabs, theme toggle) and shared UI (card, stat, chips, direction values, empty states, notices, tables) plus `charts/` (SVG charts).
 - `features/{signal,llm,backtest,forecast}/` – one view per feature with its state hook.
 - `lib/api/` – typed API client: `client.ts` (`fetchJson`, base URL), `auth.ts` (API key storage, `withAuthHeaders`), `endpoints.ts`, `types.ts`, `errors.ts`, `sse.ts`.
 - `lib/dashboard-context.tsx` – symbol / benchmark / as-of date and results shared across routes.
 - `lib/sync-retry.ts` – automatic retry (max 10 tries) for HTTP 503 `sync_pending`.
+
+## Design system
+
+Direction: a calm research notebook rather than a trading terminal. Warm neutral
+surfaces, one blue accent for interaction, generous line height for Traditional
+Chinese, and no glow or gradient decoration. Each view leads with the verdict
+(`.hero` on the signal page, the result headline on backtest / forecast), then
+the evidence, with detail behind `<details>` disclosures.
+
+Stylesheets live in `app/styles/` and are imported by `app/layout.tsx` in this
+order: `tokens.css` (variables) → `base.css` (element defaults, focus, motion
+preferences) → `layout.css` (shell, header, grid) → `components.css` →
+`charts.css` → `views.css`. Tailwind 4 is loaded from `globals.css` for its
+preflight and utilities; the system itself is plain CSS custom properties.
+
+- **Tokens** – colour, type scale (`--text-*`), 4px spacing scale (`--space-*`),
+  radius, elevation (`--shadow-*`), motion (`--dur-*`, `--ease-out`). Colours are
+  `light-dark()` pairs, so one declaration serves both themes.
+- **Themes** – follow `prefers-color-scheme`; the header toggle cycles
+  跟隨系統 → 淺色 → 深色 and stores the choice in `localStorage`
+  (`quant_signal_theme`, access wrapped in try/catch). A small inline script in
+  `<head>` applies a pinned theme before first paint (`lib/theme.ts`).
+- **Taiwan colour convention** – red = up / gain, green = down / loss, via
+  `--up` / `--down` (`.tone-up`, `.tone-down`, `<Direction>`). They are the only
+  red and green in the UI: accent, chart series and warnings use blue, grey and
+  amber. Direction always also carries a sign (`+` / `−`), an arrow or a label.
+  Alert severity uses amber with an icon and a 高 / 中 / 資訊 label.
+- **Accessibility** – text and control tokens are checked for WCAG AA in both
+  themes (text ≥ 4.5:1, control borders ≥ 3:1), visible `:focus-visible`
+  outlines, 44px touch targets, skip link, and `prefers-reduced-motion` removes
+  animation.
+- **Symbol search** – `components/symbol-combobox.tsx` implements the ARIA
+  combobox pattern against `GET /api/v1/instruments/search`; `/` focuses it,
+  arrows / Enter / Esc work, recent symbols (`quant_signal_recent_symbols`) show
+  when the field is untouched, and a well-formed code unknown to the search can
+  still be submitted (the backend syncs it on demand).
+- **Charts** – no chart library. `components/charts/chart-frame.tsx` is the
+  shared shell (responsive width, hover / touch crosshair snapping to the nearest
+  point, tooltip, arrow-key navigation with a live readout, legend);
+  `equity-chart.tsx` and `scenario-chart.tsx` supply geometry and series. Series
+  colours are `--series-*` tokens; each chart has a text / table alternative.
+- **States** – skeletons (`.skeleton`) while loading, `EmptyState` for nothing
+  yet, `ErrorBanner` with retry for failures, and the amber `SyncPendingNotice`
+  (with a countdown and progress bar) for HTTP 503 `sync_pending`.

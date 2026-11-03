@@ -3,7 +3,7 @@
 import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
 import { EmptyState } from "@/components/empty-state";
-import { AlertIcon, ChartIcon, InfoIcon } from "@/components/icons";
+import { AlertIcon, ChartIcon, ChevronDownIcon, InfoIcon } from "@/components/icons";
 import { ResearchTable } from "@/components/research-table";
 import { Stat, StatGrid } from "@/components/stat";
 import { JobStatusChip } from "@/components/status-chip";
@@ -118,7 +118,10 @@ export function BacktestResult() {
 
           {(result.transactions?.length ?? 0) > 0 && (
             <details className="disclosure">
-              <summary>交易明細（{result.transactions!.length} 筆）</summary>
+              <summary>
+                <span>交易明細（{result.transactions!.length} 筆）</span>
+                <ChevronDownIcon size={16} />
+              </summary>
               <div className="disclosure-body">
                 <ResearchTable
                   label="回測交易明細"

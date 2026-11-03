@@ -1,7 +1,7 @@
 /* Charts: SVG styling and the shared hover tooltip, legend and figure frame. */
 
 :root {
-  --chart-hold: light-dark(rgb(42 120 214 / 0.1), rgb(77 147 236 / 0.14));
+  --chart-hold: light-dark(rgb(42 120 214 / 0.07), rgb(77 147 236 / 0.09));
   --chart-forecast-zone: light-dark(rgb(40 36 20 / 0.035), rgb(255 255 255 / 0.035));
 }
 

@@ -75,7 +75,7 @@ export function ConnectionChip({
   return (
     <span className="status-pill" data-state={connected ? "ok" : "idle"}>
       <span className="status-dot" aria-hidden="true" />
-      {children}
+      <span className="status-label">{children}</span>
     </span>
   );
 }

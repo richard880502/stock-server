@@ -89,14 +89,9 @@ export function QueryBar() {
         )}
       </div>
       <button className="button primary submit" disabled={signalData.loading}>
-        {signalData.loading ? (
-          <>
-            <span className="spinner small" aria-hidden="true" />
-            更新中
-          </>
-        ) : (
-          "更新訊號"
-        )}
+        {signalData.loading && <span className="spinner small" aria-hidden="true" />}
+        <span className="submit-short">更新</span>
+        <span className="submit-long">{signalData.loading ? "更新中" : "更新訊號"}</span>
       </button>
     </form>
   );

@@ -1,9 +1,13 @@
 "use client";
 
+import { useDashboard } from "@/lib/dashboard-context";
+import { useScrollIntoViewOnStart } from "@/lib/use-scroll-into-view";
 import { BacktestForm } from "./backtest-form";
 import { BacktestResult } from "./backtest-result";
 
 export function BacktestView() {
+  const { backtest } = useDashboard();
+  useScrollIntoViewOnStart(backtest.loading, "backtest-result");
   return (
     <>
       <div className="view-heading">
@@ -12,7 +16,9 @@ export function BacktestView() {
       </div>
       <div className="workbench">
         <BacktestForm />
-        <BacktestResult />
+        <div id="backtest-result" className="scroll-target">
+          <BacktestResult />
+        </div>
       </div>
     </>
   );
