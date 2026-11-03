@@ -270,3 +270,95 @@ export type ForecastRequest = {
 };
 
 export type SyncSymbolRequest = { symbol: string; start: string; end: string };
+
+// ---- Market rankings and capital flows (GET /api/v1/market/*) ----------------
+
+export type MarketMetric =
+  | "foreign_net"
+  | "trust_net"
+  | "dealer_net"
+  | "total_net"
+  | "volume"
+  | "turnover"
+  | "change_pct"
+  | "margin_change"
+  | "short_change";
+
+/** ALL = 上市 + 上櫃, TW = 上市, TWO = 上櫃. */
+export type MarketScope = "ALL" | "TW" | "TWO";
+
+export type RankingEntry = {
+  rank: number;
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  close: number;
+  /** Percent, e.g. 2.5 means +2.5%. */
+  day_change_pct: number;
+  /** The metric over the window (flows and credit summed, price change compounded). */
+  value: number;
+  volume_lots: number;
+  turnover_value: number;
+};
+
+export type MarketRankings = {
+  metric: MarketMetric;
+  market: MarketScope;
+  window: number;
+  order: "desc" | "asc";
+  as_of: string | null;
+  /** Newest session that has data for this metric. */
+  data_through: string | null;
+  window_start: string | null;
+  trading_days: number;
+  /** 張 for share-based metrics and credit changes, 元 for turnover, % for change_pct. */
+  unit: "張" | "元" | "%";
+  /** A newer session whose quotes are out but whose report is not published yet. */
+  awaiting_report_date: string | null;
+  backfill_pending: boolean;
+  entries: RankingEntry[];
+};
+
+export type MarketFlowDay = {
+  trading_date: string;
+  /**
+   * NT$ estimates (net shares x that day's close). A day that is not reported
+   * yet arrives as 0, so always check institutional_reported / credit_reported.
+   */
+  foreign_net_value: number;
+  trust_net_value: number;
+  dealer_net_value: number;
+  foreign_net_shares: number;
+  trust_net_shares: number;
+  dealer_net_shares: number;
+  turnover_value: number;
+  /** 張. */
+  margin_balance: number;
+  short_balance: number;
+  advancing: number;
+  declining: number;
+  unchanged: number;
+  institutional_reported: boolean;
+  credit_reported: boolean;
+};
+
+export type MarketFlows = {
+  market: MarketScope;
+  as_of: string | null;
+  data_through: string | null;
+  /** Server-side description of how the NT$ values are estimated. */
+  value_basis: string;
+  backfill_pending: boolean;
+  days: MarketFlowDay[];
+};
+
+export type MarketDataStatus = {
+  market: "TW" | "TWO";
+  first_date: string | null;
+  last_date: string | null;
+  trading_days: number;
+  stocks_on_last_day: number;
+  /** 0..1 share of sessions with institutional / credit reports. */
+  institutional_coverage: number;
+  credit_coverage: number;
+};
