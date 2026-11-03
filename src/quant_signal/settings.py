@@ -55,6 +55,26 @@ class Settings(BaseSettings):
     searxng_proxy_url: str | None = None
     searxng_proxy_key: SecretStr = SecretStr("")
     dashboard_password: SecretStr = SecretStr("")
+    # Google sign-in (OAuth authorization-code flow with PKCE, handled by the API).
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    # Where Google sends the browser back; must match the console exactly, e.g.
+    # https://example.com/api/v1/auth/google/callback
+    google_redirect_uri: str = ""
+    # Where to send the browser after login (the dashboard origin); "" = same origin.
+    frontend_url: str = ""
+    # Signs the short-lived OAuth state cookie. Set a long random value in production.
+    session_secret: SecretStr = SecretStr("")
+    session_ttl_days: int = Field(default=30, ge=1, le=365)
+    # Comma-separated allow-lists, applied after Google confirms the email. Both empty
+    # means any verified Google account may sign in.
+    auth_allowed_emails: str = ""
+    auth_allowed_email_domains: str = ""
+    # Daily per-user limits on the expensive endpoints (API keys are exempt).
+    quota_llm_per_day: int = Field(default=20, ge=0)
+    quota_forecast_per_day: int = Field(default=100, ge=0)
+    quota_sync_per_day: int = Field(default=50, ge=0)
+    quota_backtest_per_day: int = Field(default=50, ge=0)
     dashboard_api_key: SecretStr = SecretStr("")
 
     def cors_origin_list(self) -> list[str]:

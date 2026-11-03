@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import logging
 import re
 import secrets
 from collections.abc import AsyncIterator
@@ -13,10 +15,10 @@ import httpx
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from quant_signal.adapters.rest.security import require_api_key
+from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
 from quant_signal.application.data_sync import (
     DataSyncPending,
     TpexDataSyncService,
@@ -38,6 +40,22 @@ from quant_signal.application.services import (
     MarketEnvironmentService,
     NewsSentimentService,
     SignalService,
+)
+from quant_signal.application.user_auth import (
+    SESSION_COOKIE,
+    STATE_COOKIE,
+    GoogleLoginError,
+    cookie_secure,
+    email_allowed,
+    exchange_code,
+    google_enabled,
+    hash_token,
+    new_session_token,
+    parse_id_token,
+    session_expiry,
+    start_login,
+    unsign,
+    utcnow,
 )
 from quant_signal.domain.models import (
     BacktestJob,
@@ -104,13 +122,13 @@ def create_app() -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list(),
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
         # Lets the dashboard read the sync-pending retry delay cross-origin.
         expose_headers=["Retry-After"],
     )
-    router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
+    router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_principal)])
 
     @application.exception_handler(DataSyncPending)
     async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:
@@ -123,6 +141,119 @@ def create_app() -> FastAPI:
     @application.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "quant-signal-server"}
+
+
+    def _login_redirect(path: str, *, error: str | None = None) -> RedirectResponse:
+        base = get_settings().frontend_url.rstrip("/")
+        target = f"{base}/?login_error={error}" if error else f"{base}{path}"
+        response = RedirectResponse(target, status_code=303)
+        response.delete_cookie(STATE_COOKIE, path="/api/v1/auth/google")
+        return response
+
+    @application.get("/api/v1/auth/config")
+    async def auth_config() -> dict[str, bool]:
+        settings = get_settings()
+        return {
+            "google": google_enabled(settings),
+            "password": bool(settings.dashboard_password.get_secret_value()),
+        }
+
+    @application.get("/api/v1/auth/google/login")
+    async def google_login(next: str | None = None) -> RedirectResponse:
+        settings = get_settings()
+        if not google_enabled(settings):
+            raise HTTPException(status_code=503, detail="Google 登入尚未設定")
+        url, state_cookie = start_login(settings, next_path=next, now=utcnow())
+        response = RedirectResponse(url, status_code=303)
+        response.set_cookie(
+            STATE_COOKIE,
+            state_cookie,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+            secure=cookie_secure(settings),
+            path="/api/v1/auth/google",
+        )
+        return response
+
+    @application.get("/api/v1/auth/google/callback")
+    async def google_callback(
+        request: Request,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+    ) -> RedirectResponse:
+        settings = get_settings()
+        now = utcnow()
+        if error:
+            code_name = "access_denied" if error == "access_denied" else "failed"
+            return _login_redirect("/", error=code_name)
+        pending = unsign(request.cookies.get(STATE_COOKIE), settings, now=now)
+        if (
+            not pending
+            or not code
+            or not state
+            or not hmac.compare_digest(state, str(pending.get("state", "")))
+        ):
+            return _login_redirect("/", error="state")
+        try:
+            id_token = await exchange_code(settings, code, str(pending["verifier"]))
+            identity = parse_id_token(
+                id_token,
+                client_id=settings.google_client_id,
+                nonce=str(pending["nonce"]),
+                now=now,
+            )
+        except GoogleLoginError as exc:
+            logging.getLogger(__name__).warning("google login failed: %s (%s)", exc.code, exc)
+            return _login_redirect("/", error=exc.code)
+        if not email_allowed(identity.email, settings):
+            return _login_redirect("/", error="email_not_allowed")
+        user = await repository.upsert_google_user(
+            google_sub=identity.sub,
+            email=identity.email,
+            name=identity.name,
+            picture=identity.picture,
+        )
+        if not user.is_active:
+            return _login_redirect("/", error="disabled")
+        raw, hashed = new_session_token()
+        await repository.create_user_session(
+            user_id=user.id, token_hash=hashed, expires_at=session_expiry(settings, now=now)
+        )
+        response = _login_redirect(str(pending.get("next") or "/"))
+        response.set_cookie(
+            SESSION_COOKIE,
+            raw,
+            max_age=settings.session_ttl_days * 86400,
+            httponly=True,
+            samesite="lax",
+            secure=cookie_secure(settings),
+            path="/",
+        )
+        return response
+
+    @application.get("/api/v1/auth/me")
+    async def auth_me(
+        principal: Annotated[Principal, Depends(require_principal)],
+    ) -> dict:
+        if principal.kind != "user" or principal.user is None:
+            raise HTTPException(status_code=401, detail="未登入")
+        user = principal.user
+        return {"id": str(user.id), "email": user.email, "name": user.name, "picture": user.picture}
+
+    @application.post("/api/v1/auth/logout")
+    async def auth_logout(
+        request: Request,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> JSONResponse:
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            await repository.delete_user_session(hash_token(token))
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @application.post("/api/v1/auth/login")
     async def login(request: LoginRequest) -> dict[str, str]:
@@ -146,7 +277,11 @@ def create_app() -> FastAPI:
                 pass
         return {"bootstrap": True, "kronos": ready, "kronos_configured": bool(url)}
 
-    @router.post("/forecasts", response_model=ForecastReport)
+    @router.post(
+        "/forecasts",
+        response_model=ForecastReport,
+        dependencies=[Depends(enforce_quota("forecast"))],
+    )
     async def create_forecast(
         request: ForecastRequest,
         repository: Annotated[QuantRepository, Depends(get_repository)],
@@ -181,7 +316,7 @@ def create_app() -> FastAPI:
     ) -> list[Instrument]:
         return await InstrumentSearchService(repository).search(q)
 
-    @router.post("/sync/symbol")
+    @router.post("/sync/symbol", dependencies=[Depends(enforce_quota("sync"))])
     async def sync_symbol(
         request: SymbolSyncRequest,
         repository: Annotated[QuantRepository, Depends(get_repository)],
@@ -271,6 +406,7 @@ def create_app() -> FastAPI:
         "/backtests",
         response_model=BacktestJob,
         status_code=202,
+        dependencies=[Depends(enforce_quota("backtest"))],
     )
     async def start_backtest(
         spec: BacktestSpec,
@@ -361,6 +497,7 @@ def create_app() -> FastAPI:
     @router.post(
         "/llm-analyses",
         response_model=LLMAnalysisReport,
+        dependencies=[Depends(enforce_quota("llm"))],
     )
     async def create_llm_analysis(
         request: LLMAnalysisRequest,
@@ -394,6 +531,7 @@ def create_app() -> FastAPI:
     @router.post(
         "/debate-analyses",
         response_model=DebateAnalysisReport,
+        dependencies=[Depends(enforce_quota("llm"))],
     )
     async def create_debate_analysis(
         request: LLMAnalysisRequest,
@@ -425,7 +563,7 @@ def create_app() -> FastAPI:
         except (ValueError, httpx.HTTPError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    @router.post("/llm-analyses/stream")
+    @router.post("/llm-analyses/stream", dependencies=[Depends(enforce_quota("llm"))])
     async def stream_llm_guidance(
         request: LLMAnalysisRequest,
         repository: Annotated[QuantRepository, Depends(get_repository)],

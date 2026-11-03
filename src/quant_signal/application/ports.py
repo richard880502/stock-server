@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -25,6 +25,7 @@ from quant_signal.domain.models import (
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
+    User,
 )
 
 
@@ -179,3 +180,24 @@ class QuantRepository(Protocol):
     ) -> list[tuple[str, date, float, float, int]]: ...
 
     async def has_active_sync_job(self, kind: SyncJobKind) -> bool: ...
+
+    async def upsert_google_user(
+        self,
+        *,
+        google_sub: str,
+        email: str,
+        name: str | None,
+        picture: str | None,
+    ) -> User: ...
+
+    async def create_user_session(
+        self, *, user_id: UUID, token_hash: str, expires_at: datetime
+    ) -> None: ...
+
+    async def get_user_by_session(self, token_hash: str, *, now: datetime) -> User | None: ...
+
+    async def delete_user_session(self, token_hash: str) -> None: ...
+
+    async def consume_usage(
+        self, user_id: UUID, action: str, day: date, *, limit: int
+    ) -> tuple[bool, int]: ...

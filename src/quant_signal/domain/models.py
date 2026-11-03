@@ -621,3 +621,14 @@ class ApiKey(BaseModel):
     @property
     def is_active(self) -> bool:
         return self.revoked_at is None
+
+
+class User(BaseModel):
+    id: UUID
+    google_sub: str
+    email: str
+    name: str | None = None
+    picture: str | None = None
+    is_active: bool = True
+    created_at: datetime
+    last_login_at: datetime | None = None
