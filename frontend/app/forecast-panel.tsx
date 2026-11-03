@@ -24,6 +24,8 @@ export function ForecastPanel({ symbol, asOf, apiUrl, fetcher }: {
   const [kronos, setKronos] = useState(false);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
@@ -41,6 +43,19 @@ export function ForecastPanel({ symbol, asOf, apiUrl, fetcher }: {
     } catch (e) { setError(e instanceof Error ? e.message : "無法產生預測"); }
     finally { setLoading(false); }
   }
+  async function syncHistory() {
+    setSyncing(true); setError(null); setSyncNote(null); setReport(null);
+    const start = new Date(`${asOf}T00:00:00Z`);
+    start.setUTCDate(start.getUTCDate() - Math.ceil(lookback * 1.8) - 90);
+    try {
+      await fetcher(`${apiUrl}/api/v1/sync/symbol`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: symbol.trim(), start: start.toISOString().slice(0, 10), end: asOf }),
+      });
+      setSyncNote("官方日 K 同步完成，可重新產生預測。");
+    } catch (e) { setError(e instanceof Error ? e.message : "歷史資料同步失敗"); }
+    finally { setSyncing(false); }
+  }
   return <section className="backtest-layout forecast-layout">
     <form className="backtest-form" onSubmit={run}>
       <div><p className="eyebrow">FORECAST LAB</p><h2>看見可能的路徑。</h2>
@@ -54,7 +69,9 @@ export function ForecastPanel({ symbol, asOf, apiUrl, fetcher }: {
       <label><span>歷史觀察窗口</span><select value={lookback} onChange={e => setLookback(Number(e.target.value))}>
         {[60, 120, 250, 512].map(n => <option key={n} value={n}>{n} 根日 K</option>)}</select></label>
       <div className="cost-note">{symbol.toUpperCase()} · 截止 {asOf}<br />Kronos {kronos ? "服務已就緒" : "服務尚未連接"}；統計基準可獨立使用。</div>
-      <button className="primary-button full" disabled={loading}>{loading ? "正在生成情境…" : "產生預測"}</button>
+      <button className="primary-button full" disabled={loading || syncing}>{loading ? "正在生成情境…" : "產生預測"}</button>
+      <button className="history-sync-button" type="button" disabled={loading || syncing} onClick={syncHistory}>{syncing ? "正在同步官方日 K…" : "同步官方日 K"}</button>
+      {syncNote && <p className="research-note" role="status">{syncNote}</p>}
       <p className="research-note">預測尚未用於策略回測的進出場判斷。歷史驗證與策略報酬是不同的衡量方式。</p>
     </form>
     <div className="backtest-result">
