@@ -1,10 +1,17 @@
 import { AlertIcon, XIcon } from "./icons";
 
-/** Network failures surface as bare "Failed to fetch"; say what actually happened. */
+/** Translate the common raw failures (network, short history) into plain Traditional Chinese. */
 function friendlyMessage(message: string): { text: string; detail?: string } {
   if (/failed to fetch|load failed|networkerror|network request failed/i.test(message)) {
     return {
       text: "無法連線到量化服務。請確認服務已啟動、網路正常，稍後再試一次。",
+      detail: message,
+    };
+  }
+  const required = message.match(/at least (\d+) point-in-time/i);
+  if (required) {
+    return {
+      text: `截止日之前的歷史資料不足（至少需要 ${required[1]} 個交易日）。請選擇較晚的資料截止日，或先同步更多歷史資料。`,
       detail: message,
     };
   }
