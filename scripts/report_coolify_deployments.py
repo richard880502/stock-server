@@ -27,11 +27,12 @@ SERVICES = {
 }
 
 
-def request(base, path, token, data=None):
+def request(base, path, token, data=None, method=None):
     body = None if data is None else json.dumps(data).encode()
     req = urllib.request.Request(
         base + path,
         data=body,
+        method=method,
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -87,6 +88,21 @@ def main():
         + "/actions/runs/"
         + os.environ["GITHUB_RUN_ID"]
     )
+    check = request(
+        gh_base,
+        "/check-runs",
+        gh_token,
+        {
+            "name": "Coolify",
+            "head_sha": sha,
+            "status": "in_progress",
+            "details_url": run_url,
+            "output": {
+                "title": "Checking deployed services" if manual else "Deployment in progress",
+                "summary": "Waiting for: " + ", ".join(selected),
+            },
+        },
+    )
     pending = {name: {"id": None, "deployment": None} for name in selected}
     started = time.monotonic()
     failures = []
@@ -104,6 +120,19 @@ def main():
                 "environment_url": SITE,
                 "auto_inactive": True,
             },
+        )
+
+    def finish_check(conclusion, title):
+        request(
+            gh_base,
+            f"/check-runs/{check['id']}",
+            gh_token,
+            {
+                "status": "completed",
+                "conclusion": conclusion,
+                "output": {"title": title, "summary": "\n".join(summary) or run_url},
+            },
+            method="PATCH",
         )
 
     try:
@@ -164,6 +193,7 @@ def main():
             if pending:
                 time.sleep(15)
     except Exception:
+        finish_check("failure", "Deployment reporting failed")
         for record in pending.values():
             if record["id"]:
                 status(record, "failure", "Deployment reporter failed; see Actions logs")
@@ -171,6 +201,10 @@ def main():
     finally:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
             output.write("## Coolify deployments\n\n" + "\n".join(summary) + "\n")
+    finish_check(
+        "failure" if failures else "success",
+        "Deployment failed" if failures else "Deployed successfully",
+    )
     if failures:
         raise RuntimeError("Failed Coolify services: " + ", ".join(failures))
 
