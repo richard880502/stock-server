@@ -246,6 +246,30 @@ class TwseDataSyncService:
                 coverage.get(month.strftime("%Y-%m")), _month_end(month)
             )
         ]
+        trusted: set[date] = set()
+        if not is_index:
+            # Stored bars with no coverage record predate this ledger (or came from
+            # an older sync), so their adjustment factors cannot be trusted as a
+            # starting point. Rebuild those months on one consistent basis.
+            stored_months = sorted(
+                {
+                    _month_start(bar.trading_date)
+                    for bar in await self.repository.list_bars(normalized, end=end)
+                    if bar.source == self.provider_source
+                }
+            )
+            known = await self.repository.list_fetch_coverage(
+                self.provider_source,
+                dataset,
+                normalized,
+                [month.strftime("%Y-%m") for month in stored_months],
+            )
+            trusted = {
+                month
+                for month in stored_months
+                if known.get(month.strftime("%Y-%m")) is not None
+            }
+            pending = sorted(set(pending) | (set(stored_months) - trusted))
         received = inserted = actions_received = adjusted = 0
         for run in _consecutive_runs(
             pending, step=lambda day: _month_end(day) + timedelta(days=1)
@@ -253,7 +277,7 @@ class TwseDataSyncService:
             run_start = run[0]
             run_end = min(_month_end(run[-1]), end)
             run_bars, run_actions = await self._fetch_run(
-                normalized, run_start, run_end, is_index=is_index
+                normalized, run_start, run_end, is_index=is_index, trusted=trusted
             )
             name = (
                 self.index_name if is_index else self.provider.instrument_names.get(normalized)
@@ -299,7 +323,7 @@ class TwseDataSyncService:
             corporate_actions_received=actions_received,
             adjusted_bars=adjusted,
             periods_fetched=len(pending),
-            periods_skipped=len(months) - len(pending),
+            periods_skipped=len(set(months) - set(pending)),
             notes=[
                 (
                     "Prices use point-in-time-safe forward adjustment from official "
@@ -316,6 +340,7 @@ class TwseDataSyncService:
         run_end: date,
         *,
         is_index: bool,
+        trusted: set[date] | None = None,
     ) -> tuple[list[Bar], list[CorporateAction]]:
         if is_index:
             return await self.provider.fetch_index_bars(start=run_start, end=run_end), []
@@ -331,7 +356,13 @@ class TwseDataSyncService:
             )
             if bar.source == self.provider_source
         ]
-        resume = prior[-1] if prior and prior[-1].adjusted_close is not None else None
+        resume = (
+            prior[-1]
+            if prior
+            and prior[-1].adjusted_close is not None
+            and (trusted is None or _month_start(prior[-1].trading_date) in trusted)
+            else None
+        )
         # With a stored predecessor only newer events matter; otherwise rebuild
         # the factor from the first event the exchange publishes.
         actions = await self.provider.fetch_corporate_actions(
