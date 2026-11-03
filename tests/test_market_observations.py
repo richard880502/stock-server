@@ -232,3 +232,34 @@ async def test_existing_official_observations_are_never_rebuilt() -> None:
 
     assert days[59] not in provider.calls
     assert len(provider.calls) == 5
+
+
+async def test_new_listings_join_the_universe_after_sixty_closes() -> None:
+    repository = MemoryQuantRepository()
+    days = _sessions(70)
+    rows: list[MarketStockDay] = []
+    for index, day in enumerate(days):
+        rows.append(_stock("1101.TW", day, 100 + index, 1.0))
+        rows.append(_stock("1102.TW", day, 200 - index, -1.0))
+        if index >= 8:  # lists on the 9th session
+            rows.append(_stock("1109.TW", day, 30.0, 0.0))
+    await repository.upsert_market_stock_days(rows)
+    service = MarketObservationSyncService(
+        repository,
+        _Provider(),
+        market="TW",
+        source=SOURCE,
+        history_sessions=70,
+        minimum_history=65,  # sessions of stored history a date needs
+        minimum_stock_history=60,  # closes a stock needs to be counted
+        clock=lambda: datetime.combine(days[-1], time(8), tzinfo=UTC),
+    )
+
+    await service.sync(end=days[-1])
+
+    totals = {
+        o.trading_date: o.total_issues for o in await repository.list_market_observations("TW")
+    }
+    # The newcomer has 57, 58, 59 closes on sessions 65-67 and 60+ from session 68.
+    assert [totals[d] for d in days[64:67]] == [2, 2, 2]
+    assert [totals[d] for d in days[67:]] == [3, 3, 3]

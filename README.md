@@ -465,7 +465,8 @@ three-institution net buy/sell, and margin/short balance in
 `market_stock_daily` (about 1,100 TWSE + 850 TPEx rows per trading day, from
 `MI_INDEX`/`T86`/`MI_MARGN` and the TPEx equivalents). The first run fills
 `SYNC_MARKET_LOOKBACK_DAYS` (default 520 calendar days, about 2,600 polite
-requests, roughly 20 to 30 minutes) of history automatically; afterwards only new days
+requests; measured at about 5 sessions per minute per exchange, so plan on an
+hour or more) of history automatically; afterwards only new days
 are fetched. A day fetched before its reports were published is refetched the
 next day, and holidays are remembered.
 
@@ -497,7 +498,8 @@ curl "http://127.0.0.1:18100/api/v1/market/data-status"
   from the stored closes; only the official market-level figures (index close,
   total turnover, institutional NT$ flows, margin and short balances) are
   requested, once per new session. A session is built only when 252 earlier
-  sessions of closes are stored (hence the 520-day first backfill), existing
+  sessions of closes are stored (hence the 520-day first backfill) and a stock
+  counts once it has 60 closes, as in the full rebuild; existing
   official observations are never rewritten, and a day whose capital reports
   were not out yet is retried the next day. A freshly deployed worker therefore
   backfills and keeps `/market-environments/TW` current on its own;

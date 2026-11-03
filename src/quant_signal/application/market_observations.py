@@ -112,6 +112,7 @@ class MarketObservationSyncService:
         source: str,
         history_sessions: int = 252,
         minimum_history: int = 252,
+        minimum_stock_history: int = 60,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository
@@ -120,6 +121,9 @@ class MarketObservationSyncService:
         self.source = source
         self.history_sessions = history_sessions
         self.minimum_history = minimum_history
+        # A stock joins the breadth universe after 60 closes, the same rule the
+        # full rebuild uses, so new listings are not dropped for a year.
+        self.minimum_stock_history = minimum_stock_history
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def sync(self, *, end: date, max_days: int = 150) -> DataSyncReport:
@@ -214,7 +218,9 @@ class MarketObservationSyncService:
         rows: list[tuple[str, float, float, int]],
         histories: dict[str, deque[float]],
     ) -> MarketObservation | None:
-        breadth = compute_breadth(rows, histories, minimum_history=self.minimum_history)
+        breadth = compute_breadth(
+            rows, histories, minimum_history=self.minimum_stock_history
+        )
         if breadth is None:
             return None
         market = await self.provider.fetch_market_day(day)
