@@ -102,6 +102,8 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+        # Lets the dashboard read the sync-pending retry delay cross-origin.
+        expose_headers=["Retry-After"],
     )
     router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_api_key)])
 
