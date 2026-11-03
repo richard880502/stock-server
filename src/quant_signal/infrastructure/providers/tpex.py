@@ -7,8 +7,14 @@ from typing import Any
 
 import httpx
 
-from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow
+from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow, MarketStockDay
 from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
+from quant_signal.infrastructure.providers.market_snapshot import (
+    StockCredit,
+    StockFlow,
+    build_market_stock_days,
+    to_int,
+)
 from quant_signal.infrastructure.providers.twse import (
     TwseDailyMarket,
     TwseSecurityQuote,
@@ -22,6 +28,13 @@ from quant_signal.infrastructure.providers.twse import (
 
 TPEX_BASE_URL = "https://www.tpex.org.tw"
 TPEX_SOURCE = "tpex_official"
+
+
+def _signed_change(value: Any) -> float:
+    try:
+        return float(str(value).strip().replace(",", "").replace("+", ""))
+    except ValueError:
+        return 0.0
 
 
 class TpexProvider:
@@ -196,6 +209,64 @@ class TpexProvider:
         if parsed is None:
             return None
         return await self.enrich_market_day(parsed)
+
+    async def fetch_market_stock_day(self, trading_date: date) -> list[MarketStockDay]:
+        """Every common OTC stock's quote, institutional flow and credit balance."""
+        market = await self.fetch_market_quotes(trading_date)
+        if market is None:
+            return []
+        requested = trading_date.strftime("%Y/%m/%d")
+        flow_payload = await self._get_json(
+            "/www/zh-tw/insti/dailyTrade",
+            {"type": "Daily", "sect": "EW", "date": requested, "response": "json"},
+        )
+        credit_payload = await self._get_json(
+            "/www/zh-tw/margin/balance",
+            {"date": requested, "response": "json"},
+        )
+        return build_market_stock_days(
+            market.quotes,
+            market="TWO",
+            source=TPEX_SOURCE,
+            available_at=_available_at(trading_date),
+            flows=self.parse_all_stock_flows(flow_payload),
+            credit=self.parse_all_stock_credit(credit_payload),
+            trading_date=trading_date,
+        )
+
+    @staticmethod
+    def parse_all_stock_flows(payload: dict[str, Any]) -> dict[str, StockFlow]:
+        tables = payload.get("tables") or []
+        rows = (tables[0].get("data") or []) if tables else []
+        flows: dict[str, StockFlow] = {}
+        for row in rows:
+            try:
+                flows[str(row[0]).strip()] = StockFlow(
+                    foreign_net=to_int(row[4]),
+                    trust_net=to_int(row[13]),
+                    dealer_net=to_int(row[22]),
+                    total_net=to_int(row[23]),
+                )
+            except (IndexError, TypeError, ValueError):
+                continue
+        return flows
+
+    @staticmethod
+    def parse_all_stock_credit(payload: dict[str, Any]) -> dict[str, StockCredit]:
+        tables = payload.get("tables") or []
+        rows = (tables[0].get("data") or []) if tables else []
+        credit: dict[str, StockCredit] = {}
+        for row in rows:
+            try:
+                credit[str(row[0]).strip()] = StockCredit(
+                    margin_balance=to_int(row[6]),
+                    margin_change=to_int(row[6]) - to_int(row[2]),
+                    short_balance=to_int(row[14]),
+                    short_change=to_int(row[14]) - to_int(row[10]),
+                )
+            except (IndexError, TypeError, ValueError):
+                continue
+        return credit
 
     async def fetch_institutional_flow(
         self,
@@ -407,6 +478,7 @@ class TpexProvider:
                         volume=_integer(row[8]),
                         turnover_value=value,
                         direction=direction,
+                        change=_signed_change(row[3]),
                     )
                 )
             except (IndexError, TypeError, ValueError):

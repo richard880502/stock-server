@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from quant_signal.domain.models import (
     ApiKey,
@@ -17,8 +18,11 @@ from quant_signal.domain.models import (
     InstitutionalFlow,
     Instrument,
     JobStatus,
+    MarketDataStatus,
     MarketEnvironmentSnapshot,
+    MarketFlowDay,
     MarketObservation,
+    MarketStockDay,
     NewsItem,
     SignalSnapshot,
     SyncJob,
@@ -44,6 +48,7 @@ class MemoryQuantRepository:
         self.news_items: dict[str, list[NewsItem]] = {}
         self.fetch_coverage: dict[tuple[str, str, str, str], FetchCoverage] = {}
         self.sync_jobs: dict[UUID, SyncJob] = {}
+        self.market_stock_days: dict[tuple[str, date, str], MarketStockDay] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -532,4 +537,127 @@ class MemoryQuantRepository:
             symbol
             for symbol, instrument in self.instruments.items()
             if instrument.market in ("TW", "TWO")
+        )
+
+    async def upsert_market_stock_days(self, rows: list[MarketStockDay]) -> int:
+        for item in rows:
+            self.market_stock_days[(item.symbol, item.trading_date, item.source)] = item
+        return len(rows)
+
+    def _market_rows(
+        self, market: str | None, as_of: date | None
+    ) -> list[MarketStockDay]:
+        cutoff = (
+            datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei")) if as_of else None
+        )
+        return [
+            item
+            for item in self.market_stock_days.values()
+            if (not market or market == "ALL" or item.market == market)
+            and (as_of is None or item.trading_date <= as_of)
+            and (cutoff is None or item.available_at <= cutoff)
+        ]
+
+    async def list_market_trading_dates(
+        self,
+        market: str | None,
+        *,
+        as_of: date | None,
+        limit: int,
+        require: str | None = None,
+    ) -> list[date]:
+        rows = self._market_rows(market, as_of)
+        by_day: dict[date, list[MarketStockDay]] = {}
+        for item in rows:
+            by_day.setdefault(item.trading_date, []).append(item)
+        if require is not None:
+            by_day = {
+                day: group
+                for day, group in by_day.items()
+                if self._all_markets_reported(group, require)
+            }
+        return sorted(by_day, reverse=True)[:limit]
+
+    @staticmethod
+    def _all_markets_reported(group: list[MarketStockDay], attr: str) -> bool:
+        """A session counts once every market present that day has published it."""
+        markets = {item.market for item in group}
+        reported = {item.market for item in group if getattr(item, attr) is not None}
+        return markets == reported
+
+    async def list_market_stock_days(
+        self, dates: list[date], market: str | None, *, as_of: date | None = None
+    ) -> list[MarketStockDay]:
+        wanted = set(dates)
+        return [i for i in self._market_rows(market, as_of) if i.trading_date in wanted]
+
+    async def market_flow_totals(
+        self, dates: list[date], market: str | None, *, as_of: date | None = None
+    ) -> list[MarketFlowDay]:
+        rows = await self.list_market_stock_days(dates, market, as_of=as_of)
+        result: list[MarketFlowDay] = []
+        for day in sorted(set(dates)):
+            group = [r for r in rows if r.trading_date == day]
+
+            def net(attr: str, group: list[MarketStockDay] = group) -> list[tuple[int, float]]:
+                return [(getattr(r, attr) or 0, r.close) for r in group]
+
+            result.append(
+                MarketFlowDay(
+                    trading_date=day,
+                    foreign_net_value=sum(n * c for n, c in net("foreign_net")),
+                    trust_net_value=sum(n * c for n, c in net("trust_net")),
+                    dealer_net_value=sum(n * c for n, c in net("dealer_net")),
+                    foreign_net_shares=sum(n for n, _ in net("foreign_net")),
+                    trust_net_shares=sum(n for n, _ in net("trust_net")),
+                    dealer_net_shares=sum(n for n, _ in net("dealer_net")),
+                    turnover_value=sum(r.turnover_value for r in group),
+                    margin_balance=sum(r.margin_balance or 0 for r in group),
+                    short_balance=sum(r.short_balance or 0 for r in group),
+                    advancing=sum(r.change > 0 for r in group),
+                    declining=sum(r.change < 0 for r in group),
+                    unchanged=sum(r.change == 0 for r in group),
+                    institutional_reported=self._all_markets_reported(group, "total_net"),
+                    credit_reported=self._all_markets_reported(group, "margin_balance"),
+                )
+            )
+        return result
+
+    async def market_data_status(self) -> list[MarketDataStatus]:
+        result: list[MarketDataStatus] = []
+        for market in ("TW", "TWO"):
+            rows = self._market_rows(market, None)
+            if not rows:
+                continue
+            dates = sorted({r.trading_date for r in rows})
+            latest = [r for r in rows if r.trading_date == dates[-1]]
+            result.append(
+                MarketDataStatus(
+                    market=market,  # type: ignore[arg-type]
+                    first_date=dates[0],
+                    last_date=dates[-1],
+                    trading_days=len(dates),
+                    stocks_on_last_day=len(latest),
+                    institutional_coverage=sum(r.total_net is not None for r in latest)
+                    / len(latest),
+                    credit_coverage=sum(r.margin_balance is not None for r in latest)
+                    / len(latest),
+                )
+            )
+        return result
+
+    async def list_market_closes(
+        self, dates: list[date], market: str
+    ) -> list[tuple[str, date, float, float, int]]:
+        wanted = set(dates)
+        return [
+            (r.symbol, r.trading_date, r.close, r.change, r.volume)
+            for r in self.market_stock_days.values()
+            if r.market == market and r.trading_date in wanted
+        ]
+
+    async def has_active_sync_job(self, kind: SyncJobKind) -> bool:
+        return any(
+            job.kind == kind and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+            for job in self.sync_jobs.values()
         )

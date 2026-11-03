@@ -1,0 +1,448 @@
+/* Market view: filters, ranking boards and the capital-flow section. */
+
+:root {
+  /* Institution series: blue / amber / violet, never red or green (those mean up / down). */
+  --series-foreign: light-dark(#246fd0, #4d93ec);
+  --series-trust: light-dark(#b36200, #e8a33d);
+  --series-dealer: light-dark(#7a55c9, #a88be8);
+  --series-neutral: light-dark(#6a675e, #a3a096);
+}
+
+/* ---- Filters ---------------------------------------------------------- */
+
+.market-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-8);
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.metric-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.metric-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.metric-group-label {
+  flex: none;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 719px) {
+  .control-row > .control {
+    flex: 1 1 100%;
+  }
+
+  .control-row .segmented {
+    display: flex;
+  }
+
+  .control-row .segmented button {
+    flex: 1;
+    padding-inline: var(--space-2);
+  }
+
+  .metric-groups {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .metric-group {
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .metric-group .segmented {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-group .segmented button:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .metric-group .segmented button {
+    padding-inline: var(--space-2);
+  }
+}
+
+/* ---- Ranking boards ---------------------------------------------------- */
+
+.board-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1100px) {
+  .board-grid:has(> :nth-child(2)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.rank-board {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.board-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rank-table {
+  width: 100%;
+  font-size: var(--text-sm);
+}
+
+.rank-table th,
+.rank-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: right;
+  vertical-align: middle;
+  font-weight: var(--weight-regular);
+}
+
+.rank-table thead th {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.rank-table .col-rank {
+  width: 2.5rem;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.rank-table .col-stock {
+  text-align: left;
+}
+
+.rank-table tbody tr + tr > * {
+  border-top: 1px solid var(--border);
+}
+
+.rank-row {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.rank-row:hover {
+  background: var(--surface-2);
+}
+
+.rank-row:focus-within {
+  background: var(--surface-2);
+}
+
+.stock-link {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  line-height: 1.35;
+}
+
+.stock-code {
+  font-weight: var(--weight-strong);
+  color: var(--text);
+}
+
+.stock-name {
+  color: var(--text-2);
+}
+
+.market-tag {
+  padding: 0 0.4em;
+  border-radius: var(--radius-sm);
+  background: var(--flat-soft);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.col-value {
+  min-width: 9.5rem;
+}
+
+.value-num {
+  display: block;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.value-bar {
+  display: block;
+  height: 5px;
+  margin-top: 4px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.value-bar-fill {
+  display: block;
+  height: 100%;
+  margin-left: auto;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-slow) var(--ease-out);
+}
+
+.value-bar-fill.up {
+  background: var(--up);
+}
+
+.value-bar-fill.down {
+  background: var(--down);
+}
+
+.col-turnover {
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.board-more {
+  margin-top: var(--space-3);
+}
+
+/* Narrow boards (phones, or two columns on small laptops): each row becomes a card. */
+@container (max-width: 33rem) {
+  .rank-table,
+  .rank-table tbody {
+    display: block;
+  }
+
+  .rank-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .rank-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .rank-row {
+    display: grid;
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "rank stock change"
+      "rank value value"
+      "rank close turnover";
+    align-items: center;
+    gap: 2px var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+  }
+
+  .rank-table tbody tr + tr > *,
+  .rank-table tbody > tr > * {
+    border-top: 0;
+    padding: 0;
+  }
+
+  .rank-row .col-rank {
+    grid-area: rank;
+    align-self: start;
+    width: auto;
+    padding-top: 0.3rem;
+    text-align: left;
+  }
+
+  .rank-row .col-stock {
+    grid-area: stock;
+    min-width: 0;
+  }
+
+  .rank-row .col-change {
+    grid-area: change;
+    justify-self: end;
+  }
+
+  .rank-row .col-value {
+    grid-area: value;
+    min-width: 0;
+    text-align: left;
+    padding-block: var(--space-1);
+  }
+
+  .rank-row .col-value .value-num {
+    font-size: var(--text-base);
+  }
+
+  .rank-row .value-bar-fill {
+    margin-left: 0;
+  }
+
+  .rank-row .col-close {
+    grid-area: close;
+    text-align: left;
+  }
+
+  .rank-row .col-turnover {
+    grid-area: turnover;
+    justify-self: end;
+  }
+
+  .rank-row .col-close,
+  .rank-row .col-turnover {
+    font-size: var(--text-xs);
+    color: var(--text-3);
+  }
+
+  .rank-row .col-close::before,
+  .rank-row .col-turnover::before {
+    content: attr(data-label) " ";
+  }
+}
+
+/* ---- Capital-flow trend ------------------------------------------------ */
+
+.flow-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-body,
+.flow-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.flow-card .chart-figure {
+  gap: var(--space-4);
+}
+
+.flow-card .callout {
+  margin-bottom: var(--space-4);
+}
+
+.flow-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+
+.flow-cumulative {
+  align-items: center;
+  min-height: var(--touch);
+}
+
+.estimate-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.estimate-note .chip {
+  flex: none;
+  padding-block: 0;
+  font-size: var(--text-xs);
+}
+
+.trend-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1000px) {
+  .trend-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.trend-card {
+  min-width: 0;
+}
+
+.trend-card .card-header {
+  margin-bottom: var(--space-2);
+}
+
+.trend-latest {
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+}
+
+.breadth-legend {
+  margin-top: var(--space-2);
+}
+
+.data-table tbody th {
+  font-weight: var(--weight-regular);
+  text-align: left;
+}
+
+/* ---- Footer notes ------------------------------------------------------- */
+
+.market-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.data-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.data-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+}
+
+.data-status-row dt {
+  font-weight: var(--weight-strong);
+  color: var(--text-2);
+}

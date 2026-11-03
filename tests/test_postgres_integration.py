@@ -1,8 +1,15 @@
 """Exercises the PostgreSQL repository against a real database.
 
-Skipped unless ``QUANT_TEST_DATABASE_URL`` points at a migrated database, e.g.
-``postgresql+asyncpg://quant:quant@127.0.0.1:15432/quant_signal`` from
-``docker compose up -d postgres && uv run alembic upgrade head``.
+Skipped unless ``QUANT_TEST_DATABASE_URL`` points at a migrated, **dedicated**
+database. Several tests claim whichever job is oldest and the daily-refresh test
+queues jobs for every tracked symbol, so never aim this at a database a live
+worker is using::
+
+    docker compose up -d postgres
+    docker compose exec postgres psql -U quant -d postgres -c "create database quant_test"
+    URL=postgresql+asyncpg://quant:quant@127.0.0.1:15432/quant_test
+    DATABASE_URL=$URL uv run alembic upgrade head
+    QUANT_TEST_DATABASE_URL=$URL uv run --all-groups pytest tests/test_postgres_integration.py
 """
 
 from __future__ import annotations
@@ -19,8 +26,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from quant_signal.application.data_sync import TwseDataSyncService
+from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.sync_jobs import enqueue_daily_refresh, process_next_job
-from quant_signal.domain.models import FetchCoverage, JobStatus, SyncJobKind
+from quant_signal.domain.models import FetchCoverage, JobStatus, MarketStockDay, SyncJobKind
 from quant_signal.infrastructure.db import PostgresQuantRepository
 
 DATABASE_URL = os.environ.get("QUANT_TEST_DATABASE_URL")
@@ -33,10 +41,11 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     factory = async_sessionmaker(engine, expire_on_commit=False)
     yield factory
     async with factory() as session:
-        await session.execute(text("DELETE FROM sync_jobs WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(text("DELETE FROM sync_jobs"))
         await session.execute(text("DELETE FROM fetch_coverage WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM fetch_coverage WHERE source = 'scheduler'"))
         await session.execute(text("DELETE FROM instruments WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(text("DELETE FROM market_stock_daily WHERE symbol LIKE 'ZZ%'"))
         await session.commit()
     await engine.dispose()
 
@@ -170,5 +179,84 @@ async def test_daily_refresh_is_recorded_so_it_runs_once(sessions) -> None:
         second = await enqueue_daily_refresh(
             repo, now=now, daily_time="15:30", lookback_days=500
         )
-    assert first == 2  # prices + institutional flows for the one tracked symbol
+    assert first == 4  # 2 market jobs + prices and flows for the one tracked symbol
     assert second == 0
+
+
+# Far-future dates keep these rows isolated from any real data in a dev database.
+Z1, Z2, Z3 = date(2099, 3, 2), date(2099, 3, 3), date(2099, 3, 4)
+
+
+def _market_row(symbol: str, day: date, **kwargs) -> MarketStockDay:
+    base = {
+        "name": symbol,
+        "market": "TW",
+        "open": 100.0,
+        "high": 100.0,
+        "low": 100.0,
+        "close": 100.0,
+        "volume": 2_000_000,
+        "turnover_value": 2e8,
+        "change": 1.0,
+        "foreign_net": 0,
+        "trust_net": 0,
+        "dealer_net": 0,
+        "total_net": 0,
+        "margin_balance": 500,
+        "margin_change": 10,
+        "short_balance": 5,
+        "short_change": 1,
+        "available_at": datetime.combine(day, time(10), tzinfo=UTC),
+        "source": "twse_official",
+    }
+    return MarketStockDay(symbol=symbol, trading_date=day, **{**base, **kwargs})
+
+
+async def test_market_stock_days_rank_and_aggregate_in_sql(sessions) -> None:
+    a, b = _symbol(), _symbol()
+    rows = [
+        _market_row(a, Z1, foreign_net=1_000_000, close=100.0),
+        _market_row(a, Z2, foreign_net=2_000_000, close=110.0, change=10.0),
+        _market_row(a, Z3, foreign_net=3_000_000, close=120.0, change=10.0),
+        _market_row(b, Z1, foreign_net=-500_000, close=50.0, change=-1.0),
+        _market_row(b, Z2, foreign_net=-500_000, close=50.0, change=0.0),
+        _market_row(b, Z3, foreign_net=None, close=50.0, change=0.0, margin_balance=None),
+    ]
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert await repo.upsert_market_stock_days(rows) == 6
+        # Re-running is idempotent and updates in place.
+        assert await repo.upsert_market_stock_days(rows[:1]) == 1
+        service = MarketRankingService(repo)
+
+        ranking = await service.ranking("foreign_net", window=3, as_of=Z3)
+        assert ranking.trading_days == 3 and ranking.data_through == Z3
+        assert [(e.symbol, e.value) for e in ranking.entries] == [(a, 6000.0), (b, -1000.0)]
+
+        sellers = await service.ranking("foreign_net", window=3, as_of=Z3, order="asc")
+        assert sellers.entries[0].symbol == b
+
+        flows = await service.flows(days=3, as_of=Z3)
+        first, last = flows.days[0], flows.days[-1]
+        assert first.trading_date == Z1
+        assert first.foreign_net_value == 1_000_000 * 100 - 500_000 * 50
+        assert first.foreign_net_shares == 500_000
+        assert first.advancing == 1 and first.declining == 1
+        assert last.margin_balance == 500  # the NULL balance counts as 0
+        assert last.unchanged == 1
+
+        # Point in time: nothing published after the cutoff is visible.
+        early = await service.ranking("foreign_net", window=3, as_of=Z2)
+        assert early.data_through == Z2 and early.trading_days == 2
+
+        status = {s.market: s for s in await service.status()}
+        assert status["TW"].last_date >= Z3
+
+
+async def test_active_market_job_is_reported(sessions) -> None:
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        job, created = await repo.enqueue_sync_job(SyncJobKind.MARKET, "ZZTW", lookback_days=30)
+        assert created and await repo.has_active_sync_job(SyncJobKind.MARKET)
+        # Close it directly: claiming would grab whichever job is oldest.
+        await repo.fail_sync_job(job.id, "x", retry=False)

@@ -1,0 +1,84 @@
+name: Kronos image
+
+# Publishes the CPU Kronos inference service to GitHub Container Registry so it can
+# be pulled on any machine:  docker run -p 8002:8002 -e KRONOS_API_KEY=... \
+#   ghcr.io/<owner>/kronos-service:small
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - kronos-service/**
+      - .github/workflows/kronos-image.yml
+    tags: ["kronos-v*"]
+  pull_request:
+    paths:
+      - kronos-service/**
+      - .github/workflows/kronos-image.yml
+  workflow_dispatch:
+
+concurrency:
+  group: kronos-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/kronos-service
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: small
+            model: NeoQuasar/Kronos-small
+          - variant: base
+            model: NeoQuasar/Kronos-base
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ matrix.variant }}
+            type=raw,value=latest,enable=${{ matrix.variant == 'small' && github.ref == 'refs/heads/main' }}
+            type=sha,prefix=${{ matrix.variant }}-
+            type=ref,event=tag,prefix=${{ matrix.variant }}-
+
+      - name: Build (and push outside pull requests)
+        uses: docker/build-push-action@v6
+        with:
+          context: kronos-service
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            KRONOS_MODEL=${{ matrix.model }}
+          cache-from: type=gha,scope=kronos-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=kronos-${{ matrix.variant }}

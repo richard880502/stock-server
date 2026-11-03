@@ -4,6 +4,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?required}
       KRONOS_URL: http://stock-kronos:8002
+      KRONOS_API_KEY: ${KRONOS_API_KEY:-}
       API_HOST: 0.0.0.0
       API_PORT: 8000
       MCP_HOST: 0.0.0.0

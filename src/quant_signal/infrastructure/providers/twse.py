@@ -8,8 +8,14 @@ from typing import Any
 
 import httpx
 
-from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow
+from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow, MarketStockDay
 from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
+from quant_signal.infrastructure.providers.market_snapshot import (
+    StockCredit,
+    StockFlow,
+    build_market_stock_days,
+    to_int,
+)
 
 TWSE_BASE_URL = "https://www.twse.com.tw"
 TWSE_SOURCE = "twse_official"
@@ -21,6 +27,13 @@ def _number(value: Any) -> float:
     if text in {"", "--", "---", "除權", "除息"}:
         raise ValueError(f"not a numeric TWSE value: {value!r}")
     return float(text)
+
+
+def _optional_number(value: Any) -> float:
+    try:
+        return abs(_number(value))
+    except ValueError:
+        return 0.0
 
 
 def _integer(value: Any) -> int:
@@ -78,6 +91,7 @@ class TwseSecurityQuote:
     volume: int
     turnover_value: float
     direction: int
+    change: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -366,6 +380,70 @@ class TwseProvider:
         )
         return self.parse_daily_market(payload) if payload.get("stat") == "OK" else None
 
+    async def fetch_market_stock_day(self, trading_date: date) -> list[MarketStockDay]:
+        """Every common stock's quote, institutional flow and credit balance for a day."""
+        market = await self.fetch_market_quotes(trading_date)
+        if market is None:
+            return []
+        requested = trading_date.strftime("%Y%m%d")
+        flow_payload = await self._get_json(
+            "/rwd/zh/fund/T86",
+            {"date": requested, "selectType": "ALLBUT0999", "response": "json"},
+        )
+        credit_payload = await self._get_json(
+            "/rwd/zh/marginTrading/MI_MARGN",
+            {"date": requested, "selectType": "ALL", "response": "json"},
+        )
+        return build_market_stock_days(
+            market.quotes,
+            market="TW",
+            source=TWSE_SOURCE,
+            available_at=_available_at(trading_date),
+            flows=self.parse_all_stock_flows(flow_payload),
+            credit=self.parse_all_stock_credit(credit_payload),
+            trading_date=trading_date,
+        )
+
+    @staticmethod
+    def parse_all_stock_flows(payload: dict[str, Any]) -> dict[str, StockFlow]:
+        if payload.get("stat") != "OK":
+            return {}
+        flows: dict[str, StockFlow] = {}
+        for row in payload.get("data", []):
+            try:
+                flows[str(row[0]).strip()] = StockFlow(
+                    foreign_net=to_int(row[4]),
+                    trust_net=to_int(row[10]),
+                    dealer_net=to_int(row[11]),
+                    total_net=to_int(row[18]),
+                )
+            except (IndexError, TypeError, ValueError):
+                continue
+        return flows
+
+    @staticmethod
+    def parse_all_stock_credit(payload: dict[str, Any]) -> dict[str, StockCredit]:
+        if payload.get("stat") != "OK":
+            return {}
+        rows: list[Any] = []
+        for table in payload.get("tables") or []:
+            fields = table.get("fields") or []
+            if fields and fields[0] == "代號":
+                rows = table.get("data") or []
+                break
+        credit: dict[str, StockCredit] = {}
+        for row in rows:
+            try:
+                credit[str(row[0]).strip()] = StockCredit(
+                    margin_balance=to_int(row[6]),
+                    margin_change=to_int(row[6]) - to_int(row[5]),
+                    short_balance=to_int(row[12]),
+                    short_change=to_int(row[12]) - to_int(row[11]),
+                )
+            except (IndexError, TypeError, ValueError):
+                continue
+        return credit
+
     @staticmethod
     def parse_monthly_stock(payload: dict[str, Any], symbol: str) -> list[Bar]:
         result: list[Bar] = []
@@ -491,6 +569,7 @@ class TwseProvider:
                         low=_number(row[7]),
                         close=_number(row[8]),
                         direction=direction,
+                        change=direction * _optional_number(row[10]),
                     )
                 )
             except (IndexError, TypeError, ValueError):
