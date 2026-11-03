@@ -16,9 +16,33 @@ The default API URL is `http://127.0.0.1:8000`. Configure
 - `app/` – routes only: `/` (今日訊號), `/market` (市場), `/backtest`, `/forecast`, plus the root layout, `globals.css` (Tailwind entry) and `styles/` (the design system, below).
 - `components/` – app shell (login gate, sticky header, query bar with the symbol combobox, view tabs, theme toggle) and shared UI (card, stat, chips, direction values, empty states, notices, tables) plus `charts/` (SVG charts).
 - `features/{signal,market,llm,backtest,forecast}/` – one view per feature with its state hook.
-- `lib/api/` – typed API client: `client.ts` (`fetchJson`, base URL), `auth.ts` (API key storage, `withAuthHeaders`), `endpoints.ts`, `types.ts`, `errors.ts`, `sse.ts`.
+- `lib/api/` – typed API client: `client.ts` (`fetchJson`, base URL), `auth.ts` (API key storage, `withAuthHeaders`), `session.ts` (sign-in state), `rate-limit.ts`, `endpoints.ts`, `types.ts`, `errors.ts`, `sse.ts`.
 - `lib/dashboard-context.tsx` – symbol / benchmark / as-of date and results shared across routes.
 - `lib/sync-retry.ts` – automatic retry (max 10 tries) for HTTP 503 `sync_pending`.
+
+## Sign-in
+
+Two methods run side by side; `GET /api/v1/auth/config` (`{google, password}`)
+decides what the login screen offers (neither → "尚未設定登入方式").
+
+- **Google** – the button is a full-page navigation to
+  `${API_URL}/api/v1/auth/google/login?next=<current path>`. The API runs the
+  OAuth round trip, sets the HttpOnly `qs_session` cookie and redirects back.
+  JavaScript never sees the token; `GET /auth/me` says who is signed in, and
+  the topbar `UserMenu` shows avatar / name / email and 登出
+  (`POST /auth/logout`). Failures return to `/?login_error=<code>`; codes map to
+  Traditional Chinese in `lib/copy.ts` and the parameter is stripped from the URL.
+- **Password (legacy)** – `POST /auth/login` returns an API key kept in
+  localStorage and sent as `Authorization: Bearer`.
+- `lib/api/session.ts` holds the state (startup shows a skeleton until config
+  and `/auth/me` resolve). Every API call uses `credentials: "include"`, so the
+  API's CORS must allow the dashboard origin with credentials, and the dashboard
+  and API should share a host (`127.0.0.1` with `127.0.0.1`) for the cookie.
+- **HTTP 429** (daily limit for LLM / forecast / sync / backtest) is shown as a
+  calm blue `RateLimitNotice` with the Retry-After estimate, never retried
+  automatically. **HTTP 401** while signed in returns to the login screen with
+  "登入已過期".
+- Only env var: `NEXT_PUBLIC_QUANT_API_URL` (build time).
 
 ## Design system
 
