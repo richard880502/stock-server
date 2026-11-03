@@ -755,10 +755,20 @@ kbd {
     color var(--dur-fast) var(--ease-out);
 }
 
-.segmented button[aria-selected="true"] {
+.segmented button[aria-selected="true"],
+.segmented button[aria-checked="true"] {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-1);
+}
+
+.segmented button:hover:not([aria-checked="true"], [aria-selected="true"]) {
+  color: var(--text);
+}
+
+.segmented.wrap {
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 /* ---- Disclosure ------------------------------------------------------- */
