@@ -889,3 +889,8 @@ kbd {
   margin-top: 3px;
   color: var(--warn);
 }
+
+.callout.info {
+  background: var(--accent-soft);
+  border-color: transparent;
+}

@@ -1,4 +1,4 @@
-import type { MarketEnvironment, Regime, Signal, SignalAction } from "./api/types";
+import type { Alert, Judgement, MarketEnvironment, Regime, Signal, SignalAction } from "./api/types";
 
 export const factorLabels: Record<keyof Signal["factors"], string> = {
   trend: "趨勢結構",
@@ -40,4 +40,40 @@ export const regimeCopy: Record<Regime, string> = {
   risk_on: "Risk-on",
   neutral: "Neutral",
   risk_off: "Risk-off",
+};
+
+/** Short Chinese gloss shown next to the English regime name. */
+export const regimeGloss: Record<Regime, string> = {
+  risk_on: "風險偏好",
+  neutral: "中性",
+  risk_off: "風險趨避",
+};
+
+/** Direction tone (Taiwan convention: up = red, down = green, flat = neutral). */
+export type Tone = "up" | "down" | "flat" | "warn";
+
+export const regimeTone: Record<Regime, Tone> = {
+  risk_on: "up",
+  neutral: "flat",
+  risk_off: "down",
+};
+
+export const actionTone: Record<SignalAction, Tone> = {
+  increase: "up",
+  hold: "flat",
+  reduce: "down",
+  avoid: "down",
+};
+
+export const stanceCopy: Record<Judgement["stance"], { label: string; tone: Tone }> = {
+  bullish: { label: "偏多", tone: "up" },
+  neutral: { label: "中性", tone: "flat" },
+  cautious: { label: "謹慎", tone: "warn" },
+  bearish: { label: "偏空", tone: "down" },
+};
+
+export const severityCopy: Record<Alert["severity"], string> = {
+  high: "高",
+  medium: "中",
+  info: "資訊",
 };

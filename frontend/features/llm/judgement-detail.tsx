@@ -4,7 +4,7 @@ import type { Judgement } from "@/lib/api/types";
 
 export function JudgementSummary({
   judgement,
-  className = "llm-summary",
+  className = "judgement",
   heading,
 }: {
   judgement: Judgement;
@@ -31,16 +31,16 @@ export function EvidenceColumns({
   return (
     <div className="evidence-columns">
       <div>
-        <span className="column-label">{evidenceLabel}</span>
-        <ul>
+        <h4 className="column-label">{evidenceLabel}</h4>
+        <ul className="bullet-list">
           {judgement.key_evidence.map((item) => (
             <li key={item}>{item}</li>
           ))}
         </ul>
       </div>
       <div>
-        <span className="column-label warning">風險與限制</span>
-        <ul>
+        <h4 className="column-label">風險與限制</h4>
+        <ul className="bullet-list">
           {[...judgement.risk_warnings, ...judgement.limitations].map((item) => (
             <li key={item}>{item}</li>
           ))}
@@ -55,9 +55,9 @@ export function ScenarioRow({ scenarios }: { scenarios: Judgement["scenarios"] }
   return (
     <div className="scenario-row">
       {scenarios.map((scenario) => (
-        <div key={scenario.name}>
+        <div className="scenario" key={scenario.name}>
           <strong>{scenario.name}</strong>
-          <span>若 {scenario.condition}</span>
+          <span className="scenario-condition">若 {scenario.condition}</span>
           <p>{scenario.response}</p>
         </div>
       ))}

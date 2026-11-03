@@ -11,8 +11,8 @@ export function ResearchTable({
   children: ReactNode;
 }) {
   return (
-    <div className="research-table-wrap" tabIndex={0} role="region" aria-label={label}>
-      <table className="research-table">
+    <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
+      <table className="data-table">
         <thead>
           <tr>
             {headers.map((header) => (

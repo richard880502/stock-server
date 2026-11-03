@@ -77,8 +77,8 @@ export function useBacktest(
     throw new Error("回測仍在執行，請稍後再查詢");
   };
 
-  const run = async (event: FormEvent) => {
-    event.preventDefault();
+  const run = async (event?: FormEvent) => {
+    event?.preventDefault();
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
