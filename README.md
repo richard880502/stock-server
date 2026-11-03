@@ -720,3 +720,5 @@ the new database, compare table counts, and verify authenticated requests,
 backtest execution, and prediction before switching clients. Retain the Zeabur
 source and backup until the new environment is accepted. The separate deployment
 file does not publish database or inference ports and does not run demo seeding.
+After preloading a complete verified model cache, `KRONOS_OFFLINE=1` skips Hub
+network lookups on startup; leave it unset for first-time weight downloads.
