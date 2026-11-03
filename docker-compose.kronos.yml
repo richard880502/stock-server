@@ -3,8 +3,11 @@ services:
   api:
     environment:
       KRONOS_URL: http://kronos:8002
+      KRONOS_API_KEY: ${KRONOS_API_KEY:-}
   kronos:
     build: ./kronos-service
+    environment:
+      KRONOS_API_KEY: ${KRONOS_API_KEY:-}
     restart: unless-stopped
     volumes:
       - kronos_models:/models
