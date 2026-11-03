@@ -5,7 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 
-ARG NEXT_PUBLIC_QUANT_API_URL=https://quant-signal-api.zeabur.app
+ARG NEXT_PUBLIC_QUANT_API_URL=
 ENV NEXT_PUBLIC_QUANT_API_URL=${NEXT_PUBLIC_QUANT_API_URL}
 RUN npm run build
 
