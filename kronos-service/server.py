@@ -22,7 +22,12 @@ async def lifespan(app):
     model = Kronos.from_pretrained("NeoQuasar/Kronos-small")
     tokenizer.eval()
     model.eval()
-    predictor = KronosPredictor(model, tokenizer, device=os.environ.get("KRONOS_DEVICE") or None, max_context=512)
+    predictor = KronosPredictor(
+        model,
+        tokenizer,
+        device=os.environ.get("KRONOS_DEVICE") or None,
+        max_context=512,
+    )
     yield
 
 
