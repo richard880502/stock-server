@@ -3,10 +3,22 @@
 import { FormEvent, type ReactNode, useState, useSyncExternalStore } from "react";
 import { getApiKey, saveApiKey, subscribeApiKey } from "@/lib/api/auth";
 import { login } from "@/lib/api/endpoints";
+import { BrandMark } from "./brand";
+import { ThemeToggle } from "./theme-toggle";
+
+const subscribeNever = () => () => {};
 
 /** Renders children only while an API key is stored; otherwise the password form. */
 export function LoginGate({ children }: { children: ReactNode }) {
   const apiKey = useSyncExternalStore(subscribeApiKey, getApiKey, () => null);
+  // The stored key is only readable in the browser; until hydration finishes,
+  // show a neutral splash instead of flashing the login form at signed-in users.
+  const hydrated = useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
+  );
+  if (!hydrated) return <div className="splash" aria-hidden="true" />;
   if (!apiKey) return <LoginScreen />;
   return <>{children}</>;
 }
@@ -33,31 +45,40 @@ function LoginScreen() {
 
   return (
     <main className="login-screen">
+      <div className="login-theme">
+        <ThemeToggle />
+      </div>
       <form className="login-card" onSubmit={handleLogin}>
-        <span className="brand-mark" aria-hidden="true">
-          QS
-        </span>
-        <h1>Quant Signal</h1>
-        <p id="login-hint">輸入密碼以進入研究控制台。</p>
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="密碼"
-          aria-label="密碼"
-          aria-describedby={loginError ? "login-error" : "login-hint"}
-          aria-invalid={loginError ? true : undefined}
-          autoComplete="current-password"
-          autoFocus
-        />
+        <BrandMark size={44} />
+        <div className="login-copy">
+          <h1>Quant Signal</h1>
+          <p id="login-hint">輸入密碼以進入研究控制台。</p>
+        </div>
+        <div className="login-field">
+          <label className="field-label" htmlFor="login-password">
+            密碼
+          </label>
+          <input
+            id="login-password"
+            className="input"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            aria-describedby={loginError ? "login-error" : "login-hint"}
+            aria-invalid={loginError ? true : undefined}
+            autoComplete="current-password"
+            autoFocus
+          />
+        </div>
         {loginError && (
-          <span className="login-error" id="login-error" role="alert">
+          <p className="inline-error" id="login-error" role="alert">
             {loginError}
-          </span>
+          </p>
         )}
-        <button className="primary-button" disabled={loggingIn || !password}>
+        <button className="button primary block" disabled={loggingIn || !password}>
           {loggingIn ? "登入中…" : "登入"}
         </button>
+        <p className="login-foot">研究工具，不構成投資建議。</p>
       </form>
     </main>
   );

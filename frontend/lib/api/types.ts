@@ -221,6 +221,9 @@ export type ForecastReport = {
 
 export type ForecastStatus = { kronos: boolean };
 
+/** One row of GET /api/v1/instruments/search. */
+export type Instrument = { symbol: string; name: string; market: "TW" | "TWO" };
+
 export type LoginResponse = { api_key: string };
 
 /** Body of the HTTP 503 the analysis endpoints return while history is being fetched. */

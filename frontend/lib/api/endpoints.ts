@@ -12,6 +12,7 @@ import type {
   ForecastReport,
   ForecastRequest,
   ForecastStatus,
+  Instrument,
   LlmStatus,
   LlmStreamPayload,
   LoginResponse,
@@ -78,6 +79,10 @@ export function getChipFlow(
     init,
   );
 }
+
+/** Symbol / name lookup for the search combobox. Empty query is rejected by the API. */
+export const searchInstruments = (q: string, init?: Init) =>
+  fetchJson<Instrument[]>(apiUrl(`/api/v1/instruments/search?q=${enc(q.trim())}`), init);
 
 export const getLlmStatus = () => fetchJson<LlmStatus>(apiUrl("/api/v1/llm/status"));
 export const getDataStatus = () => fetchJson<DataStatus>(apiUrl("/api/v1/data/status"));

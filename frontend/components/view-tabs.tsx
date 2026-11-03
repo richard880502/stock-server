@@ -2,28 +2,31 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ChartIcon, FlaskIcon, PulseIcon } from "./icons";
 
 export const VIEWS = [
-  { href: "/", label: "今日訊號" },
-  { href: "/backtest", label: "策略回測" },
-  { href: "/forecast", label: "預測實驗室" },
+  { href: "/", label: "今日訊號", Icon: PulseIcon },
+  { href: "/backtest", label: "策略回測", Icon: ChartIcon },
+  { href: "/forecast", label: "預測實驗室", Icon: FlaskIcon },
 ] as const;
 
+/** Inline tabs in the top bar on wide screens; a fixed bottom bar on phones (see layout.css). */
 export function ViewTabs() {
   const pathname = usePathname() ?? "/";
   const current = pathname.replace(/\/+$/, "") || "/";
   return (
     <nav className="view-tabs" aria-label="控制台檢視">
-      {VIEWS.map((view) => {
-        const active = current === view.href;
+      {VIEWS.map(({ href, label, Icon }) => {
+        const active = current === href;
         return (
           <Link
-            key={view.href}
-            href={view.href}
-            className={active ? "active" : ""}
+            key={href}
+            href={href}
+            className="view-tab"
             aria-current={active ? "page" : undefined}
           >
-            {view.label}
+            <Icon size={20} />
+            <span>{label}</span>
           </Link>
         );
       })}

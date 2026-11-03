@@ -1,0 +1,332 @@
+/* Layout: app shell, header, navigation, page grid, footer. */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.container {
+  width: 100%;
+  max-width: calc(var(--content-max) + var(--gutter) * 2);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.splash {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+/* ---- Header ---------------------------------------------------------- */
+
+.app-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  z-index: var(--z-header);
+}
+
+@media (min-width: 900px) {
+  .app-header {
+    position: sticky;
+    top: 0;
+  }
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  min-height: var(--header-h);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text);
+  flex: none;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.brand-text strong {
+  font-size: var(--text-base);
+  letter-spacing: -0.01em;
+}
+
+.brand-text small {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.brand-mark {
+  --brand-mark-ink: var(--surface);
+  color: var(--text);
+  flex: none;
+}
+
+.topbar-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.service-state {
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+  margin-right: var(--space-2);
+}
+
+@media (min-width: 1080px) {
+  .service-state {
+    display: flex;
+  }
+}
+
+/* ---- Navigation ------------------------------------------------------ */
+
+.view-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  align-self: stretch;
+}
+
+.view-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline: var(--space-3);
+  color: var(--text-2);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab[aria-current="page"] {
+  color: var(--text);
+}
+
+.view-tab[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.view-tab svg {
+  display: none;
+}
+
+@media (max-width: 719px) {
+  .brand-text small {
+    display: none;
+  }
+
+  .topbar {
+    gap: var(--space-3);
+  }
+
+  .view-tabs {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-header);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .view-tab {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-height: 3.5rem;
+    padding: var(--space-2) var(--space-1);
+    font-size: var(--text-xs);
+  }
+
+  .view-tab svg {
+    display: block;
+  }
+
+  .view-tab[aria-current="page"] {
+    color: var(--accent);
+  }
+
+  .view-tab[aria-current="page"]::after {
+    inset: 0 auto auto 50%;
+    width: 2rem;
+    height: 3px;
+    transform: translateX(-50%);
+    border-radius: 0 0 3px 3px;
+  }
+}
+
+/* ---- Query bar ------------------------------------------------------- */
+
+.query-bar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 11rem 10rem auto;
+  gap: var(--space-3);
+  align-items: end;
+  padding-block: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.field,
+.combobox {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+@media (max-width: 719px) {
+  .query-bar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .query-bar .combobox,
+  .query-bar .submit {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ---- Page ------------------------------------------------------------ */
+
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding-block: var(--space-6) var(--space-12);
+  animation: fade-up var(--dur-slow) var(--ease-out);
+}
+
+.page:focus {
+  outline: none;
+}
+
+@media (max-width: 719px) {
+  .page {
+    padding-bottom: calc(var(--space-12) + 3.5rem);
+  }
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.grid > * {
+  grid-column: span 12;
+  min-width: 0;
+}
+
+@media (min-width: 900px) {
+  .grid > .span-5 {
+    grid-column: span 5;
+  }
+  .grid > .span-6 {
+    grid-column: span 6;
+  }
+  .grid > .span-7 {
+    grid-column: span 7;
+  }
+}
+
+/* ---- Footer ---------------------------------------------------------- */
+
+.app-footer {
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  padding-block: var(--space-5);
+}
+
+.footer-inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-6);
+}
+
+@media (max-width: 719px) {
+  .app-footer {
+    padding-bottom: calc(var(--space-5) + 3.5rem);
+  }
+}
+
+/* ---- Login ----------------------------------------------------------- */
+
+.login-screen {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--gutter);
+  background:
+    radial-gradient(60rem 30rem at 50% -10%, var(--accent-soft), transparent 70%),
+    var(--bg);
+}
+
+.login-theme {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: min(24rem, 100%);
+  padding: var(--space-8);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-2);
+  animation: fade-up var(--dur-slow) var(--ease-out);
+}
+
+.login-copy h1 {
+  font-size: var(--text-xl);
+}
+
+.login-copy p {
+  margin-top: var(--space-1);
+  color: var(--text-2);
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.login-foot {
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}

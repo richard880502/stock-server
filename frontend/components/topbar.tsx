@@ -3,32 +3,47 @@
 import Link from "next/link";
 import { clearApiKey } from "@/lib/api/auth";
 import { useDashboard } from "@/lib/dashboard-context";
+import { BrandMark } from "./brand";
+import { LogoutIcon } from "./icons";
+import { ThemeToggle } from "./theme-toggle";
+import { ViewTabs } from "./view-tabs";
+
+function StatusPill({ ok, children }: { ok: boolean | null; children: string }) {
+  return (
+    <span className="status-pill" data-state={ok === null ? "unknown" : ok ? "ok" : "idle"}>
+      <span className="status-dot" aria-hidden="true" />
+      {children}
+    </span>
+  );
+}
 
 export function Topbar() {
   const { dataStatus, llmStatus } = useDashboard();
   return (
-    <header className="topbar">
+    <div className="topbar">
       <Link className="brand" href="/" aria-label="Quant Signal 首頁">
-        <span className="brand-mark" aria-hidden="true">
-          QS
-        </span>
-        <span>
+        <BrandMark />
+        <span className="brand-text">
           <strong>Quant Signal</strong>
-          <small>Evidence-first market intelligence</small>
+          <small>證據優先的市場研究</small>
         </span>
       </Link>
-      <div className="service-state">
-        <span className="live-dot" aria-hidden="true" />
-        本機量化服務
-        <span className="service-separator" aria-hidden="true" />
-        資料 {dataStatus?.real_data_ready ? "交易所官方" : "示範"}
-        <span className="service-separator" aria-hidden="true" />
-        LLM {llmStatus?.configured ? "已連線" : "待設定"}
-        <span className="service-separator" aria-hidden="true" />
-        <button type="button" className="logout-link" onClick={clearApiKey}>
-          登出
+      <ViewTabs />
+      <div className="topbar-end">
+        <div className="service-state" aria-label="服務狀態">
+          <StatusPill ok={dataStatus ? dataStatus.real_data_ready : null}>
+            {dataStatus ? (dataStatus.real_data_ready ? "資料：交易所官方" : "資料：示範") : "資料：—"}
+          </StatusPill>
+          <StatusPill ok={llmStatus ? llmStatus.configured : null}>
+            {llmStatus ? (llmStatus.configured ? "LLM 已連線" : "LLM 待設定") : "LLM：—"}
+          </StatusPill>
+        </div>
+        <ThemeToggle />
+        <button type="button" className="icon-button" onClick={clearApiKey} aria-label="登出">
+          <LogoutIcon />
+          <span className="icon-button-label">登出</span>
         </button>
       </div>
-    </header>
+    </div>
   );
 }

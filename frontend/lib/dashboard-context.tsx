@@ -12,9 +12,10 @@ import {
 import { useBacktest } from "@/features/backtest/use-backtest";
 import { useLlmAnalysis } from "@/features/llm/use-llm-analysis";
 import { useSignalData } from "@/features/signal/use-signal-data";
-import { getDataStatus, getLlmStatus } from "./api/endpoints";
+import { getDataStatus, getLlmStatus, searchInstruments } from "./api/endpoints";
 import type { DataStatus, LlmStatus } from "./api/types";
 import { today } from "./format";
+import { getRecentSymbols, type RecentSymbol, rememberSymbol } from "./recent-symbols";
 import {
   benchmarkForSymbol,
   DEFAULT_BENCHMARK,
@@ -44,6 +45,11 @@ function useDashboardState() {
     setError,
   );
 
+  const [recentSymbols, setRecentSymbols] = useState<RecentSymbol[]>([]);
+  const [instrumentName, setInstrumentName] = useState<{ symbol: string; name: string } | null>(
+    null,
+  );
+
   const setSymbol = useCallback((next: string) => {
     const upper = next.toUpperCase();
     setSymbolState(upper);
@@ -54,11 +60,29 @@ function useDashboardState() {
   const { reset: resetBacktest } = backtest;
   const { resetStream } = llm;
 
-  /** Reload the signal for the current query and drop results derived from the old one. */
-  const refresh = () => {
+  /**
+   * Reload the signal and drop results derived from the old query. `overrides`
+   * commits new values in the same step (the combobox picks a symbol and loads
+   * it without waiting for a re-render).
+   */
+  const refresh = (
+    overrides: Partial<{ symbol: string; benchmark: string; asOf: string }> = {},
+  ) => {
+    const nextSymbol = (overrides.symbol ?? symbol).trim().toUpperCase();
+    const nextBenchmark =
+      overrides.benchmark ?? benchmarkForSymbol(nextSymbol, benchmark);
+    const nextAsOf = overrides.asOf ?? asOf;
+    setSymbolState(nextSymbol);
+    setBenchmark(nextBenchmark);
+    setAsOf(nextAsOf);
     resetStream();
     resetBacktest();
-    void load(query);
+    void load({
+      symbol: nextSymbol,
+      benchmark: nextBenchmark,
+      asOf: nextAsOf,
+      market: marketOf(nextSymbol),
+    });
   };
 
   // First load uses the defaults, exactly as the single-page dashboard did.
@@ -72,6 +96,31 @@ function useDashboardState() {
     void load(initialQuery);
   }, [load, initialQuery]);
 
+  // Recent symbols live in localStorage, so they can only be read after mount.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setRecentSymbols(getRecentSymbols()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Once a symbol's signal has loaded, resolve its name and remember it as recent.
+  const loadedSymbol = signalData.signal?.symbol ?? null;
+  useEffect(() => {
+    if (!loadedSymbol) return;
+    const controller = new AbortController();
+    searchInstruments(loadedSymbol, { signal: controller.signal })
+      .then((rows) => {
+        const name = rows.find((row) => row.symbol === loadedSymbol)?.name;
+        setInstrumentName({ symbol: loadedSymbol, name: name ?? "" });
+        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol, name }));
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setInstrumentName({ symbol: loadedSymbol, name: "" });
+        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol }));
+      });
+    return () => controller.abort();
+  }, [loadedSymbol]);
+
   useEffect(() => {
     getLlmStatus().then(setLlmStatus).catch(() => setLlmStatus(null));
     getDataStatus().then(setDataStatus).catch(() => setDataStatus(null));
@@ -83,6 +132,8 @@ function useDashboardState() {
     setError,
     llmStatus,
     dataStatus,
+    recentSymbols,
+    instrumentName,
     signalData,
     backtest,
     llm,

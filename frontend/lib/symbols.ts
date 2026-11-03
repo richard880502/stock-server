@@ -15,3 +15,15 @@ export function benchmarkForSymbol(symbol: string, benchmark: string): string {
   if (symbol.endsWith(".TW") && benchmark === OTC_BENCHMARK) return DEFAULT_BENCHMARK;
   return benchmark;
 }
+
+const SYMBOL_SHAPE = /^(\^[A-Z0-9]+|\d{4,6}[A-Z]?(\.TWO?)?)$/;
+
+/**
+ * Turn free text ("2330", "6488.two", "^twii") into an API symbol, or null when
+ * it does not look like one. A bare stock number defaults to the listed market (.TW).
+ */
+export function normalizeSymbolInput(text: string): string | null {
+  const upper = text.trim().toUpperCase();
+  if (!SYMBOL_SHAPE.test(upper)) return null;
+  return /^\d/.test(upper) && !upper.includes(".") ? `${upper}.TW` : upper;
+}
