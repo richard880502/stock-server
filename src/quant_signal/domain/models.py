@@ -337,8 +337,9 @@ class BacktestSpec(BaseModel):
     initial_capital: float = Field(default=1_000_000, gt=0)
     entry_score: float = Field(default=70, ge=0, le=100)
     exit_score: float = Field(default=45, ge=0, le=100)
-    fee_bps: float = Field(default=5, ge=0)
-    slippage_bps: float = Field(default=5, ge=0)
+    fee_bps: float = Field(default=5, ge=0, le=1000)
+    slippage_bps: float = Field(default=5, ge=0, le=1000)
+    sell_tax_bps: float = Field(default=0, ge=0, le=1000)
     use_chip_filter: bool = False
     chip_entry_score: float = Field(default=55, ge=0, le=100)
     chip_exit_score: float = Field(default=40, ge=0, le=100)
@@ -360,6 +361,14 @@ class EquityPoint(BaseModel):
     position: float = Field(ge=0, le=1)
 
 
+class BacktestTrade(BaseModel):
+    trading_date: date
+    side: Literal["buy", "sell"]
+    price: float
+    cost: float
+    equity: float
+
+
 class BacktestReport(BaseModel):
     spec: BacktestSpec
     started_at: datetime
@@ -372,6 +381,10 @@ class BacktestReport(BaseModel):
     sharpe: float | None
     max_drawdown: float
     equity_curve: list[EquityPoint]
+    buy_hold_curve: list[EquityPoint] = Field(default_factory=list)
+    buy_hold_return: float | None = None
+    excess_return: float | None = None
+    transactions: list[BacktestTrade] = Field(default_factory=list)
 
 
 class BacktestJob(BaseModel):

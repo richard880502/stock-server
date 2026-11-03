@@ -666,3 +666,57 @@ authorization scopes, rate limits, and audit logging are added.
 
 This software is a research scaffold, not investment advice or an automated
 execution system.
+
+## Forecast lab and backtest comparison
+
+The dashboard now has three views: signals, strategy backtests, and forecasts.
+Backtests accept initial capital, per-side fees/slippage, and an additional
+sell-side tax in basis points. New reports include transaction costs, a
+same-instrument buy-and-hold curve, and excess return. Both portfolios remain
+marked to market at the end; neither assumes a forced closing sale. The selected
+benchmark symbol still feeds the relative-strength signal, rather than the
+buy-and-hold comparison.
+
+`POST /api/v1/forecasts` accepts `symbol`, `as_of`, `horizon` (1, 5, or 20),
+`lookback` (60–512), and `model` (`bootstrap` or `kronos`). Taiwan trading dates
+come from the XTAI calendar; unforeseen closures are not guaranteed. All price
+history is adjusted onto the latest raw-price scale. Baseline scenarios resample
+historical daily log returns with a fixed seed. Their 10–90 percentile range is
+an uncalibrated scenario interval, not a guaranteed confidence interval.
+
+Baseline evaluation uses up to 24 non-overlapping chronological windows, filters
+records by their availability at each origin, and reports normalized absolute
+error, no-change baseline error, direction accuracy, and interval coverage.
+**This evaluation describes the bootstrap model only, including when the displayed
+forecast comes from Kronos.** Kronos forecasts do not drive strategy executions.
+
+The optional Kronos-small sidecar is separate from the language-model analyst:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.kronos.yml up -d --build
+```
+
+It uses a pinned upstream source commit, loads model weights into a persistent
+cache, and returns 16 individual sampled paths instead of averaging samples
+before calculating their range. Startup downloads weights from Hugging Face.
+`GET /api/v1/forecasts/status` reports availability; failures never silently
+substitute another model. On macOS the same server can run directly with PyTorch
+MPS, `PYTHONPATH` pointing to the pinned Kronos checkout, and the API's
+`KRONOS_URL=http://127.0.0.1:18102`. `KRONOS_DEVICE=cpu` forces CPU inference.
+
+## Coolify migration
+
+Use the GitHub App with branch `main`, Docker Compose build pack, and
+`/docker-compose.coolify.yml`. Only the `gateway` service needs a public HTTPS
+domain, targeting port 8080. The frontend uses same-origin API URLs. PostgreSQL,
+API, worker, MCP, and Kronos stay on the application network; `/mcp` is forwarded
+through the gateway with existing API-key authentication.
+
+Transfer existing `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, dashboard
+credentials, API-auth settings, and LLM settings as private Coolify environment
+variables. Rewrite only the database host in `DATABASE_URL` to `postgres:5432`.
+Do not commit secrets. Restore a consistent PostgreSQL custom-format dump into
+the new database, compare table counts, and verify authenticated requests,
+backtest execution, and prediction before switching clients. Retain the Zeabur
+source and backup until the new environment is accepted. The separate deployment
+file does not publish database or inference ports and does not run demo seeding.

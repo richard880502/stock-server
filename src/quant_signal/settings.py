@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     mcp_transport: str = "streamable-http"
     mcp_stateless_http: bool = True
     backtest_poll_seconds: float = Field(default=2.0, gt=0)
+    kronos_url: str | None = None
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:13000,http://127.0.0.1:13000"
     api_auth_enabled: bool = False

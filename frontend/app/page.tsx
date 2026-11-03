@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { EquityChart, ForecastPanel } from "./forecast-panel";
 
 const API_URL =
   process.env.NEXT_PUBLIC_QUANT_API_URL ?? "http://127.0.0.1:18100";
@@ -186,6 +187,10 @@ type BacktestJob = {
     sharpe: number | null;
     max_drawdown: number;
     equity_curve: { trading_date: string; equity: number; position: number }[];
+    buy_hold_curve?: { trading_date: string; equity: number; position: number }[];
+    buy_hold_return?: number | null;
+    excess_return?: number | null;
+    transactions?: { trading_date: string; side: string; price: number; cost: number; equity: number }[];
   };
 };
 
@@ -306,9 +311,13 @@ function Dashboard({
   const [loadingLlm, setLoadingLlm] = useState(false);
   const [loadingDebate, setLoadingDebate] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<"signal" | "backtest">("signal");
+  const [activeView, setActiveView] = useState<"signal" | "backtest" | "forecast">("signal");
 
   const [backtestStart, setBacktestStart] = useState("2025-01-01");
+  const [feeBps, setFeeBps] = useState(5);
+  const [slippageBps, setSlippageBps] = useState(5);
+  const [sellTaxBps, setSellTaxBps] = useState(0);
+  const [initialCapital, setInitialCapital] = useState(1_000_000);
   const [entryScore, setEntryScore] = useState(70);
   const [exitScore, setExitScore] = useState(45);
   const [backtest, setBacktest] = useState<BacktestJob | null>(null);
@@ -509,7 +518,8 @@ function Dashboard({
         `${API_URL}/api/v1/backtests/${jobId}`,
       );
       setBacktest(job);
-      if (job.status === "completed" || job.status === "failed") return;
+      if (job.status === "failed") throw new Error(job.error ?? "回測失敗");
+      if (job.status === "completed") return;
       await new Promise((resolve) => window.setTimeout(resolve, 1_000));
     }
     throw new Error("回測仍在執行，請稍後再查詢");
@@ -535,9 +545,10 @@ function Dashboard({
             end: asOf,
             entry_score: entryScore,
             exit_score: exitScore,
-            fee_bps: 5,
-            slippage_bps: 5,
-            initial_capital: 1_000_000,
+            fee_bps: feeBps,
+            slippage_bps: slippageBps,
+            sell_tax_bps: sellTaxBps,
+            initial_capital: initialCapital,
             use_chip_filter: useChipFilter,
             chip_entry_score: 55,
             chip_exit_score: 40,
@@ -554,22 +565,6 @@ function Dashboard({
       setLoadingBacktest(false);
     }
   };
-
-  const equityBars = useMemo(() => {
-    const points = backtest?.result?.equity_curve ?? [];
-    if (!points.length) return [];
-    const sampled = points.filter(
-      (_, index) => index % Math.max(1, Math.floor(points.length / 42)) === 0,
-    );
-    const values = sampled.map((point) => point.equity);
-    const minimum = Math.min(...values);
-    const maximum = Math.max(...values);
-    const spread = maximum - minimum || 1;
-    return sampled.map((point) => ({
-      ...point,
-      height: 18 + ((point.equity - minimum) / spread) * 62,
-    }));
-  }, [backtest]);
 
   const action = signal ? actionCopy[signal.action] : null;
   const combinedAlerts: Alert[] = [
@@ -700,6 +695,9 @@ function Dashboard({
             onClick={() => setActiveView("backtest")}
           >
             策略回測
+          </button>
+          <button className={activeView === "forecast" ? "active" : ""} onClick={() => setActiveView("forecast")}>
+            預測實驗室
           </button>
         </nav>
 
@@ -1217,6 +1215,8 @@ function Dashboard({
               )}
             </section>
           </>
+        ) : activeView === "forecast" ? (
+          <ForecastPanel key={`${symbol}|${asOf}`} symbol={symbol} asOf={asOf} apiUrl={API_URL} fetcher={fetchJson} />
         ) : (
           <section className="backtest-layout">
             <form className="backtest-form" onSubmit={runBacktest}>
@@ -1258,9 +1258,13 @@ function Dashboard({
                   />
                 </label>
               </div>
-              <div className="cost-note">
-                交易假設：5 bps 費用＋5 bps 滑價，初始資金 NT$1,000,000
+              <label><span>初始資金（NT$）</span><input type="number" min="1" required value={initialCapital} onChange={e => setInitialCapital(Number(e.target.value))} /></label>
+              <div className="threshold-row">
+                <label><span>單邊費用（bps）</span><input type="number" min="0" max="1000" step="0.01" required value={feeBps} onChange={e => setFeeBps(Number(e.target.value))} /></label>
+                <label><span>單邊滑價（bps）</span><input type="number" min="0" max="1000" step="0.01" required value={slippageBps} onChange={e => setSlippageBps(Number(e.target.value))} /></label>
               </div>
+              <label><span>賣出稅費（bps）</span><input type="number" min="0" max="1000" step="0.01" required value={sellTaxBps} onChange={e => setSellTaxBps(Number(e.target.value))} /></label>
+              <div className="cost-note">1 bps = 0.01%。請依商品與券商填入成本；期末保留部位，未強制平倉。</div>
               <label className="chip-filter-toggle">
                 <input
                   type="checkbox"
@@ -1274,7 +1278,7 @@ function Dashboard({
               </label>
               <button
                 className="primary-button full"
-                disabled={loadingBacktest}
+                disabled={loadingBacktest || exitScore >= entryScore || !backtestStart || backtestStart >= asOf}
               >
                 {loadingBacktest ? "正在執行回測…" : "啟動策略回測"}
               </button>
@@ -1321,15 +1325,11 @@ function Dashboard({
                       </strong>
                     </div>
                   </div>
-                  <div className="equity-chart" aria-label="回測淨值簡圖">
-                    {equityBars.map((point) => (
-                      <span
-                        key={point.trading_date}
-                        style={{ height: `${point.height}%` }}
-                        title={`${point.trading_date}: ${formatNumber(point.equity, 0)}`}
-                      />
-                    ))}
+                  <div className="comparison-summary">
+                    <span>同標的買入持有 <strong>{backtest.result.buy_hold_return == null ? "—" : formatPct(backtest.result.buy_hold_return)}</strong></span>
+                    <span>策略超額報酬 <strong>{backtest.result.excess_return == null ? "—" : formatPct(backtest.result.excess_return)}</strong></span>
                   </div>
+                  <EquityChart strategy={backtest.result.equity_curve} buyHold={backtest.result.buy_hold_curve ?? []} />
                   <div className="backtest-foot">
                     <span>{backtest.result.observations} 個交易日</span>
                     <span>{backtest.result.trades} 次換倉</span>
@@ -1337,6 +1337,11 @@ function Dashboard({
                       年化波動 {formatPct(backtest.result.annualized_volatility)}
                     </span>
                   </div>
+                  <p className="research-note">買入持有採相同起迄開盤價與買入成本；兩者期末皆按市值計價。上方「比較基準」用於相對強弱因子，此圖對照的是同標的買入持有。</p>
+                  {(backtest.result.transactions?.length ?? 0) > 0 && <details className="trade-details"><summary>交易明細（{backtest.result.transactions!.length} 筆）</summary>
+                    <div className="research-table-wrap"><table className="research-table"><thead><tr><th>日期</th><th>方向</th><th>原始開盤價</th><th>成本</th><th>交易後淨值</th></tr></thead><tbody>
+                      {backtest.result.transactions!.map(t => <tr key={t.trading_date}><td>{t.trading_date}</td><td>{t.side === "buy" ? "買入" : "賣出"}</td><td>{formatNumber(t.price, 2)}</td><td>{formatNumber(t.cost, 2)}</td><td>{formatNumber(t.equity, 0)}</td></tr>)}
+                    </tbody></table></div></details>}
                 </>
               ) : (
                 <div className="empty-backtest">

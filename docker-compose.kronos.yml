@@ -1,0 +1,20 @@
+# Optional model sidecar: docker compose -f docker-compose.yml -f docker-compose.kronos.yml up -d --build
+services:
+  api:
+    environment:
+      KRONOS_URL: http://kronos:8002
+  kronos:
+    build: ./kronos-service
+    restart: unless-stopped
+    volumes:
+      - kronos_models:/models
+    mem_limit: 3g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+volumes:
+  kronos_models:

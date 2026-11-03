@@ -7,6 +7,7 @@ from statistics import fmean, pstdev
 from quant_signal.domain.models import (
     BacktestReport,
     BacktestSpec,
+    BacktestTrade,
     Bar,
     BrokerBranchFlow,
     EquityPoint,
@@ -49,6 +50,9 @@ class BacktestEngine:
         position = 0.0
         trades = 0
         equity_curve: list[EquityPoint] = []
+        buy_hold_curve: list[EquityPoint] = []
+        transactions: list[BacktestTrade] = []
+        first_open: float | None = None
         first_period_index = all_bars.index(period_bars[0])
         for index in range(first_period_index, len(all_bars) - 1):
             execution_bar = all_bars[index]
@@ -69,17 +73,14 @@ class BacktestEngine:
             market_environment = None
             if spec.market:
                 if not market_observations:
-                    raise ValueError(
-                        f"market observations are required for market {spec.market}"
-                    )
+                    raise ValueError(f"market observations are required for market {spec.market}")
                 market_environment = MarketEnvironmentEngine().analyze(
                     market_observations,
                     as_of=history[-1].trading_date,
                 )
             target_position = position
             market_allows_risk = (
-                market_environment is None
-                or market_environment.regime != MarketRegime.RISK_OFF
+                market_environment is None or market_environment.regime != MarketRegime.RISK_OFF
             )
             chip_score = None
             if spec.use_chip_filter:
@@ -88,49 +89,59 @@ class BacktestEngine:
                         "institutional flows are required when use_chip_filter is true"
                     )
                 try:
-                    chip_score = ChipFlowEngine().analyze(
-                        institutional_flows,
-                        as_of=history[-1].trading_date,
-                        bars=history,
-                        branch_flows=branch_flows,
-                    ).score
+                    chip_score = (
+                        ChipFlowEngine()
+                        .analyze(
+                            institutional_flows,
+                            as_of=history[-1].trading_date,
+                            bars=history,
+                            branch_flows=branch_flows,
+                        )
+                        .score
+                    )
                 except ValueError:
                     chip_score = None
-            chip_allows_entry = (
-                not spec.use_chip_filter
-                or (
-                    chip_score is not None
-                    and chip_score >= spec.chip_entry_score
-                )
+            chip_allows_entry = not spec.use_chip_filter or (
+                chip_score is not None and chip_score >= spec.chip_entry_score
             )
-            chip_requires_exit = (
-                spec.use_chip_filter
-                and (
-                    chip_score is None
-                    or chip_score < spec.chip_exit_score
-                )
+            chip_requires_exit = spec.use_chip_filter and (
+                chip_score is None or chip_score < spec.chip_exit_score
             )
-            if (
-                signal.score >= spec.entry_score
-                and market_allows_risk
-                and chip_allows_entry
-            ):
+            if signal.score >= spec.entry_score and market_allows_risk and chip_allows_entry:
                 target_position = 1.0
-            elif (
-                signal.score < spec.exit_score
-                or not market_allows_risk
-                or chip_requires_exit
-            ):
+            elif signal.score < spec.exit_score or not market_allows_risk or chip_requires_exit:
                 target_position = 0.0
 
             turnover = abs(target_position - position)
             if turnover:
-                equity *= 1 - turnover * cost_rate
+                rate = cost_rate + (spec.sell_tax_bps / 10_000 if target_position < position else 0)
+                cost = equity * turnover * rate
+                equity -= cost
+                transactions.append(
+                    BacktestTrade(
+                        trading_date=execution_bar.trading_date,
+                        side="buy" if target_position > position else "sell",
+                        price=execution_bar.open,
+                        cost=round(cost, 4),
+                        equity=round(equity, 4),
+                    )
+                )
                 trades += 1
             position = target_position
 
             execution_open = execution_bar.open * execution_bar.adjustment_factor
             next_open = next_bar.open * next_bar.adjustment_factor
+            if first_open is None:
+                first_open = execution_open
+            buy_hold_curve.append(
+                EquityPoint(
+                    trading_date=next_bar.trading_date,
+                    equity=round(
+                        spec.initial_capital * (1 - cost_rate) * next_open / first_open, 4
+                    ),
+                    position=1,
+                )
+            )
             open_return = next_open / execution_open - 1
             equity *= 1 + position * open_return
             equity_curve.append(
@@ -145,11 +156,12 @@ class BacktestEngine:
             raise ValueError("backtest produced fewer than two equity observations")
 
         equity_values = [point.equity for point in equity_curve]
+        performance_values = [spec.initial_capital, *equity_values]
         daily_returns = [
             current / previous - 1
             for previous, current in zip(
-                equity_values[:-1],
-                equity_values[1:],
+                performance_values[:-1],
+                performance_values[1:],
                 strict=True,
             )
         ]
@@ -162,7 +174,7 @@ class BacktestEngine:
             if len(daily_returns) > 1 and pstdev(daily_returns) > 0
             else None
         )
-        running_peak = equity_values[0]
+        running_peak = spec.initial_capital
         max_drawdown = 0.0
         for value in equity_values:
             running_peak = max(running_peak, value)
@@ -180,4 +192,10 @@ class BacktestEngine:
             sharpe=round(sharpe, 6) if sharpe is not None else None,
             max_drawdown=round(max_drawdown, 6),
             equity_curve=equity_curve,
+            buy_hold_curve=buy_hold_curve,
+            buy_hold_return=round(buy_hold_curve[-1].equity / spec.initial_capital - 1, 6),
+            excess_return=round(
+                total_return - (buy_hold_curve[-1].equity / spec.initial_capital - 1), 6
+            ),
+            transactions=transactions,
         )

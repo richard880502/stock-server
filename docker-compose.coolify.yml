@@ -1,0 +1,121 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - quant_signal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    environment: &app-env
+      DATABASE_URL: ${DATABASE_URL:?required}
+      KRONOS_URL: http://kronos:8002
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
+      MCP_TRANSPORT: streamable-http
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000,http://127.0.0.1:13000}
+      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-true}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      LLM_API_KEY: ${LLM_API_KEY:-local}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.2}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1800}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      JUDGE_LLM_ENABLED: ${JUDGE_LLM_ENABLED:-false}
+      JUDGE_LLM_BASE_URL: ${JUDGE_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      JUDGE_LLM_MODEL: ${JUDGE_LLM_MODEL:-}
+      JUDGE_LLM_API_KEY: ${JUDGE_LLM_API_KEY:-local}
+      JUDGE_LLM_TEMPERATURE: ${JUDGE_LLM_TEMPERATURE:-0.2}
+      JUDGE_LLM_MAX_TOKENS: ${JUDGE_LLM_MAX_TOKENS:-1800}
+      JUDGE_LLM_TIMEOUT_SECONDS: ${JUDGE_LLM_TIMEOUT_SECONDS:-120}
+      SEARXNG_PROXY_URL: ${SEARXNG_PROXY_URL:-}
+      SEARXNG_PROXY_KEY: ${SEARXNG_PROXY_KEY:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:-}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn quant_signal.adapters.rest.main:app --host 0.0.0.0 --port 8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mcp:
+    build: .
+    environment: *app-env
+    command: quant-signal-mcp
+    depends_on:
+      api:
+        condition: service_healthy
+
+  worker:
+    build: .
+    environment: *app-env
+    command: quant-signal-worker
+    depends_on:
+      api:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_QUANT_API_URL: ""
+    depends_on:
+      api:
+        condition: service_healthy
+
+  kronos:
+    build: ./kronos-service
+    restart: unless-stopped
+    volumes:
+      - kronos_models:/models
+    mem_limit: 3g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/coolify/Dockerfile
+    expose:
+      - "8080"
+    depends_on:
+      - frontend
+      - api
+      - mcp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  quant_signal_pgdata:
+  kronos_models:

@@ -45,6 +45,7 @@ from quant_signal.domain.models import (
     NewsSentimentSnapshot,
     SignalSnapshot,
 )
+from quant_signal.forecast import ForecastReport, ForecastRequest, forecast
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
 from quant_signal.infrastructure.providers import TpexProvider, TwseProvider
 from quant_signal.settings import get_settings
@@ -111,6 +112,35 @@ def create_app() -> FastAPI:
         ):
             raise HTTPException(status_code=401, detail="incorrect password")
         return {"api_key": get_settings().dashboard_api_key.get_secret_value()}
+
+    @router.get("/forecasts/status")
+    async def forecast_status() -> dict:
+        url = get_settings().kronos_url
+        ready = False
+        if url:
+            try:
+                async with httpx.AsyncClient(timeout=3) as client:
+                    result = await client.get(f"{url.rstrip('/')}/health")
+                    ready = result.is_success
+            except httpx.HTTPError:
+                pass
+        return {"bootstrap": True, "kronos": ready, "kronos_configured": bool(url)}
+
+    @router.post("/forecasts", response_model=ForecastReport)
+    async def create_forecast(
+        request: ForecastRequest,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> ForecastReport:
+        normalized = request.model_copy(update={"symbol": normalize_symbol(request.symbol)})
+        bars = await repository.list_bars(normalized.symbol, end=normalized.as_of)
+        try:
+            return await forecast(bars, normalized, kronos_url=get_settings().kronos_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=503, detail="Kronos 服務暫時無法使用，請稍後重試"
+            ) from exc
 
     @router.get("/data/status", response_model=DataStatus)
     async def data_status(
@@ -357,9 +387,7 @@ def create_app() -> FastAPI:
                     symbol=normalize_symbol(request.symbol),
                     as_of=request.as_of,
                     market=normalize_symbol(request.market),
-                    benchmark=normalize_symbol(request.benchmark)
-                    if request.benchmark
-                    else None,
+                    benchmark=normalize_symbol(request.benchmark) if request.benchmark else None,
                     strategy_version=request.strategy_version,
                     backtest_job_id=request.backtest_job_id,
                 ):

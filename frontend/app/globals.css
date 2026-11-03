@@ -1643,3 +1643,31 @@ footer {
     border-bottom: 1px solid var(--line);
   }
 }
+
+/* Research tools share the existing dashboard surfaces. */
+.backtest-form select { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: #151c33; color: var(--ink); font: inherit; }
+.research-chart { width: 100%; height: auto; display: block; margin-top: 24px; overflow: visible; }
+.research-chart text { fill: var(--muted); font-size: 11px; }
+.chart-grid { stroke: var(--line); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--muted); margin: 12px 0 24px; }
+.chart-legend span::before { content: ""; display: inline-block; height: 3px; width: 18px; background: var(--teal); margin: 0 7px 3px 0; }
+.chart-legend .legend-benchmark::before { background: var(--amber); }
+.chart-legend .legend-history::before { background: var(--muted); }
+.chart-legend .legend-band::before { height: 10px; margin-bottom: 0; background: rgba(91,226,194,.25); }
+.comparison-summary { display: flex; gap: 28px; flex-wrap: wrap; color: var(--muted); padding: 18px 0 0; font-size: 13px; }
+.comparison-summary strong { color: var(--ink); margin-left: 8px; }
+.research-note { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.research-note p { margin: 8px 0; }
+.forecast-error { color: var(--red); font-size: 13px; line-height: 1.7; }
+.research-table-wrap { overflow: auto; max-height: 350px; margin: 20px 0; border: 1px solid var(--line); border-radius: 10px; }
+.research-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: right; white-space: nowrap; }
+.research-table th { color: var(--muted); background: #151c33; position: sticky; top: 0; font-weight: 500; }
+.research-table th, .research-table td { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.research-table td:first-child, .research-table th:first-child { text-align: left; }
+.validation-card { border-top: 1px solid var(--line); padding-top: 24px; margin-top: 24px; }
+.validation-card > p { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.validation-card h3 { font-size: 18px; margin: 8px 0; }
+.trade-details { margin-top: 20px; }
+.trade-details summary { cursor: pointer; color: var(--teal); font-size: 13px; }
+.metric-grid .date-metric { font-size: 17px; }
+@media(max-width: 640px) { .research-table th, .research-table td { padding: 10px; } .view-tabs { overflow-x: auto; } .view-tabs button { white-space: nowrap; } .research-chart text { font-size: 12px; } }
