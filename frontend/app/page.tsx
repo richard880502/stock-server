@@ -190,6 +190,7 @@ type BacktestJob = {
     buy_hold_curve?: { trading_date: string; equity: number; position: number }[];
     buy_hold_return?: number | null;
     excess_return?: number | null;
+    warnings?: string[];
     transactions?: { trading_date: string; side: string; price: number; cost: number; equity: number }[];
   };
 };
@@ -322,6 +323,7 @@ function Dashboard({
   const [exitScore, setExitScore] = useState(45);
   const [backtest, setBacktest] = useState<BacktestJob | null>(null);
   const [loadingBacktest, setLoadingBacktest] = useState(false);
+  const [useMarketFilter, setUseMarketFilter] = useState(false);
   const [useChipFilter, setUseChipFilter] = useState(false);
   const selectedMarket =
     symbol.trim().toUpperCase().endsWith(".TWO") ||
@@ -539,7 +541,7 @@ function Dashboard({
           body: JSON.stringify({
             symbol: symbol.trim(),
             benchmark: benchmark.trim() || null,
-            market: selectedMarket,
+            market: useMarketFilter ? selectedMarket : null,
             strategy_version: "regime_v1",
             start: backtestStart,
             end: asOf,
@@ -1266,6 +1268,11 @@ function Dashboard({
               <label><span>賣出稅費（bps）</span><input type="number" min="0" max="1000" step="0.01" required value={sellTaxBps} onChange={e => setSellTaxBps(Number(e.target.value))} /></label>
               <div className="cost-note">1 bps = 0.01%。請依商品與券商填入成本；期末保留部位，未強制平倉。</div>
               <label className="chip-filter-toggle">
+                <input type="checkbox" checked={useMarketFilter} onChange={e => setUseMarketFilter(e.target.checked)} />
+                <span>啟用市場環境濾網<small>Risk-off 時退出持股</small></span>
+              </label>
+              {!dataStatus?.market_series.some(series => series.key === selectedMarket && series.is_real) && <p className="research-note">目前此市場尚無官方環境資料。啟用市場濾網會使用示範資料，結果僅供功能展示。</p>}
+              <label className="chip-filter-toggle">
                 <input
                   type="checkbox"
                   checked={useChipFilter}
@@ -1325,6 +1332,7 @@ function Dashboard({
                       </strong>
                     </div>
                   </div>
+                  {backtest.result.warnings?.map(w => <p className="forecast-error" key={w}>{w}</p>)}
                   <div className="comparison-summary">
                     <span>同標的買入持有 <strong>{backtest.result.buy_hold_return == null ? "—" : formatPct(backtest.result.buy_hold_return)}</strong></span>
                     <span>策略超額報酬 <strong>{backtest.result.excess_return == null ? "—" : formatPct(backtest.result.excess_return)}</strong></span>

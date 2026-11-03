@@ -385,6 +385,7 @@ class BacktestReport(BaseModel):
     buy_hold_return: float | None = None
     excess_return: float | None = None
     transactions: list[BacktestTrade] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class BacktestJob(BaseModel):

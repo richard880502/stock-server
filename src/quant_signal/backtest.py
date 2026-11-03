@@ -180,6 +180,12 @@ class BacktestEngine:
             running_peak = max(running_peak, value)
             max_drawdown = min(max_drawdown, value / running_peak - 1)
 
+        warnings: list[str] = []
+        if any(b.source == "synthetic_demo" for b in all_bars):
+            warnings.append("價格輸入包含合成示範資料，結果僅供功能展示。")
+        if spec.market and any(o.source == "synthetic_demo" for o in (market_observations or [])):
+            warnings.append("市場環境濾網的輸入包含合成示範資料，不能視為正式歷史績效。")
+
         return BacktestReport(
             spec=spec,
             started_at=started_at,
@@ -198,4 +204,5 @@ class BacktestEngine:
                 total_return - (buy_hold_curve[-1].equity / spec.initial_capital - 1), 6
             ),
             transactions=transactions,
+            warnings=warnings,
         )
