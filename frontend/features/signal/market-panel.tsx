@@ -6,6 +6,8 @@ import { Stat } from "@/components/stat";
 import type { MarketCode } from "@/lib/api/endpoints";
 import type { MarketEnvironment } from "@/lib/api/types";
 import { marketFactorLabels } from "@/lib/copy";
+import { scoreLine } from "@/lib/backfill";
+import { useBackfillStatus } from "@/lib/use-backfill-status";
 import { formatNumber, formatPct, formatSigned } from "@/lib/format";
 
 const isOfficial = (environment: MarketEnvironment) =>
@@ -68,6 +70,7 @@ export function MarketPanel({
           <InfoIcon size={16} />
           <span>
             市場資料最新只到 {environment.as_of}，早於你選的截止日 {asOf}；上方為該日的市場環境。
+            <ScoreRebuildNote market={market} />
           </span>
         </p>
       )}
@@ -100,6 +103,18 @@ export function MarketPanel({
       </div>
     </Card>
   );
+}
+
+/**
+ * Mounted only inside the "market data is older than your date" callout, so the
+ * status is requested only when it is needed. Silent when the endpoint fails or the
+ * score is current.
+ */
+function ScoreRebuildNote({ market }: { market: MarketCode }) {
+  const { rows } = useBackfillStatus();
+  const line = rows?.find((row) => row.market === market);
+  const text = line ? scoreLine(line) : null;
+  return text ? <span className="callout-extra">{text}</span> : null;
 }
 
 export function MarketSkeleton() {
