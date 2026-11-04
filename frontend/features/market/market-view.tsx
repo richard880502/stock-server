@@ -2,9 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
+import { BackfillProgress, BackfillProgressSkeleton } from "@/components/backfill-progress";
 import { ErrorBanner } from "@/components/error-banner";
 import { getMarketFlows, getMarketRankings } from "@/lib/api/endpoints";
+import { needsAttention } from "@/lib/backfill";
 import { useDashboard } from "@/lib/dashboard-context";
+import { useBackfillStatus } from "@/lib/use-backfill-status";
 import { MarketDataFooter } from "./data-footer";
 import { FlowSection } from "./flow-section";
 import { MarketControls } from "./market-controls";
@@ -51,6 +54,8 @@ export function MarketView() {
   const backfill = Boolean(
     lead?.backfill_pending || bottom.data?.backfill_pending || flows.data?.backfill_pending,
   );
+  const status = useBackfillStatus();
+  const showProgress = status.rows !== null && status.rows.some(needsAttention);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const error = top.error ?? bottom.error ?? flows.error;
   const retry = () => {
@@ -75,7 +80,15 @@ export function MarketView() {
         onMetric={(metric) => update({ metric })}
       />
 
-      {backfill && <BackfillNotice />}
+      {status.rows === null && !status.settled && status.slow ? (
+        <BackfillProgressSkeleton />
+      ) : showProgress ? (
+        <BackfillProgress rows={status.rows ?? []} />
+      ) : (
+        // Status endpoint missing or failed, or it says "complete" while a list still reports
+        // pending: keep the generic notice so the page never goes silent about missing data.
+        backfill && <BackfillNotice />
+      )}
       {error && error !== dismissed && (
         <ErrorBanner message={error} onDismiss={() => setDismissed(error)} onRetry={retry} />
       )}
