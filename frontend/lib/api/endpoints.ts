@@ -4,6 +4,7 @@ import { ApiError, SyncPendingError } from "./errors";
 import { readSse } from "./sse";
 import type {
   AnalysisRequest,
+  BackfillStatus,
   BacktestJob,
   BacktestRequest,
   ChipFlow,
@@ -183,3 +184,7 @@ export function getMarketFlows(
 
 export const getMarketDataStatus = (init?: Init) =>
   fetchJson<MarketDataStatus[]>(apiUrl("/api/v1/market/data-status"), init);
+
+/** Whole-market backfill progress, one item per exchange (TW 上市, TWO 上櫃). */
+export const getBackfillStatus = (init?: Init) =>
+  fetchJson<BackfillStatus[]>(apiUrl("/api/v1/market/backfill-status"), init);

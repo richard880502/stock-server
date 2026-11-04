@@ -95,6 +95,14 @@ preflight and utilities; the system itself is plain CSS custom properties.
   the previous data dimmed while a new query loads, and re-polls every 15 s while
   the response says `backfill_pending`. The as-of date comes from the shared query
   bar (debounced by `use-committed-as-of.ts`).
+- **Backfill progress** – `GET /api/v1/market/backfill-status` (one item per exchange) feeds
+  `components/backfill-progress.tsx` through `lib/use-backfill-status.ts`: a bar per exchange
+  (`role="progressbar"`), percent, an ETA from `eta_seconds` (`lib/backfill.ts`; "正在估算…"
+  while running without one, "排隊中" when queued) and whether the market score is current. It
+  polls every 15 s only while an exchange is running or queued, hides itself when both are
+  `complete`, and shows a quiet note when `idle`. If the endpoint fails the page falls back to the
+  generic 資料回補中 notice. The signal page reuses `scoreLine()` under the "market data is older
+  than your date" notice (never promises a time: the ETA is for the whole history, not the score).
 - **Filters in the URL** – `?market=TW&window=5&metric=foreign_net&range=60&cum=1`
   (`use-market-params.ts`); defaults are omitted and bad values fall back.
 - **Boards** – `ranking-board.tsx` renders a real table; inside a container query

@@ -181,6 +181,8 @@ class QuantRepository(Protocol):
 
     async def has_active_sync_job(self, kind: SyncJobKind) -> bool: ...
 
+    async def list_active_sync_jobs(self, kind: SyncJobKind) -> list[SyncJob]: ...
+
     async def upsert_google_user(
         self,
         *,

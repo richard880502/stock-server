@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, Protocol
 
@@ -55,7 +55,14 @@ class MarketSnapshotSyncService:
         self.source = source
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    async def sync(self, *, start: date, end: date) -> DataSyncReport:
+    async def sync(
+        self,
+        *,
+        start: date,
+        end: date,
+        on_progress: Callable[[], Awaitable[None]] | None = None,
+        progress_every: int = 40,
+    ) -> DataSyncReport:
         started_at = self._clock()
         weekdays = [
             start + timedelta(days=offset)
@@ -91,6 +98,9 @@ class MarketSnapshotSyncService:
                     )
                 ]
             )
+            if on_progress is not None and index % progress_every == 0 and index < len(pending):
+                # Lets derived data (the market score) appear while a long fill is still running.
+                await on_progress()
             if index % 20 == 0:
                 logger.info(
                     "%s market snapshot: %s/%s days (%s)",

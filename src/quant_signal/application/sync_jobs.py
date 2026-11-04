@@ -52,14 +52,21 @@ async def run_sync_job(
             market="TWO" if is_otc else "TW",
             source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
         )
-        report = await snapshot.sync(start=start, end=end)
-        # The environment score is derived from what was just stored.
-        observations = await MarketObservationSyncService(
+        observer = MarketObservationSyncService(
             repository,  # type: ignore[arg-type]
             tpex if is_otc else twse,  # type: ignore[arg-type]
             market="TWO" if is_otc else "TW",
             source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
-        ).sync(end=end)
+        )
+
+        async def build_scores() -> None:
+            await observer.sync(end=end)
+
+        # Newest sessions are fetched first, so the latest scores become computable
+        # (252 stored sessions) long before the whole history is in; build them
+        # as the fill goes instead of waiting for it to finish.
+        report = await snapshot.sync(start=start, end=end, on_progress=build_scores)
+        observations = await observer.sync(end=end)
         return report.model_copy(
             update={
                 "market_observations_received": observations.market_observations_received,
