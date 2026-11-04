@@ -362,3 +362,26 @@ export type MarketDataStatus = {
   institutional_coverage: number;
   credit_coverage: number;
 };
+
+/** "running" a worker is fetching; "queued" a job waits; "idle" history is incomplete with nothing scheduled; "complete" steady state. */
+export type BackfillState = "running" | "queued" | "complete" | "idle";
+
+/** One exchange's whole-market backfill, from GET /api/v1/market/backfill-status. */
+export type BackfillStatus = {
+  market: "TW" | "TWO";
+  state: BackfillState;
+  lookback_days: number;
+  days_total: number;
+  days_done: number;
+  /** 0-100, one decimal. */
+  percent: number;
+  /** Null unless a job is running and progressed in the last ten minutes. */
+  rate_per_minute: number | null;
+  /** Rough estimate in seconds; same null rule as rate_per_minute. */
+  eta_seconds: number | null;
+  stored_sessions: number;
+  sessions_needed_for_score: number;
+  latest_score_date: string | null;
+  /** The latest stored day already has a score. */
+  score_ready: boolean;
+};
