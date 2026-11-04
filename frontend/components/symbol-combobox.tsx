@@ -43,11 +43,25 @@ export function SymbolCombobox({
   value,
   recents,
   onSelect,
+  label = "分析標的",
+  placeholder = "代號或名稱，例如 2330、台積電",
+  resetOnSelect = false,
+  disabled = false,
+  markedSymbols,
+  markedLabel = "已加入",
 }: {
   /** The committed symbol shown when the field is not being edited. */
   value: string;
   recents: RecentSymbol[];
-  onSelect: (symbol: string) => void;
+  onSelect: (symbol: string, name?: string) => void;
+  label?: string;
+  placeholder?: string;
+  /** Clear the field after a pick (an "add" box rather than a "current symbol" box). */
+  resetOnSelect?: boolean;
+  disabled?: boolean;
+  /** Symbols to tag in the results, e.g. the ones already on the watchlist. */
+  markedSymbols?: ReadonlySet<string>;
+  markedLabel?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -143,12 +157,12 @@ export function SymbolCombobox({
     !pristine && !searching && search?.status === "ready" && search.rows.length === 0;
   const activeIndex = Math.min(active, options.length - 1);
 
-  const commit = (symbol: string) => {
+  const commit = (symbol: string, name?: string) => {
     setOpen(false);
     setHint(null);
     setActive(-1);
-    setText(symbol);
-    onSelect(symbol);
+    setText(resetOnSelect ? "" : symbol);
+    onSelect(symbol, name);
     inputRef.current?.blur();
   };
 
@@ -173,7 +187,7 @@ export function SymbolCombobox({
       case "Enter": {
         event.preventDefault();
         if (open && activeIndex >= 0 && options[activeIndex]) {
-          commit(options[activeIndex].symbol);
+          commit(options[activeIndex].symbol, options[activeIndex].name);
           return;
         }
         const normalized = normalizeSymbolInput(query);
@@ -212,7 +226,7 @@ export function SymbolCombobox({
       }}
     >
       <label className="field-label" htmlFor={`${listId}-input`}>
-        分析標的
+        {label}
       </label>
       <div className="combobox-control">
         <SearchIcon className="combobox-icon" />
@@ -226,7 +240,8 @@ export function SymbolCombobox({
           aria-activedescendant={showPanel ? activeId : undefined}
           aria-describedby={hint ? `${listId}-hint` : undefined}
           value={text}
-          placeholder="代號或名稱，例如 2330、台積電"
+          disabled={disabled}
+          placeholder={placeholder}
           autoComplete="off"
           autoCapitalize="characters"
           spellCheck={false}
@@ -270,7 +285,7 @@ export function SymbolCombobox({
                 className="combobox-option"
                 data-active={index === activeIndex || undefined}
                 onMouseMove={() => setActive(index)}
-                onClick={() => commit(option.symbol)}
+                onClick={() => commit(option.symbol, option.name)}
               >
                 <span className="combobox-symbol mono">{option.symbol}</span>
                 <span className="combobox-name">
@@ -279,6 +294,9 @@ export function SymbolCombobox({
                     : option.name || "—"}
                 </span>
                 <span className="combobox-tags">
+                  {markedSymbols?.has(option.symbol.toUpperCase()) && (
+                    <span className="combobox-quick">{markedLabel}</span>
+                  )}
                   {option.tracked === false && (
                     <span
                       className="combobox-quick"
