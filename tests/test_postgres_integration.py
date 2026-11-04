@@ -303,3 +303,17 @@ async def test_users_sessions_and_atomic_usage_counters(sessions) -> None:
         assert await repo.consume_usage(first.id, "llm", day, limit=3) == (False, 3)
         assert await repo.consume_usage(first.id, "forecast", day, limit=1) == (True, 1)
         assert await repo.consume_usage(first.id, "forecast", day, limit=0) == (False, 0)
+
+
+async def test_active_sync_jobs_are_listed_by_kind(sessions) -> None:
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        market, _ = await repo.enqueue_sync_job(SyncJobKind.MARKET, "ZZTW", lookback_days=30)
+        await repo.enqueue_sync_job(SyncJobKind.SYMBOL, _symbol(), lookback_days=30)
+
+        active = await repo.list_active_sync_jobs(SyncJobKind.MARKET)
+        await repo.fail_sync_job(market.id, "x", retry=False)
+        after = await repo.list_active_sync_jobs(SyncJobKind.MARKET)
+
+    assert [job.symbol for job in active] == ["ZZTW"]
+    assert after == []

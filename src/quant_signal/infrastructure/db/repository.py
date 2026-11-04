@@ -1192,6 +1192,14 @@ class PostgresQuantRepository:
         )
         return bool((await self.session.execute(statement)).scalar_one())
 
+    async def list_active_sync_jobs(self, kind: SyncJobKind) -> list[SyncJob]:
+        statement = select(SyncJobRow).where(
+            SyncJobRow.kind == kind.value,
+            SyncJobRow.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        return [self._sync_job_from_row(row) for row in rows]
+
     async def upsert_google_user(
         self,
         *,

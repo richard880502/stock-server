@@ -632,3 +632,20 @@ class User(BaseModel):
     is_active: bool = True
     created_at: datetime
     last_login_at: datetime | None = None
+
+
+class MarketBackfillStatus(BaseModel):
+    """How far the whole-market history fill has got, for one exchange."""
+
+    market: Literal["TW", "TWO"]
+    state: Literal["queued", "running", "complete", "idle"]
+    lookback_days: int
+    days_total: int
+    days_done: int
+    percent: float
+    rate_per_minute: float | None = None
+    eta_seconds: int | None = None
+    stored_sessions: int
+    sessions_needed_for_score: int
+    latest_score_date: date | None = None
+    score_ready: bool

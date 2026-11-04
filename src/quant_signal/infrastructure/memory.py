@@ -717,3 +717,10 @@ class MemoryQuantRepository:
             return False, count
         self.usage[key] = count + 1
         return True, count + 1
+
+    async def list_active_sync_jobs(self, kind: SyncJobKind) -> list[SyncJob]:
+        return [
+            job
+            for job in self.sync_jobs.values()
+            if job.kind == kind and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+        ]

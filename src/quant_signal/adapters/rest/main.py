@@ -30,6 +30,7 @@ from quant_signal.application.llm_analysis import (
     create_judge_llm_client,
     create_llm_client,
 )
+from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
@@ -65,6 +66,7 @@ from quant_signal.domain.models import (
     DebateAnalysisReport,
     Instrument,
     LLMAnalysisReport,
+    MarketBackfillStatus,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketFlowSeries,
@@ -466,6 +468,14 @@ def create_app() -> FastAPI:
         return await MarketRankingService(
             repository, backfill_days=get_settings().sync_market_lookback_days
         ).flows(market=market, days=days, as_of=as_of)
+
+    @router.get("/market/backfill-status", response_model=list[MarketBackfillStatus])
+    async def market_backfill_status(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> list[MarketBackfillStatus]:
+        return await MarketBackfillService(
+            repository, lookback_days=get_settings().sync_market_lookback_days
+        ).status()
 
     @router.get("/market/data-status", response_model=list[MarketDataStatus])
     async def market_data_status(
