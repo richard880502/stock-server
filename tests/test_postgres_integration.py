@@ -317,3 +317,65 @@ async def test_active_sync_jobs_are_listed_by_kind(sessions) -> None:
 
     assert [job.symbol for job in active] == ["ZZTW"]
     assert after == []
+
+
+async def test_market_search_and_watchlist_cap_in_sql(sessions) -> None:
+    day = date(2099, 3, 5)  # later than any other fixture date: search reads the newest session
+    needle = uuid4().hex[:8].upper()
+    names = {f"ZZ{needle}{i}.TW": f"測試{needle}{i}" for i in range(3)}
+    await _seed_market(sessions, names, day)
+
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        by_code = await repo.search_market_stocks(f"zz{needle}1")
+        by_name = await repo.search_market_stocks(f"測試{needle}")
+        assert [i.symbol for i in by_code] == [f"ZZ{needle}1.TW"] and by_code[0].tracked is False
+        assert {i.symbol for i in by_name} == set(names)
+
+        rows = await repo.list_market_stock_rows([f"zz{needle}0.tw"], [day])
+        assert [r.symbol for r in rows] == [f"ZZ{needle}0.TW"]
+
+        user = await repo.upsert_google_user(
+            google_sub=f"zz-{uuid4().hex}", email="w@x.com", name=None, picture=None
+        )
+        symbols = list(names)
+        assert await _add(repo, user.id, symbols[0], limit=2) == "added"
+        assert await _add(repo, user.id, symbols[0], limit=2) == "exists"
+        assert await _add(repo, user.id, symbols[1], limit=2) == "added"
+        assert await _add(repo, user.id, symbols[2], limit=2) == "full"
+        listed = await repo.list_watchlist(user.id)
+        assert [row[0] for row in listed] == symbols[:2]
+        assert await repo.remove_watchlist_item(user.id, symbols[0]) is True
+        assert await repo.remove_watchlist_item(user.id, symbols[0]) is False
+        assert await _add(repo, user.id, symbols[2], limit=2) == "added"
+
+
+async def test_concurrent_watchlist_adds_never_exceed_the_limit(sessions) -> None:
+    async with sessions() as session:
+        user = await PostgresQuantRepository(session).upsert_google_user(
+            google_sub=f"zz-{uuid4().hex}", email="c@x.com", name=None, picture=None
+        )
+    symbols = [_symbol() for _ in range(10)]
+
+    async def add(symbol: str) -> str:
+        async with sessions() as session:
+            return await _add(PostgresQuantRepository(session), user.id, symbol, limit=3)
+
+    outcomes = await asyncio.gather(*(add(symbol) for symbol in symbols))
+
+    assert outcomes.count("added") == 3 and outcomes.count("full") == 7
+    async with sessions() as session:
+        assert len(await PostgresQuantRepository(session).list_watchlist(user.id)) == 3
+
+
+async def _add(repo, user_id, symbol: str, *, limit: int) -> str:
+    return await repo.add_watchlist_item(
+        user_id, symbol=symbol, name=symbol, market="TW", limit=limit
+    )
+
+
+async def _seed_market(sessions, names: dict[str, str], day: date) -> None:
+    async with sessions() as session:
+        await PostgresQuantRepository(session).upsert_market_stock_days(
+            [_market_row(symbol, day, name=name) for symbol, name in names.items()]
+        )

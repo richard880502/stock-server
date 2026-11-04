@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from quant_signal.domain.models import (
@@ -203,3 +203,17 @@ class QuantRepository(Protocol):
     async def consume_usage(
         self, user_id: UUID, action: str, day: date, *, limit: int
     ) -> tuple[bool, int]: ...
+
+    async def search_market_stocks(self, query: str, *, limit: int = 10) -> list[Instrument]: ...
+
+    async def list_market_stock_rows(
+        self, symbols: list[str], dates: list[date]
+    ) -> list[MarketStockDay]: ...
+
+    async def list_watchlist(self, user_id: UUID) -> list[tuple[str, str, str, datetime]]: ...
+
+    async def add_watchlist_item(
+        self, user_id: UUID, *, symbol: str, name: str, market: str, limit: int
+    ) -> Literal["added", "exists", "full"]: ...
+
+    async def remove_watchlist_item(self, user_id: UUID, symbol: str) -> bool: ...

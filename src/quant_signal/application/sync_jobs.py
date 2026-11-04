@@ -142,6 +142,20 @@ async def enqueue_market_snapshots(
     return created
 
 
+async def request_symbol_sync(repository: QuantRepository, symbol: str) -> None:
+    """Queue background history (and institutional flow) syncs for one stock.
+
+    Deduplicated by the queue's unique active-job index, so calling it on every
+    page view or add is harmless.
+    """
+    normalized = symbol.strip().upper()
+    await repository.enqueue_sync_job(SyncJobKind.SYMBOL, normalized)
+    if not normalized.startswith("^"):
+        await repository.enqueue_sync_job(
+            SyncJobKind.INSTITUTIONS, normalized, lookback_days=INSTITUTION_LOOKBACK_DAYS
+        )
+
+
 async def ensure_market_snapshots(
     repository: QuantRepository, *, lookback_days: int
 ) -> int:

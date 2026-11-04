@@ -1,5 +1,6 @@
 import { ArrowDownIcon, ArrowUpIcon, MinusIcon, PauseIcon } from "@/components/icons";
 import { RegimeChip } from "@/components/status-chip";
+import { WatchlistStar } from "@/components/watchlist-star";
 import type { Signal, SignalAction } from "@/lib/api/types";
 import { actionCopy, actionTone, factorLabels } from "@/lib/copy";
 import { formatNumber, formatPct } from "@/lib/format";
@@ -46,6 +47,9 @@ export function VerdictHero({
           <span className="hero-symbol mono">{signal.symbol}</span>
           {name && <span className="hero-name">{name}</span>}
           <span className="hero-asof num">資料截止 {signal.as_of}</span>
+          <span className="hero-star">
+            <WatchlistStar symbol={signal.symbol} />
+          </span>
         </div>
         <p className="hero-kicker">量化訊號</p>
         <h1 id="hero-title" className="hero-action">

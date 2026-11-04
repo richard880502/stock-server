@@ -77,7 +77,37 @@ class InstrumentSearchService:
         self.repository = repository
 
     async def search(self, query: str, *, limit: int = 10) -> list[Instrument]:
-        return await self.repository.search_instruments(query, limit=limit)
+        """Search every listed stock, not only the ones with stored history.
+
+        Tracked instruments win a tie so the entry that opens instantly with the
+        full analysis is the one shown.
+        """
+        tracked = await self.repository.search_instruments(query, limit=limit)
+        listed = await self.repository.search_market_stocks(query, limit=limit)
+        merged = {
+            item.symbol: item.model_copy(update={"tracked": True}) for item in tracked
+        }
+        for item in listed:
+            merged.setdefault(item.symbol, item.model_copy(update={"tracked": False}))
+        needle = query.strip()
+        upper = needle.upper()
+
+        def rank(item: Instrument) -> tuple[int, int, str]:
+            symbol = item.symbol.upper()
+            name = item.name or ""
+            if symbol == upper or symbol.split(".")[0] == upper:
+                score = 0
+            elif symbol.startswith(upper):
+                score = 1
+            elif name == needle:
+                score = 2
+            elif name.startswith(needle):
+                score = 3
+            else:
+                score = 4
+            return (score, 0 if item.tracked else 1, symbol)
+
+        return sorted(merged.values(), key=rank)[: max(limit, 1)]
 
 
 class NewsSentimentService:

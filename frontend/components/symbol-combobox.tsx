@@ -19,6 +19,8 @@ type Option = {
   symbol: string;
   name?: string;
   market?: Instrument["market"];
+  /** false = snapshot only: opens as a quick view while full analysis is prepared. */
+  tracked?: boolean | null;
   kind: "recent" | "result" | "typed";
 };
 
@@ -127,6 +129,7 @@ export function SymbolCombobox({
       symbol: row.symbol,
       name: row.name,
       market: row.market,
+      tracked: row.tracked,
       kind: "result" as const,
     }));
     if (typedSymbol && !rows.some((row) => row.symbol === typedSymbol)) {
@@ -136,6 +139,8 @@ export function SymbolCombobox({
   }, [pristine, recents, search, typedSymbol, query]);
 
   const searching = !pristine && (search?.query !== query || search.status === "loading");
+  const noMatches =
+    !pristine && !searching && search?.status === "ready" && search.rows.length === 0;
   const activeIndex = Math.min(active, options.length - 1);
 
   const commit = (symbol: string) => {
@@ -270,12 +275,22 @@ export function SymbolCombobox({
                 <span className="combobox-symbol mono">{option.symbol}</span>
                 <span className="combobox-name">
                   {option.kind === "typed"
-                    ? "直接查詢此代號（若資料庫尚無，會先向交易所同步）"
+                    ? "直接查詢此代號（僅限上市、上櫃股票）"
                     : option.name || "—"}
                 </span>
-                {option.market && (
-                  <span className="combobox-market">{marketLabel[option.market]}</span>
-                )}
+                <span className="combobox-tags">
+                  {option.tracked === false && (
+                    <span
+                      className="combobox-quick"
+                      title="立即顯示行情與籌碼快照，完整分析（訊號、回測、預測）於背景準備"
+                    >
+                      快速檢視
+                    </span>
+                  )}
+                  {option.market && (
+                    <span className="combobox-market">{marketLabel[option.market]}</span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -287,7 +302,12 @@ export function SymbolCombobox({
                   ? "搜尋中…"
                   : search?.status === "error"
                     ? "搜尋服務暫時無法使用，仍可直接輸入代號後按 Enter。"
-                    : "找不到符合的標的。上市／上櫃代號可直接輸入，例如 2330 或 6488.TWO。"}
+                    : "找不到符合的標的。目前僅收錄上市、上櫃股票，不含 ETF。"}
+            </p>
+          )}
+          {options.length > 0 && noMatches && (
+            <p className="combobox-empty" role="status">
+              清單中沒有符合的標的。目前僅收錄上市、上櫃股票，不含 ETF。
             </p>
           )}
           {options.length > 0 && searching && (

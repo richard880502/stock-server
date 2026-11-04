@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -53,6 +54,7 @@ class MemoryQuantRepository:
         self.users: dict[UUID, User] = {}
         self.user_sessions: dict[str, tuple[UUID, datetime]] = {}
         self.usage: dict[tuple[UUID, str, date], int] = {}
+        self.watchlists: dict[UUID, dict[str, tuple[str, str, datetime]]] = {}
 
     async def get_data_status(self) -> DataStatus:
         bar_series: list[DataSeriesStatus] = []
@@ -724,3 +726,49 @@ class MemoryQuantRepository:
             for job in self.sync_jobs.values()
             if job.kind == kind and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
         ]
+
+    async def search_market_stocks(self, query: str, *, limit: int = 10) -> list[Instrument]:
+        needle = query.strip().lower()
+        if not needle or not self.market_stock_days:
+            return []
+        latest = max(item.trading_date for item in self.market_stock_days.values())
+        found = {
+            item.symbol: Instrument(
+                symbol=item.symbol, name=item.name, market=item.market, tracked=False
+            )
+            for item in self.market_stock_days.values()
+            if item.trading_date == latest
+            and (needle in item.symbol.lower() or needle in item.name.lower())
+        }
+        return list(found.values())[: max(limit, 1) * 5]
+
+    async def list_market_stock_rows(
+        self, symbols: list[str], dates: list[date]
+    ) -> list[MarketStockDay]:
+        wanted, days = {item.upper() for item in symbols}, set(dates)
+        return [
+            item
+            for item in self.market_stock_days.values()
+            if item.symbol in wanted and item.trading_date in days
+        ]
+
+    async def list_watchlist(self, user_id: UUID) -> list[tuple[str, str, str, datetime]]:
+        items = self.watchlists.get(user_id, {})
+        return sorted(
+            ((symbol, name, market, added) for symbol, (name, market, added) in items.items()),
+            key=lambda row: (row[3], row[0]),
+        )
+
+    async def add_watchlist_item(
+        self, user_id: UUID, *, symbol: str, name: str, market: str, limit: int
+    ) -> Literal["added", "exists", "full"]:
+        items = self.watchlists.setdefault(user_id, {})
+        if symbol in items:
+            return "exists"
+        if len(items) >= limit:
+            return "full"
+        items[symbol] = (name, market, datetime.now(UTC))
+        return "added"
+
+    async def remove_watchlist_item(self, user_id: UUID, symbol: str) -> bool:
+        return self.watchlists.get(user_id, {}).pop(symbol, None) is not None

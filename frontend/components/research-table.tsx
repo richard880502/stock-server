@@ -4,14 +4,16 @@ export function ResearchTable({
   label,
   headers,
   children,
+  className = "",
 }: {
   /** Accessible name of the table. */
   label: string;
   headers: string[];
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="table-wrap" tabIndex={0} role="region" aria-label={label}>
+    <div className={`table-wrap ${className}`.trim()} tabIndex={0} role="region" aria-label={label}>
       <table className="data-table">
         <thead>
           <tr>

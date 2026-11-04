@@ -205,6 +205,9 @@ class Instrument(BaseModel):
     symbol: str
     name: str | None = None
     market: str | None = None
+    # True when full adjusted history is stored (signals, backtests and forecasts work
+    # immediately); False for stocks that only exist in the whole-market snapshot.
+    tracked: bool | None = None
 
 
 class DataStatus(BaseModel):
@@ -649,3 +652,70 @@ class MarketBackfillStatus(BaseModel):
     sessions_needed_for_score: int
     latest_score_date: date | None = None
     score_ready: bool
+
+
+class StockDayPoint(BaseModel):
+    trading_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume_lots: int
+    turnover_value: float
+    change_pct: float | None = None
+    foreign_net_lots: float | None = None
+    trust_net_lots: float | None = None
+    dealer_net_lots: float | None = None
+    total_net_lots: float | None = None
+    margin_balance: int | None = None
+    margin_change: int | None = None
+    short_balance: int | None = None
+    short_change: int | None = None
+
+
+class StockSummary(BaseModel):
+    last_close: float
+    day_change_pct: float | None = None
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    # Newest session whose institutional-flow report is out (quotes can be a day ahead).
+    flows_through: date | None = None
+    foreign_net_5d_lots: float | None = None
+    total_net_5d_lots: float | None = None
+    avg_volume_20d_lots: float | None = None
+
+
+class StockOverview(BaseModel):
+    """A stock's recent quotes, flows and credit from the whole-market snapshot."""
+
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    data_through: date
+    trading_days: int
+    # "ready": adjusted history is stored. "preparing": a background sync is queued; the
+    # snapshot view still works meanwhile. "insufficient": synced, but too few bars
+    # (a fresh listing), so signals cannot be computed yet.
+    full_analysis: Literal["ready", "preparing", "insufficient"]
+    summary: StockSummary
+    days: list[StockDayPoint]
+
+
+class WatchlistItem(BaseModel):
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    added_at: datetime
+    data_through: date | None = None
+    close: float | None = None
+    day_change_pct: float | None = None
+    flows_through: date | None = None
+    foreign_net_1d_lots: float | None = None
+    total_net_5d_lots: float | None = None
+    full_analysis: Literal["ready", "preparing"] = "preparing"
+
+
+class Watchlist(BaseModel):
+    limit: int
+    count: int
+    items: list[WatchlistItem]

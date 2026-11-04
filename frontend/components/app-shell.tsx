@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { DashboardProvider } from "@/lib/dashboard-context";
+import { WatchlistProvider } from "@/lib/use-watchlist";
 import { DashboardFrame } from "./dashboard-frame";
 import { LoginGate } from "./login-gate";
 
@@ -13,7 +14,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <LoginGate>
       <DashboardProvider>
-        <DashboardFrame>{children}</DashboardFrame>
+        <WatchlistProvider>
+          <DashboardFrame>{children}</DashboardFrame>
+        </WatchlistProvider>
       </DashboardProvider>
     </LoginGate>
   );

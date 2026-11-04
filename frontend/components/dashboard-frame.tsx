@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
 import { ErrorBanner } from "./error-banner";
@@ -11,6 +12,8 @@ import { Topbar } from "./topbar";
 export function DashboardFrame({ children }: { children: ReactNode }) {
   const { error, setError, refresh, signalData } = useDashboard();
   const { marketEnvironment, syncWait, cancelSync } = signalData;
+  // The signal view shows its own countdown inside the quick stock view.
+  const onSignalRoute = (usePathname() ?? "/").replace(/\/+$/, "") === "";
 
   return (
     <div className="app">
@@ -25,7 +28,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       </header>
 
       <main id="main" className="container page" tabIndex={-1}>
-        {syncWait && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
+        {syncWait && !onSignalRoute && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={() => refresh()} />
         )}

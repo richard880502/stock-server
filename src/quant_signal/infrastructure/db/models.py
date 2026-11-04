@@ -464,3 +464,18 @@ class UsageCounterRow(Base):
     action: Mapped[str] = mapped_column(String(32), primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class WatchlistItemRow(Base):
+    __tablename__ = "watchlist_items"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # Name and market are copied at add time so a halted or renamed stock still lists.
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

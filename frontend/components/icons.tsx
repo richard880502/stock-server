@@ -157,3 +157,10 @@ export const MarketIcon = (p: IconProps) => (
     <path d="M5 20v-7M12 20V5M19 20v-10" />
   </Icon>
 );
+
+/** Five-point star; pass `filled` for the "in my watchlist" state. */
+export const StarIcon = ({ filled = false, ...p }: IconProps & { filled?: boolean }) => (
+  <Icon {...p} fill={filled ? "currentColor" : "none"}>
+    <path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.8-5.2-2.75-5.2 2.75 1-5.8-4.2-4.1 5.8-.85Z" />
+  </Icon>
+);
