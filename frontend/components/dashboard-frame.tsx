@@ -12,8 +12,12 @@ import { Topbar } from "./topbar";
 export function DashboardFrame({ children }: { children: ReactNode }) {
   const { error, setError, refresh, signalData } = useDashboard();
   const { marketEnvironment, syncWait, cancelSync } = signalData;
-  // The signal view shows its own countdown inside the quick stock view.
-  const onSignalRoute = (usePathname() ?? "/").replace(/\/+$/, "") === "";
+  // The signal view shows its own countdown inside the quick stock view; the watchlist page
+  // is unrelated to a signal load that happens to be retrying in the background.
+  const path = (usePathname() ?? "/").replace(/\/+$/, "");
+  const onSignalRoute = path === "";
+  // The watchlist page has its own "add a stock" search; the analysis query bar does not apply.
+  const onWatchlistRoute = path === "/watchlist";
 
   return (
     <div className="app">
@@ -23,12 +27,12 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       <header className="app-header">
         <div className="container">
           <Topbar />
-          <QueryBar />
+          {!onWatchlistRoute && <QueryBar />}
         </div>
       </header>
 
       <main id="main" className="container page" tabIndex={-1}>
-        {syncWait && !onSignalRoute && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
+        {syncWait && !onSignalRoute && !onWatchlistRoute && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={() => refresh()} />
         )}

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/card";
 import { EmptyState } from "@/components/empty-state";
+import { SymbolCombobox } from "@/components/symbol-combobox";
 import { AlertIcon, InfoIcon, StarIcon, XIcon } from "@/components/icons";
 import { JobStatusChip } from "@/components/status-chip";
 import type { WatchlistItem } from "@/lib/api/types";
@@ -120,6 +121,7 @@ export function WatchlistView() {
   const watchlist = useWatchlist();
   const { refresh: refreshList, setMember } = watchlist;
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [addNote, setAddNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     refreshList(STALE_AFTER_MS);
@@ -142,9 +144,27 @@ export function WatchlistView() {
     [setMember],
   );
 
+  const add = useCallback(
+    async (symbol: string, name?: string) => {
+      setAddNote(null);
+      const result = await setMember(symbol, true);
+      const code = symbol.replace(/\.TWO?$/, "");
+      setAddNote(
+        result.ok
+          ? { ok: true, text: `已加入 ${name ? `${name}（${code}）` : symbol}` }
+          : { ok: false, text: result.message },
+      );
+    },
+    [setMember],
+  );
+
   const items = useMemo(() => watchlist.watchlist?.items ?? [], [watchlist.watchlist]);
   const { phase, count, limit } = watchlist;
   const full = phase === "ready" && count >= limit;
+  const memberSymbols = useMemo(
+    () => new Set(items.map((item) => item.symbol.toUpperCase())),
+    [items],
+  );
 
   let body;
   if (phase === "unavailable") {
@@ -189,7 +209,7 @@ export function WatchlistView() {
           </Link>
         }
       >
-        在任一檔股票的頁面按下「加入自選股」星號，就會出現在這裡，最多 {limit} 檔。
+        在上方搜尋股票代號或名稱，選到就會直接加入，最多 {limit} 檔。也可以在任一檔股票頁按下星號。
         {WATCHLIST_COVERAGE_NOTE}
       </EmptyState>
     );
@@ -274,6 +294,26 @@ export function WatchlistView() {
           </span>
         )}
       </div>
+      {phase !== "unavailable" && (
+        <div className="watch-add">
+          <SymbolCombobox
+            value=""
+            recents={[]}
+            label="加入自選股"
+            placeholder={full ? `已滿 ${limit} 檔，請先移除一檔` : "搜尋代號或名稱，選取後直接加入"}
+            resetOnSelect
+            disabled={full || phase === "loading"}
+            markedSymbols={memberSymbols}
+            onSelect={add}
+          />
+          <p
+            className={addNote?.ok === false ? "inline-error" : "watch-add-note"}
+            role={addNote?.ok === false ? "alert" : "status"}
+          >
+            {addNote?.text}
+          </p>
+        </div>
+      )}
       {full && (
         <div className="callout info" role="status">
           <InfoIcon size={16} />
