@@ -42,6 +42,12 @@ from quant_signal.application.services import (
     NewsSentimentService,
     SignalService,
 )
+from quant_signal.application.stocks import (
+    StockNotFound,
+    StockOverviewService,
+    WatchlistFull,
+    WatchlistService,
+)
 from quant_signal.application.user_auth import (
     SESSION_COOKIE,
     STATE_COOKIE,
@@ -74,6 +80,8 @@ from quant_signal.domain.models import (
     NewsSentimentSnapshot,
     RankingMetric,
     SignalSnapshot,
+    StockOverview,
+    Watchlist,
 )
 from quant_signal.forecast import ForecastReport, ForecastRequest, forecast
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
@@ -125,7 +133,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origin_list(),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
         # Lets the dashboard read the sync-pending retry delay cross-origin.
         expose_headers=["Retry-After"],
@@ -482,6 +490,58 @@ def create_app() -> FastAPI:
         repository: Annotated[QuantRepository, Depends(get_repository)],
     ) -> list[MarketDataStatus]:
         return await MarketRankingService(repository).status()
+
+    @router.get("/stocks/{symbol}/overview", response_model=StockOverview)
+    async def stock_overview(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> StockOverview:
+        """Recent quotes, flows and credit for any listed stock, straight from the
+        whole-market snapshot (no wait); queues the full history in the background."""
+        try:
+            return await StockOverviewService(repository).get(symbol)
+        except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def _watchlist_user(principal: Principal) -> UUID:
+        if principal.kind != "user" or principal.user is None:
+            raise HTTPException(status_code=403, detail="請先以 Google 帳號登入才能使用自選股")
+        return principal.user.id
+
+    @router.get("/watchlist", response_model=Watchlist)
+    async def get_watchlist(
+        principal: Annotated[Principal, Depends(require_principal)],
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> Watchlist:
+        service = WatchlistService(repository, limit=get_settings().watchlist_max_items)
+        return await service.get(_watchlist_user(principal))
+
+    @router.put("/watchlist/{symbol}", response_model=Watchlist)
+    async def add_to_watchlist(
+        symbol: str,
+        principal: Annotated[Principal, Depends(require_principal)],
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> Watchlist:
+        user_id = _watchlist_user(principal)
+        service = WatchlistService(repository, limit=get_settings().watchlist_max_items)
+        try:
+            await service.add(user_id, symbol)
+        except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except WatchlistFull as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return await service.get(user_id)
+
+    @router.delete("/watchlist/{symbol}", response_model=Watchlist)
+    async def remove_from_watchlist(
+        symbol: str,
+        principal: Annotated[Principal, Depends(require_principal)],
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> Watchlist:
+        user_id = _watchlist_user(principal)
+        service = WatchlistService(repository, limit=get_settings().watchlist_max_items)
+        await service.remove(user_id, symbol)
+        return await service.get(user_id)
 
     @router.get("/backtests/{job_id}", response_model=BacktestJob)
     async def get_backtest(

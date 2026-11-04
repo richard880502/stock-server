@@ -5,6 +5,7 @@ import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
 import { EmptyState } from "@/components/empty-state";
 import { AlertIcon, ClockIcon, InfoIcon } from "@/components/icons";
+import { WatchlistStar } from "@/components/watchlist-star";
 import type { MarketMetric, MarketRankings, MarketScope, RankingEntry } from "@/lib/api/types";
 import {
   directionOf,
@@ -68,18 +69,21 @@ function Row({
     <tr className="rank-row" onClick={() => onPick(entry.symbol)}>
       <td className="col-rank num">{entry.rank}</td>
       <th scope="row" className="col-stock">
-        {/* The click bubbles to the row, so Enter / Space on the button works too. */}
-        <button
-          type="button"
-          className="stock-link"
-          aria-label={`${entry.name || code}（${code}），查看今日訊號`}
-        >
-          <span className="stock-code num">{code}</span>
-          <span className="stock-name">{entry.name}</span>
-          {scope === "ALL" && (
-            <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
-          )}
-        </button>
+        <div className="stock-cell">
+          {/* The click bubbles to the row, so Enter / Space on the button works too. */}
+          <button
+            type="button"
+            className="stock-link"
+            aria-label={`${entry.name || code}（${code}），查看今日訊號`}
+          >
+            <span className="stock-code num">{code}</span>
+            <span className="stock-name">{entry.name}</span>
+            {scope === "ALL" && (
+              <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
+            )}
+          </button>
+          <WatchlistStar symbol={entry.symbol} variant="icon" stopPropagation />
+        </div>
       </th>
       <td className="col-close num" data-label="收盤">
         {formatPrice(entry.close)}

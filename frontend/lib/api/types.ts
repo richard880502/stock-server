@@ -221,8 +221,83 @@ export type ForecastReport = {
 
 export type ForecastStatus = { kronos: boolean };
 
-/** One row of GET /api/v1/instruments/search. */
-export type Instrument = { symbol: string; name: string; market: "TW" | "TWO" };
+/**
+ * One row of GET /api/v1/instruments/search. `tracked: true` = full history is
+ * stored (full analysis opens at once); `false` = snapshot only (quick view first).
+ */
+export type Instrument = {
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  tracked?: boolean | null;
+};
+
+/** Readiness of signal / backtest / forecast for one stock. */
+export type FullAnalysisState = "ready" | "preparing" | "insufficient";
+
+/** One trading session of GET /api/v1/stocks/{symbol}/overview. Flows are in lots (張). */
+export type StockDayPoint = {
+  trading_date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume_lots: number;
+  turnover_value: number;
+  change_pct: number | null;
+  /** null = that day's exchange report is not out yet (never 0). */
+  foreign_net_lots: number | null;
+  trust_net_lots: number | null;
+  dealer_net_lots: number | null;
+  total_net_lots: number | null;
+  margin_balance: number | null;
+  margin_change: number | null;
+  short_balance: number | null;
+  short_change: number | null;
+};
+
+export type StockSummary = {
+  last_close: number;
+  day_change_pct: number | null;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  /** Latest session with published institutional flows; can lag `data_through`. */
+  flows_through: string | null;
+  foreign_net_5d_lots: number | null;
+  total_net_5d_lots: number | null;
+  avg_volume_20d_lots: number | null;
+};
+
+/** Snapshot-based quick view that works for any listed stock. */
+export type StockOverview = {
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  data_through: string;
+  trading_days: number;
+  full_analysis: FullAnalysisState;
+  summary: StockSummary;
+  /** Ascending by date, up to ~360 sessions. */
+  days: StockDayPoint[];
+};
+
+export type WatchlistItem = {
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  added_at: string;
+  data_through: string | null;
+  close: number | null;
+  day_change_pct: number | null;
+  flows_through: string | null;
+  /** Latest published session. */
+  foreign_net_1d_lots: number | null;
+  /** Last 5 published sessions. */
+  total_net_5d_lots: number | null;
+  full_analysis: Exclude<FullAnalysisState, "insufficient">;
+};
+
+export type Watchlist = { limit: number; count: number; items: WatchlistItem[] };
 
 export type LoginResponse = { api_key: string };
 

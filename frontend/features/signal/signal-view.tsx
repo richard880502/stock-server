@@ -1,9 +1,8 @@
 "use client";
 
 import { Card } from "@/components/card";
-import { EmptyState } from "@/components/empty-state";
-import { AlertIcon, ClockIcon } from "@/components/icons";
 import { LlmSection } from "@/features/llm/llm-section";
+import { QuickStockPanel } from "@/features/stock/quick-stock-panel";
 import { useDashboard } from "@/lib/dashboard-context";
 import { ChipPanel } from "./chip-panel";
 import { AlertsCard, FactorsCard, type SourcedAlert } from "./evidence-cards";
@@ -34,29 +33,20 @@ function SignalSkeleton() {
 
 export function SignalView() {
   const { query, signalData, error, refresh, instrumentName } = useDashboard();
-  const { signal, marketEnvironment, chipFlow, loading, syncWait } = signalData;
+  const { signal, marketEnvironment, chipFlow, loading, syncWait, cancelSync } = signalData;
 
   if (!signal) {
-    if (syncWait) {
+    // No full signal yet (history still being prepared, too short, or the wait
+    // ran out): show the instant snapshot view with the status of the full analysis.
+    if (syncWait || (error && !loading)) {
       return (
-        <EmptyState icon={<ClockIcon size={22} />} title={`正在準備 ${query.symbol} 的資料`} live>
-          這個標的的歷史資料還不在資料庫，背景程序正在向交易所抓取。完成後會自動載入訊號，不需要重新整理。
-        </EmptyState>
-      );
-    }
-    if (error && !loading) {
-      return (
-        <EmptyState
-          icon={<AlertIcon size={22} />}
-          title={`目前沒有 ${query.symbol} 的訊號`}
-          action={
-            <button type="button" className="button" onClick={() => refresh()}>
-              重新載入
-            </button>
-          }
-        >
-          詳細原因請見上方訊息。你也可以換一個標的或調整資料截止日。
-        </EmptyState>
+        <QuickStockPanel
+          symbol={query.symbol}
+          syncWait={syncWait}
+          signalLoading={loading}
+          onCancelSync={cancelSync}
+          onReload={() => refresh()}
+        />
       );
     }
     return <SignalSkeleton />;

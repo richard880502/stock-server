@@ -432,6 +432,21 @@ kbd {
   padding: 0 var(--space-2);
 }
 
+.combobox-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.combobox-quick {
+  font-size: var(--text-xs);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  white-space: nowrap;
+}
+
 .combobox-empty {
   padding: var(--space-3);
   font-size: var(--text-sm);

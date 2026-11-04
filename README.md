@@ -505,6 +505,42 @@ curl "http://127.0.0.1:18100/api/v1/market/data-status"
   backfills and keeps `/market-environments/TW` current on its own;
   `quant-signal-sync-data market` remains only as a manual full rebuild.
 
+## All listed stocks, quick view and watchlist
+
+Search (`GET /api/v1/instruments/search?q=`) covers **every** listed stock in the
+latest `market_stock_daily` session, by code or name, merged with the instruments
+that already have stored history. Each result carries `tracked`: `true` means the
+adjusted history is stored (signals, backtests and forecasts answer immediately),
+`false` means the stock is only known from the whole-market snapshot.
+
+```bash
+# Instant, no exchange calls: ~17 months of quotes, institutional flows and credit
+curl "http://127.0.0.1:18100/api/v1/stocks/2330/overview"
+```
+
+`/stocks/{symbol}/overview` (a bare code or `2330.TW`) is built purely from the
+snapshot table, so any listed stock opens at once. `full_analysis` reports whether
+the stored history is enough for the signal engine: `ready`; `preparing` (a
+deduplicated background job for the sync worker was just queued, usually minutes);
+or `insufficient` (already synced but too few bars, e.g. a new listing). The
+five-session flow sums use the newest sessions whose institutional report is out;
+`flows_through` says which date that is, since quotes land hours before the report.
+
+Signed-in (Google) users get a personal watchlist, capped by `WATCHLIST_MAX_ITEMS`
+(default 25; the add is serialized per user in the database, so concurrent requests
+cannot exceed it):
+
+```bash
+curl http://127.0.0.1:18100/api/v1/watchlist                 # list + latest quote/flows
+curl -X PUT    http://127.0.0.1:18100/api/v1/watchlist/2330   # add; 409 when full, 404 if unlisted
+curl -X DELETE http://127.0.0.1:18100/api/v1/watchlist/2330   # remove
+```
+
+Adding a stock queues its history sync, so it is usually ready for full analysis by
+the time it is opened. A watchlist needs a user session: API keys and the legacy
+dashboard password have no user, and get 403. ETFs are not covered yet because
+the snapshot only contains common stocks.
+
 ## Local development
 
 The project requires Python 3.12 or newer. `uv` can install a managed Python:
@@ -732,6 +768,8 @@ Current strategy mechanics:
 - `fetch_coverage`
 - `sync_jobs`
 - `market_stock_daily`
+- `users`, `user_sessions`, `usage_counters`
+- `watchlist_items`
 
 The first migration is under `migrations/versions/0001_initial.py`.
 

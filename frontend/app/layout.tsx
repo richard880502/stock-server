@@ -9,6 +9,7 @@ import "./styles/components.css";
 import "./styles/charts.css";
 import "./styles/views.css";
 import "./styles/market.css";
+import "./styles/stock.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(

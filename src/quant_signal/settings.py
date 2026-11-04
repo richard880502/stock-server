@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     quota_forecast_per_day: int = Field(default=100, ge=0)
     quota_sync_per_day: int = Field(default=50, ge=0)
     quota_backtest_per_day: int = Field(default=50, ge=0)
+    watchlist_max_items: int = Field(default=25, ge=1, le=500)
     dashboard_api_key: SecretStr = SecretStr("")
 
     def cors_origin_list(self) -> list[str]:

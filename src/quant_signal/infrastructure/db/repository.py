@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
+from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -53,6 +54,7 @@ from quant_signal.infrastructure.db.models import (
     UsageCounterRow,
     UserRow,
     UserSessionRow,
+    WatchlistItemRow,
 )
 
 
@@ -1199,6 +1201,91 @@ class PostgresQuantRepository:
         )
         rows = (await self.session.execute(statement)).scalars().all()
         return [self._sync_job_from_row(row) for row in rows]
+
+    async def search_market_stocks(self, query: str, *, limit: int = 10) -> list[Instrument]:
+        needle = query.strip()
+        if not needle:
+            return []
+        row = MarketStockDayRow
+        latest = select(func.max(row.trading_date)).scalar_subquery()
+        pattern = f"%{needle}%"
+        statement = (
+            select(row.symbol, row.name, row.market)
+            .where(
+                row.trading_date == latest,
+                or_(row.symbol.ilike(pattern), row.name.ilike(pattern)),
+            )
+            .group_by(row.symbol, row.name, row.market)
+            .limit(max(limit, 1) * 5)
+        )
+        return [
+            Instrument(symbol=symbol, name=name, market=market, tracked=False)
+            for symbol, name, market in (await self.session.execute(statement)).all()
+        ]
+
+    async def list_market_stock_rows(
+        self, symbols: list[str], dates: list[date]
+    ) -> list[MarketStockDay]:
+        if not symbols or not dates:
+            return []
+        statement = select(MarketStockDayRow).where(
+            MarketStockDayRow.symbol.in_([item.upper() for item in symbols]),
+            MarketStockDayRow.trading_date.in_(dates),
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        return [
+            MarketStockDay.model_validate(
+                {column: getattr(item, column) for column in MarketStockDay.model_fields}
+            )
+            for item in rows
+        ]
+
+    async def list_watchlist(self, user_id: UUID) -> list[tuple[str, str, str, datetime]]:
+        statement = (
+            select(
+                WatchlistItemRow.symbol,
+                WatchlistItemRow.name,
+                WatchlistItemRow.market,
+                WatchlistItemRow.added_at,
+            )
+            .where(WatchlistItemRow.user_id == user_id)
+            .order_by(WatchlistItemRow.added_at, WatchlistItemRow.symbol)
+        )
+        return [tuple(row) for row in (await self.session.execute(statement)).all()]  # type: ignore[misc]
+
+    async def add_watchlist_item(
+        self, user_id: UUID, *, symbol: str, name: str, market: str, limit: int
+    ) -> Literal["added", "exists", "full"]:
+        # Serialize per user so two concurrent adds cannot both slip under the limit.
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"watchlist:{user_id}"},
+        )
+        existing = await self.session.get(WatchlistItemRow, (user_id, symbol))
+        if existing is not None:
+            await self.session.commit()
+            return "exists"
+        count = (
+            await self.session.execute(
+                select(func.count())
+                .select_from(WatchlistItemRow)
+                .where(WatchlistItemRow.user_id == user_id)
+            )
+        ).scalar_one()
+        if count >= limit:
+            await self.session.commit()
+            return "full"
+        self.session.add(WatchlistItemRow(user_id=user_id, symbol=symbol, name=name, market=market))
+        await self.session.commit()
+        return "added"
+
+    async def remove_watchlist_item(self, user_id: UUID, symbol: str) -> bool:
+        result = await self.session.execute(
+            text("DELETE FROM watchlist_items WHERE user_id = :u AND symbol = :s"),
+            {"u": user_id, "s": symbol},
+        )
+        await self.session.commit()
+        return bool(result.rowcount)
 
     async def upsert_google_user(
         self,

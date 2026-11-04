@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChartIcon, FlaskIcon, MarketIcon, PulseIcon } from "./icons";
+import { ChartIcon, FlaskIcon, MarketIcon, PulseIcon, StarIcon } from "./icons";
 
 export const VIEWS = [
   { href: "/", label: "今日訊號", Icon: PulseIcon },
   { href: "/market", label: "市場", Icon: MarketIcon },
+  { href: "/watchlist", label: "自選股", Icon: StarIcon },
   { href: "/backtest", label: "策略回測", Icon: ChartIcon },
   { href: "/forecast", label: "預測實驗室", Icon: FlaskIcon },
 ] as const;

@@ -24,7 +24,9 @@ import type {
   MarketRankings,
   MarketScope,
   Signal,
+  StockOverview,
   SyncSymbolRequest,
+  Watchlist,
 } from "./types";
 
 type Init = Pick<RequestInit, "signal">;
@@ -188,3 +190,24 @@ export const getMarketDataStatus = (init?: Init) =>
 /** Whole-market backfill progress, one item per exchange (TW 上市, TWO 上櫃). */
 export const getBackfillStatus = (init?: Init) =>
   fetchJson<BackfillStatus[]>(apiUrl("/api/v1/market/backfill-status"), init);
+
+/** Instant snapshot-based quick view for any listed stock; 404 detail is already Chinese. */
+export const getStockOverview = (symbol: string, init?: Init) =>
+  fetchJson<StockOverview>(apiUrl(`/api/v1/stocks/${enc(symbol.trim())}/overview`), init);
+
+/** The signed-in Google user's watchlist (403 for password / API-key sessions). */
+export const getWatchlist = (init?: Init) =>
+  fetchJson<Watchlist>(apiUrl("/api/v1/watchlist"), init);
+
+/** Idempotent. 409 when the 25-stock cap is reached; the error carries the server's detail. */
+export const addToWatchlist = (symbol: string, init?: Init) =>
+  fetchJson<Watchlist>(apiUrl(`/api/v1/watchlist/${enc(symbol.trim())}`), {
+    ...init,
+    method: "PUT",
+  });
+
+export const removeFromWatchlist = (symbol: string, init?: Init) =>
+  fetchJson<Watchlist>(apiUrl(`/api/v1/watchlist/${enc(symbol.trim())}`), {
+    ...init,
+    method: "DELETE",
+  });
