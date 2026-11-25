@@ -29,7 +29,7 @@ export function BacktestResult() {
   return (
     <Card
       as="div"
-      title="回測結果"
+      title="研究畫布"
       sub={job ? `${query.symbol} · 任務 ${job.id.slice(0, 8)}` : undefined}
       aside={job && <JobStatusChip status={job.status} />}
       className="result-card"
@@ -50,9 +50,18 @@ export function BacktestResult() {
         loading ? (
           <ResultSkeleton status="建立中" />
         ) : (
-          <EmptyState icon={<ChartIcon size={22} />} title="等待策略驗證">
-            設定期間與門檻後啟動回測，結果由獨立 worker 計算，完成後會與「同標的買入持有」並排比較。
-          </EmptyState>
+          <div className="lab-empty">
+            <div className="lab-empty-visual" aria-hidden="true">
+              <span className="lab-empty-grid" />
+              <svg viewBox="0 0 520 180" preserveAspectRatio="none">
+                <path d="M0 145 C60 138 72 105 126 112 S194 78 242 91 S318 52 372 62 S438 30 520 38" />
+                <path className="lab-empty-baseline" d="M0 148 C82 142 116 126 172 130 S258 102 322 110 S414 82 520 86" />
+              </svg>
+            </div>
+            <EmptyState icon={<ChartIcon size={22} />} title="準備建立第一組策略曲線">
+              從左側選擇範本或自行調整參數。完成後，這裡會顯示績效、風險、交易明細與可自由畫線的互動圖表。
+            </EmptyState>
+          </div>
         )
       ) : !result ? (
         <ResultSkeleton status={job.status === "queued" ? "排隊中" : "計算中"} />

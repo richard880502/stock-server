@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDownIcon } from "@/components/icons";
 import type { EquityPoint } from "@/lib/api/types";
 import { formatNumber, formatPrice, shortDate } from "@/lib/format";
 import { ChartFrame, ChartLegend } from "./chart-frame";
 import { compactTwd, linear, niceTicks, sampleIndices } from "./scale";
+import { DrawingLayer, type Drawing, type DrawingTool } from "./drawing-layer";
 
 const STRATEGY = "var(--series-strategy)";
 const BASELINE = "var(--series-baseline)";
@@ -32,6 +33,8 @@ export function EquityChart({
   strategy: EquityPoint[];
   buyHold: EquityPoint[];
 }) {
+  const [drawingTool, setDrawingTool] = useState<DrawingTool>("cursor");
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
   const model = useMemo(() => {
     const baselineByDate = new Map(buyHold.map((p) => [p.trading_date, p.equity]));
     const values = [...strategy.map((p) => p.equity), ...buyHold.map((p) => p.equity)];
@@ -48,40 +51,81 @@ export function EquityChart({
 
   return (
     <figure className="chart-figure">
-      <ChartFrame
-        count={n}
-        label={`策略淨值與同標的買入持有走勢，${first.trading_date} 至 ${last.trading_date}`}
-        margin={{ top: 14, right: 18, bottom: 28, left: 58 }}
-        xAt={(i, plot) => plot.left + (n === 1 ? 0 : (i / (n - 1)) * (plot.right - plot.left))}
-        defaultIndex={n - 1}
-        readout={(i) => {
-          const point = strategy[i];
-          const base = baselineByDate.get(point.trading_date);
-          return {
-            title: point.trading_date,
-            rows: [
-              { label: "策略淨值", value: formatNumber(point.equity, 0), color: STRATEGY },
-              ...(base !== undefined
-                ? [{ label: "買入持有", value: formatNumber(base, 0), color: BASELINE, dashed: true }]
-                : []),
-            ],
-            note: point.position > 0 ? "策略持有中" : "策略空手",
-          };
-        }}
-        markers={(i, ctx) => {
-          const y = linear([ticks[0], ticks[ticks.length - 1]], [ctx.plot.bottom, ctx.plot.top]);
-          const x = ctx.plot.left + (n === 1 ? 0 : (i / (n - 1)) * (ctx.plot.right - ctx.plot.left));
-          const base = baselineByDate.get(strategy[i].trading_date);
-          return (
-            <>
-              {base !== undefined && (
-                <circle cx={x} cy={y(base)} r={4} fill={BASELINE} className="chart-dot" />
-              )}
-              <circle cx={x} cy={y(strategy[i].equity)} r={4.5} fill={STRATEGY} className="chart-dot" />
-            </>
-          );
-        }}
-      >
+      <div className="analysis-toolbar" role="toolbar" aria-label="圖表繪圖工具">
+        <div className="analysis-toolbar-group">
+          {([
+            ["cursor", "游標", "⌖"],
+            ["trend", "趨勢線", "╱"],
+            ["horizontal", "水平線", "—"],
+            ["range", "區間框", "□"],
+          ] as const).map(([tool, label, glyph]) => (
+            <button
+              key={tool}
+              type="button"
+              className="drawing-tool"
+              aria-pressed={drawingTool === tool}
+              onClick={() => setDrawingTool(tool)}
+            >
+              <span aria-hidden="true">{glyph}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="analysis-toolbar-actions">
+          <button
+            type="button"
+            className="button small"
+            disabled={!drawings.length}
+            onClick={() => setDrawings((items) => items.slice(0, -1))}
+          >
+            復原
+          </button>
+          <button
+            type="button"
+            className="button small"
+            disabled={!drawings.length}
+            onClick={() => setDrawings([])}
+          >
+            清除標記
+          </button>
+        </div>
+      </div>
+      <div className="analysis-canvas" data-tool={drawingTool}>
+        <ChartFrame
+          count={n}
+          label={`策略淨值與同標的買入持有走勢，${first.trading_date} 至 ${last.trading_date}`}
+          hint={drawingTool === "cursor" ? "可用左右方向鍵逐一檢視數值" : `目前使用${drawingTool === "trend" ? "趨勢線" : drawingTool === "horizontal" ? "水平線" : "區間框"}工具，在圖表上拖曳即可標記`}
+          margin={{ top: 14, right: 18, bottom: 28, left: 58 }}
+          xAt={(i, plot) => plot.left + (n === 1 ? 0 : (i / (n - 1)) * (plot.right - plot.left))}
+          defaultIndex={n - 1}
+          readout={(i) => {
+            const point = strategy[i];
+            const base = baselineByDate.get(point.trading_date);
+            return {
+              title: point.trading_date,
+              rows: [
+                { label: "策略淨值", value: formatNumber(point.equity, 0), color: STRATEGY },
+                ...(base !== undefined
+                  ? [{ label: "買入持有", value: formatNumber(base, 0), color: BASELINE, dashed: true }]
+                  : []),
+              ],
+              note: point.position > 0 ? "策略持有中" : "策略空手",
+            };
+          }}
+          markers={(i, ctx) => {
+            const y = linear([ticks[0], ticks[ticks.length - 1]], [ctx.plot.bottom, ctx.plot.top]);
+            const x = ctx.plot.left + (n === 1 ? 0 : (i / (n - 1)) * (ctx.plot.right - ctx.plot.left));
+            const base = baselineByDate.get(strategy[i].trading_date);
+            return (
+              <>
+                {base !== undefined && (
+                  <circle cx={x} cy={y(base)} r={4} fill={BASELINE} className="chart-dot" />
+                )}
+                <circle cx={x} cy={y(strategy[i].equity)} r={4.5} fill={STRATEGY} className="chart-dot" />
+              </>
+            );
+          }}
+        >
         {(ctx) => {
           const { plot } = ctx;
           const x = (i: number) => plot.left + (n === 1 ? 0 : (i / (n - 1)) * (plot.right - plot.left));
@@ -129,7 +173,14 @@ export function EquityChart({
             </>
           );
         }}
-      </ChartFrame>
+        </ChartFrame>
+        <DrawingLayer tool={drawingTool} drawings={drawings} onChange={setDrawings} />
+      </div>
+      <p className="analysis-hint">
+        {drawingTool === "cursor"
+          ? "移動游標檢視每日淨值；選擇繪圖工具後可直接在圖上拖曳標記。"
+          : `已選擇${drawingTool === "trend" ? "趨勢線" : drawingTool === "horizontal" ? "水平線" : "區間框"}，在圖表上按住並拖曳。`}
+      </p>
       <ChartLegend
         items={[
           { label: "策略淨值", color: STRATEGY },

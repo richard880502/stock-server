@@ -34,11 +34,35 @@ export function BacktestForm() {
   return (
     <Card
       as="div"
-      title="回測設定"
+      title="策略控制台"
       sub={`${query.symbol} · 截止 ${query.asOf}`}
       className="backtest-form-card"
     >
       <form className="form-stack" onSubmit={run}>
+        <div className="field">
+          <span className="field-label">快速套用策略風格</span>
+          <div className="strategy-presets" role="group" aria-label="策略風格範本">
+            <button
+              type="button"
+              onClick={() => updateForm({ entryScore: 60, exitScore: 45, useMarketFilter: false, useChipFilter: false })}
+            >
+              <strong>基準</strong><small>60 / 45</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateForm({ entryScore: 70, exitScore: 50, useMarketFilter: true, useChipFilter: true })}
+            >
+              <strong>穩健</strong><small>雙濾網</small>
+            </button>
+            <button
+              type="button"
+              onClick={() => updateForm({ entryScore: 55, exitScore: 35, useMarketFilter: false, useChipFilter: false })}
+            >
+              <strong>靈敏</strong><small>55 / 35</small>
+            </button>
+          </div>
+        </div>
+
         <label className="field">
           <span className="field-label">回測起始日</span>
           <input
@@ -180,7 +204,7 @@ export function BacktestForm() {
               正在執行回測
             </>
           ) : (
-            "啟動策略回測"
+            "執行這組實驗"
           )}
         </button>
         <p className="note">

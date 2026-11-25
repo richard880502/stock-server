@@ -673,6 +673,143 @@
    Backtest & forecast workbench
    ====================================================================== */
 
+.lab-heading {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: var(--space-8);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at 86% 20%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 30%),
+    linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
+  box-shadow: var(--shadow-2);
+}
+
+.lab-heading::after {
+  content: "";
+  position: absolute;
+  right: -3rem;
+  bottom: -4.5rem;
+  width: 18rem;
+  height: 9rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: 50%;
+  transform: rotate(-12deg);
+  pointer-events: none;
+}
+
+.lab-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  color: var(--accent-strong);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0.04em;
+}
+
+.lab-heading h1 {
+  max-width: 44rem;
+  font-size: clamp(2rem, 1.55rem + 2vw, 3rem);
+  line-height: 1.12;
+  letter-spacing: -0.035em;
+}
+
+.lab-heading > div > p:last-child {
+  max-width: 42rem;
+  margin-top: var(--space-3);
+  color: var(--text-2);
+  font-size: var(--text-md);
+}
+
+.lab-principles {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(8px);
+}
+
+.lab-principles span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+
+.lab-principles svg {
+  color: var(--accent);
+}
+
+.lab-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.lab-steps li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text-3);
+}
+
+.lab-steps li[data-active="true"] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+}
+
+.lab-steps li > span {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  color: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+}
+
+.lab-steps li div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.lab-steps strong {
+  font-size: var(--text-sm);
+}
+
+.lab-steps small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .view-heading h1 {
   font-size: var(--text-xl);
 }
@@ -684,9 +821,112 @@
 
 .workbench {
   display: grid;
-  grid-template-columns: 21rem minmax(0, 1fr);
+  grid-template-columns: 22rem minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
+}
+
+.strategy-presets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.strategy-presets button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.strategy-presets button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.strategy-presets strong {
+  font-size: var(--text-sm);
+}
+
+.strategy-presets small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.lab-empty {
+  overflow: hidden;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.lab-empty-visual {
+  position: relative;
+  height: 11rem;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.lab-empty-grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.65;
+  background-image:
+    linear-gradient(var(--chart-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--chart-grid) 1px, transparent 1px);
+  background-size: 100% 36px, 64px 100%;
+}
+
+.lab-empty-visual svg {
+  position: absolute;
+  inset: 1rem 0 0;
+  width: 100%;
+  height: calc(100% - 1rem);
+}
+
+.lab-empty-visual path {
+  fill: none;
+  stroke: var(--series-strategy);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.lab-empty-visual .lab-empty-baseline {
+  stroke: var(--series-baseline);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+
+.lab-empty .empty-state {
+  min-height: 14rem;
+}
+
+@media (max-width: 719px) {
+  .lab-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: var(--space-6) var(--space-5);
+  }
+
+  .lab-principles {
+    width: 100%;
+  }
+
+  .lab-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .lab-steps li:not([data-active="true"]) {
+    display: none;
+  }
 }
 
 .workbench > :first-child {
