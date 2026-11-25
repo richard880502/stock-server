@@ -190,6 +190,23 @@ def test_config_reports_what_is_available(client) -> None:
     assert client.get("/api/v1/auth/config").json() == {"google": True, "password": False}
 
 
+def test_password_login_needs_both_a_password_and_an_api_key(client, monkeypatch) -> None:
+    no_key = _settings(dashboard_password="pw", dashboard_api_key="")
+    monkeypatch.setattr(rest_main, "get_settings", lambda: no_key)
+    assert client.get("/api/v1/auth/config").json()["password"] is False
+    failed = client.post("/api/v1/auth/login", json={"password": "pw"})
+    assert failed.status_code == 503
+    assert "DASHBOARD_API_KEY" in failed.json()["detail"]
+    assert client.post("/api/v1/auth/login", json={"password": "nope"}).status_code == 401
+
+    ready = _settings(dashboard_password="pw", dashboard_api_key="k" * 32)
+    monkeypatch.setattr(rest_main, "get_settings", lambda: ready)
+    assert client.get("/api/v1/auth/config").json()["password"] is True
+    assert client.post("/api/v1/auth/login", json={"password": "pw"}).json() == {
+        "api_key": "k" * 32
+    }
+
+
 def test_google_login_is_unavailable_until_configured(client, monkeypatch) -> None:
     unconfigured = _settings(google_client_id="")
     monkeypatch.setattr(rest_main, "get_settings", lambda: unconfigured)

@@ -153,6 +153,14 @@ async def get_repository() -> AsyncIterator[QuantRepository]:
         yield PostgresQuantRepository(session)
 
 
+def password_login_ready(settings) -> bool:
+    """Password login is usable only with both a password and an API key to hand out."""
+    return bool(
+        settings.dashboard_password.get_secret_value()
+        and settings.dashboard_api_key.get_secret_value()
+    )
+
+
 def normalize_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
     if not SYMBOL_PATTERN.fullmatch(normalized):
@@ -203,7 +211,9 @@ def create_app() -> FastAPI:
         settings = get_settings()
         return {
             "google": google_enabled(settings),
-            "password": bool(settings.dashboard_password.get_secret_value()),
+            # Password login hands out the dashboard API key, so it only works when both
+            # are configured; offering it without a key would "succeed" with nothing.
+            "password": password_login_ready(settings),
         }
 
     @application.get("/api/v1/auth/google/login")
@@ -305,12 +315,18 @@ def create_app() -> FastAPI:
 
     @application.post("/api/v1/auth/login")
     async def login(request: LoginRequest) -> dict[str, str]:
-        dashboard_password = get_settings().dashboard_password.get_secret_value()
+        settings = get_settings()
+        dashboard_password = settings.dashboard_password.get_secret_value()
         if not dashboard_password or not secrets.compare_digest(
             request.password, dashboard_password
         ):
             raise HTTPException(status_code=401, detail="incorrect password")
-        return {"api_key": get_settings().dashboard_api_key.get_secret_value()}
+        if not password_login_ready(settings):
+            raise HTTPException(
+                status_code=503,
+                detail="伺服器尚未設定 DASHBOARD_API_KEY，暫時無法用密碼登入",
+            )
+        return {"api_key": settings.dashboard_api_key.get_secret_value()}
 
     @router.get("/forecasts/status")
     async def forecast_status() -> dict:
