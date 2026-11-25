@@ -179,3 +179,14 @@ svg {
     scroll-behavior: auto !important;
   }
 }
+
+/* iOS Safari zooms the page when a focused field is under 16px. Applies to
+   phones and any coarse pointer; !important so per-component sizes (e.g. the
+   compact query-bar date input) cannot reintroduce the zoom. */
+@media (max-width: 719px), (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"]),
+  select,
+  textarea {
+    font-size: max(1rem, 16px) !important;
+  }
+}

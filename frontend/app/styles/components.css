@@ -1157,3 +1157,66 @@ kbd {
 .palette-option-hint { font-size: var(--text-xs); color: var(--text-3); }
 .palette-empty { padding: 24px; text-align: center; color: var(--text-3); }
 .palette-footer { margin: 0; padding: 8px 16px; border-top: 1px solid var(--border); font-size: var(--text-xs); color: var(--text-3); }
+
+/* ---- Disabled + focus states ------------------------------------------- */
+
+.segmented button:disabled,
+.drawing-tool:disabled,
+.strategy-presets button:disabled,
+.palette-trigger:disabled,
+.input:disabled,
+select.input:disabled,
+.switch-row:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.palette-trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---- Touch targets (>= 44px) -------------------------------------------
+ * Desktop density is unchanged; coarse pointers get the larger hit areas. */
+
+@media (pointer: coarse), (max-width: 719px) {
+  .button.small,
+  .icon-button.small {
+    min-height: var(--touch);
+  }
+
+  .icon-button.small {
+    min-width: var(--touch);
+  }
+
+  .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .segmented button {
+    min-height: var(--touch);
+    min-width: var(--touch);
+  }
+
+  .palette-trigger {
+    min-height: var(--touch);
+    min-width: var(--touch);
+    justify-content: center;
+  }
+
+  .palette-option,
+  .palette-input {
+    min-height: var(--touch);
+  }
+
+  /* The whole row (switch + copy) is the hit area. */
+  .switch-row {
+    align-items: center;
+    min-height: var(--touch);
+  }
+
+  .strategy-presets button {
+    min-height: var(--touch);
+  }
+}
