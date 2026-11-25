@@ -9,7 +9,11 @@ export function LlmErrorNotice({ error, onRetry }: { error: LlmError; onRetry?: 
   if (limit) {
     return <RateLimitNotice message={error.message} retryAfterSeconds={limit.retryAfterSeconds} />;
   }
-  const upstream = error.status !== null && error.status >= 500;
+  // The API explains model failures it understood (a refusal, a quota, a reply in the wrong
+  // shape) in Chinese; show that reason itself. Anything else from a 5xx is a raw upstream
+  // error, summarised as a transient outage with the details folded away.
+  const explained = /[\u3400-\u9fff]/.test(error.message);
+  const upstream = error.status !== null && error.status >= 500 && !explained;
   return (
     <div className="notice notice-error" role="alert">
       <AlertIcon className="notice-icon" size={20} />

@@ -27,9 +27,11 @@ from quant_signal.application.data_sync import (
 from quant_signal.application.llm_analysis import (
     DebateAnalysisService,
     LLMAnalysisService,
+    LLMProviderError,
     create_judge_llm_client,
     create_llm_client,
     llm_model_name,
+    validate_llm_output,
 )
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
@@ -740,7 +742,9 @@ def create_app() -> FastAPI:
                 {"report": evidence, "question": request.question, "held": request.held,
                  "history": [turn.model_dump() for turn in request.history]},
             )
-            return StrategyAnswer.model_validate(result)
+            return validate_llm_output(StrategyAnswer, result)
+        except LLMProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         except (ValueError, httpx.HTTPError) as exc:
             raise HTTPException(status_code=502, detail="LLM response unavailable") from exc
 
