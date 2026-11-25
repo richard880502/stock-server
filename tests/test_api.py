@@ -17,10 +17,12 @@ def test_llm_status_is_safe() -> None:
 
     assert response.status_code == 200
     assert "api_key" not in response.json()
+    assert "anthropic_api_key" not in response.json()
     assert set(response.json()) == {
         "enabled",
         "configured",
         "missing",
+        "provider",
         "model",
         "base_url",
     }

@@ -228,8 +228,8 @@ curl "http://127.0.0.1:18100/api/v1/backtests/JOB_ID"
 The server supports two LLM paths:
 
 1. An external agent calls MCP tools and performs its own reasoning.
-2. The built-in analyst sends a validated evidence bundle to an
-   OpenAI-compatible model.
+2. The built-in analyst sends a validated evidence bundle to a model: Claude
+   through the Anthropic SDK, or any OpenAI-compatible server.
 
 The built-in analyst receives:
 
@@ -241,6 +241,32 @@ The built-in analyst receives:
 
 It cannot modify indicator formulas, execution timing, transaction costs, or
 historical data.
+
+### Claude (Anthropic API)
+
+```env
+LLM_ENABLED=true
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=<set in your secret store, never in git>
+ANTHROPIC_MODEL=claude-opus-5-5   # default
+ANTHROPIC_EFFORT=medium           # low | medium | high | xhigh | max
+ANTHROPIC_MAX_TOKENS=16000        # includes thinking
+```
+
+Each call streams, uses adaptive thinking at `ANTHROPIC_EFFORT`, and opts into
+server-side refusal fallbacks (`server-side-fallback-2026-07-01`,
+`fallbacks: "default"`), so a request a safety classifier declines is retried on a
+fallback model inside the same call. A request that is still refused, or an
+answer cut off at `ANTHROPIC_MAX_TOKENS`, returns HTTP 502 with the reason.
+`LLM_MODEL`, `LLM_TEMPERATURE` and `LLM_MAX_TOKENS` apply only to the
+OpenAI-compatible provider. The debate judge can use Claude independently with
+`JUDGE_LLM_ENABLED=true`, `JUDGE_LLM_PROVIDER=anthropic` and an optional
+`JUDGE_ANTHROPIC_MODEL` (defaults to `ANTHROPIC_MODEL`).
+
+Every analysis is billed by Anthropic per token; the daily per-user `llm` quota
+still applies. `GET /api/v1/llm/status` reports `provider` and the model in use.
+
+### OpenAI-compatible server
 
 Configure a local OpenAI-compatible server:
 

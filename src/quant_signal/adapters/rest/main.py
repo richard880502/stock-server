@@ -29,6 +29,7 @@ from quant_signal.application.llm_analysis import (
     LLMAnalysisService,
     create_judge_llm_client,
     create_llm_client,
+    llm_model_name,
 )
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
@@ -615,8 +616,13 @@ def create_app() -> FastAPI:
             "enabled": settings.llm_enabled,
             "configured": not settings.llm_errors(),
             "missing": settings.llm_errors(),
-            "model": settings.llm_model,
-            "base_url": settings.llm_base_url,
+            "provider": settings.llm_provider,
+            "model": llm_model_name(settings),
+            "base_url": (
+                "https://api.anthropic.com"
+                if settings.llm_provider == "anthropic"
+                else settings.llm_base_url
+            ),
         }
 
     @router.post(

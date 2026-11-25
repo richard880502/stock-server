@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from typing import Protocol
 from uuid import UUID
 
+import anthropic
 import httpx
 
 from quant_signal.application.ports import QuantRepository
@@ -292,10 +293,142 @@ class OpenAICompatibleClient:
             return json.loads(text[start : end + 1])
 
 
-def create_llm_client(settings: Settings) -> OpenAICompatibleClient:
+class LLMProviderError(ValueError):
+    """An LLM provider call failed; routes already map ValueError to HTTP 502."""
+
+
+# Server-side fallback: when a safety classifier declines a request, the API re-runs
+# it on a fallback model inside the same call instead of returning a refusal.
+ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+class AnthropicClient:
+    """Claude through the official Anthropic SDK, behind the same LLMClient interface.
+
+    Every call streams (long thinking + answer stays clear of HTTP timeouts), uses
+    adaptive thinking with a configurable effort, and opts into server-side refusal
+    fallbacks. The evidence payload is sent as JSON text, exactly like the
+    OpenAI-compatible client, so prompts and parsing are shared.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        effort: str,
+        max_tokens: int,
+        timeout_seconds: float,
+        client: anthropic.AsyncAnthropic | None = None,
+    ) -> None:
+        self._model_name = model
+        self.effort = effort
+        self.max_tokens = max_tokens
+        self._client = client or anthropic.AsyncAnthropic(
+            api_key=api_key,
+            timeout=timeout_seconds,
+            max_retries=2,
+        )
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def _request(self, system_prompt: str, payload: dict) -> dict:
+        return {
+            "model": self._model_name,
+            "max_tokens": self.max_tokens,
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                }
+            ],
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": self.effort},
+            "betas": [ANTHROPIC_FALLBACK_BETA],
+            "fallbacks": "default",
+        }
+
+    @staticmethod
+    def _check_finished(message) -> None:
+        if message.stop_reason == "refusal":
+            details = getattr(message, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            raise LLMProviderError(
+                f"Claude 拒絕回答這次請求（類別：{category or '未提供'}）"
+            )
+        if message.stop_reason == "max_tokens":
+            raise LLMProviderError(
+                "Claude 的回答超過 ANTHROPIC_MAX_TOKENS 上限而被截斷，請調高該設定"
+            )
+
+    @staticmethod
+    def _provider_error(exc: anthropic.APIError) -> LLMProviderError:
+        if isinstance(exc, anthropic.AuthenticationError):
+            return LLMProviderError("Claude API 金鑰無效（ANTHROPIC_API_KEY）")
+        if isinstance(exc, anthropic.RateLimitError):
+            return LLMProviderError("Claude API 已達速率或額度上限，請稍後再試")
+        if isinstance(exc, anthropic.APIStatusError):
+            return LLMProviderError(f"Claude API 錯誤（HTTP {exc.status_code}）：{exc.message}")
+        if isinstance(exc, anthropic.APITimeoutError):
+            return LLMProviderError("Claude API 回應逾時")
+        return LLMProviderError(f"無法連線到 Claude API：{exc}")
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        try:
+            async with self._client.beta.messages.stream(
+                **self._request(system_prompt, payload)
+            ) as stream:
+                message = await stream.get_final_message()
+        except anthropic.APIError as exc:
+            raise self._provider_error(exc) from exc
+        self._check_finished(message)
+        text = "".join(block.text for block in message.content if block.type == "text")
+        return OpenAICompatibleClient._parse_json(text)
+
+    async def stream_text(
+        self,
+        system_prompt: str,
+        payload: dict,
+    ) -> AsyncIterator[str]:
+        try:
+            async with self._client.beta.messages.stream(
+                **self._request(system_prompt, payload)
+            ) as stream:
+                async for text in stream.text_stream:
+                    if text:
+                        yield text
+                message = await stream.get_final_message()
+        except anthropic.APIError as exc:
+            raise self._provider_error(exc) from exc
+        self._check_finished(message)
+
+
+def _anthropic_client(settings: Settings, model: str) -> AnthropicClient:
+    return AnthropicClient(
+        api_key=settings.anthropic_api_key.get_secret_value(),
+        model=model,
+        effort=settings.anthropic_effort,
+        max_tokens=settings.anthropic_max_tokens,
+        timeout_seconds=settings.anthropic_timeout_seconds,
+    )
+
+
+def llm_model_name(settings: Settings) -> str | None:
+    """The model the analyst actually calls, whichever provider is selected."""
+    if settings.llm_provider == "anthropic":
+        return settings.anthropic_model
+    return settings.llm_model
+
+
+def create_llm_client(settings: Settings) -> LLMClient:
     errors = settings.llm_errors()
     if errors:
         raise ValueError(f"LLM is not configured: {', '.join(errors)}")
+    if settings.llm_provider == "anthropic":
+        return _anthropic_client(settings, settings.anthropic_model)
     assert settings.llm_model is not None
     return OpenAICompatibleClient(
         base_url=settings.llm_base_url,
@@ -307,7 +440,7 @@ def create_llm_client(settings: Settings) -> OpenAICompatibleClient:
     )
 
 
-def create_judge_llm_client(settings: Settings) -> OpenAICompatibleClient | None:
+def create_judge_llm_client(settings: Settings) -> LLMClient | None:
     """Optional second model for the debate's final synthesis call.
 
     Returns ``None`` when unconfigured, so callers fall back to the same
@@ -315,6 +448,12 @@ def create_judge_llm_client(settings: Settings) -> OpenAICompatibleClient | None
     """
     if not settings.judge_llm_enabled:
         return None
+    if settings.judge_llm_provider == "anthropic":
+        if not settings.anthropic_api_key.get_secret_value():
+            raise ValueError("Judge LLM is not configured: ANTHROPIC_API_KEY")
+        return _anthropic_client(
+            settings, settings.judge_anthropic_model or settings.anthropic_model
+        )
     if not settings.judge_llm_base_url or not settings.judge_llm_model:
         raise ValueError(
             "Judge LLM is not configured: JUDGE_LLM_BASE_URL, JUDGE_LLM_MODEL"
