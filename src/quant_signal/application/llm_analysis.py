@@ -9,6 +9,8 @@ from uuid import UUID
 
 import anthropic
 import httpx
+from annotated_types import MaxLen
+from pydantic import BaseModel, ValidationError
 
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
@@ -44,7 +46,8 @@ SYSTEM_PROMPT = """你是一位以風險管理為優先的量化市場分析師�
 3. 操作指南必須用條件式情境表達，指出確認條件與失效風險。
 4. 若資料是 synthetic_demo、樣本不足或沒有回測，必須寫入 limitations。
 5. 使用繁體中文。
-6. 只輸出符合下列結構的 JSON，不要 Markdown：
+6. 每個陣列最多 8 項（scenarios 最多 5 項），只列最重要的，依重要性由高到低排序。
+7. 只輸出符合下列結構的 JSON，不要 Markdown：
 {
   "headline": "一句話結論",
   "stance": "bullish|neutral|cautious|bearish",
@@ -68,7 +71,8 @@ BULL_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「多方（看�
 2. 你的立場固定為看漲，但論點必須誠實建立在證據之上，不得誇大或扭曲數字。
 3. 必須列出你預期空方會提出的反駁重點，讓最終裁決者知道要檢視什麼。
 4. 使用繁體中文。
-5. 只輸出符合下列結構的 JSON，不要 Markdown：
+5. 每個陣列最多 8 項，只列最重要的，依重要性由高到低排序。
+6. 只輸出符合下列結構的 JSON，不要 Markdown：
 {
   "stance": "bullish",
   "thesis": "一段多方論證",
@@ -88,7 +92,8 @@ BEAR_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「空方（看�
 2. 你的立場固定為看跌，但論點必須誠實建立在證據之上，不得誇大或扭曲數字。
 3. 必須列出你預期多方會提出的反駁重點，讓最終裁決者知道要檢視什麼。
 4. 使用繁體中文。
-5. 只輸出符合下列結構的 JSON，不要 Markdown：
+5. 每個陣列最多 8 項，只列最重要的，依重要性由高到低排序。
+6. 只輸出符合下列結構的 JSON，不要 Markdown：
 {
   "stance": "bearish",
   "thesis": "一段空方論證",
@@ -103,6 +108,7 @@ RISK_SYSTEM_PROMPT = """你是風險管理研究員。只使用輸入 JSON 的�
 只輸出 JSON：{"summary":"風險摘要","risk_warnings":["風險"],
 "invalidation_conditions":["失效條件"],"evidence_refs":["證據 ID"]}。
 引用 evidence 中的 ID，無支持時留空，不得自行創造 ID。
+每個陣列最多 8 項，只列最重要的，依重要性由高到低排序。
 """
 
 DEBATE_SYNTHESIS_PROMPT = """你是以風險管理為優先的量化市場分析師，同時是這場多空辯論的最終裁決者。
@@ -117,7 +123,8 @@ DEBATE_SYNTHESIS_PROMPT = """你是以風險管理為優先的量化市場分析
 4. 操作指南必須用條件式情境表達，指出確認條件與失效風險。
 5. 若資料是 synthetic_demo、樣本不足或沒有回測，必須寫入 limitations。
 6. 使用繁體中文。
-7. 只輸出符合下列結構的 JSON，不要 Markdown：
+7. 每個陣列最多 8 項（scenarios 最多 5 項），只列最重要的，依重要性由高到低排序。
+8. 只輸出符合下列結構的 JSON，不要 Markdown：
 {
   "headline": "一句話結論",
   "stance": "bullish|neutral|cautious|bearish",
@@ -295,6 +302,37 @@ class OpenAICompatibleClient:
 
 class LLMProviderError(ValueError):
     """An LLM provider call failed; routes already map ValueError to HTTP 502."""
+
+
+def _clamp_lists(model: type[BaseModel], payload: object) -> object:
+    """Cut top-level lists the model wrote past a field's max_length.
+
+    Prompts ask for at most N items in order of importance, but a model that lists
+    a ninth point should not void the whole analysis: keep the first N.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    clamped = dict(payload)
+    for name, field in model.model_fields.items():
+        value = clamped.get(name)
+        if not isinstance(value, list):
+            continue
+        limit = next((m.max_length for m in field.metadata if isinstance(m, MaxLen)), None)
+        if limit is not None and len(value) > limit:
+            clamped[name] = value[:limit]
+    return clamped
+
+
+def validate_llm_output[ModelT: BaseModel](model: type[ModelT], payload: object) -> ModelT:
+    """Validate a model's JSON answer; a shape that still fails becomes a readable error."""
+    try:
+        return model.model_validate(_clamp_lists(model, payload))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        where = ".".join(str(part) for part in first["loc"]) or model.__name__
+        raise LLMProviderError(
+            f"模型回傳的內容不符合預期格式（{where}：{first['msg']}），請再試一次"
+        ) from exc
 
 
 # Server-side fallback: when a safety classifier declines a request, the API re-runs
@@ -566,7 +604,7 @@ class LLMAnalysisService:
             SYSTEM_PROMPT,
             context.model_dump(mode="json"),
         )
-        judgement = LLMJudgement.model_validate(judgement_payload)
+        judgement = validate_llm_output(LLMJudgement, judgement_payload)
         return LLMAnalysisReport(
             symbol=symbol,
             as_of=as_of,
@@ -658,8 +696,8 @@ class DebateAnalysisService:
             self.client.complete_json(BULL_SYSTEM_PROMPT, evidence_payload),
             self.client.complete_json(BEAR_SYSTEM_PROMPT, evidence_payload),
         )
-        bull_case = DebateCase.model_validate(bull_payload)
-        bear_case = DebateCase.model_validate(bear_payload)
+        bull_case = validate_llm_output(DebateCase, bull_payload)
+        bear_case = validate_llm_output(DebateCase, bear_payload)
         valid_refs = {item.id for item in evidence}
         for case in (bull_case, bear_case):
             case.evidence_refs = [ref for ref in case.evidence_refs if ref in valid_refs]
@@ -668,7 +706,8 @@ class DebateAnalysisService:
             "bull_case": bull_case.model_dump(mode="json"),
             "bear_case": bear_case.model_dump(mode="json"),
         }
-        risk_review = DebateRiskReview.model_validate(
+        risk_review = validate_llm_output(
+            DebateRiskReview,
             await self.client.complete_json(RISK_SYSTEM_PROMPT, risk_payload)
         )
         risk_review.evidence_refs = [ref for ref in risk_review.evidence_refs if ref in valid_refs]
@@ -682,7 +721,7 @@ class DebateAnalysisService:
             DEBATE_SYNTHESIS_PROMPT,
             synthesis_payload,
         )
-        judgement = LLMJudgement.model_validate(judgement_payload)
+        judgement = validate_llm_output(LLMJudgement, judgement_payload)
         judgement.evidence_refs = [ref for ref in judgement.evidence_refs if ref in valid_refs]
         if not data_sufficient:
             judgement.stance = "neutral"

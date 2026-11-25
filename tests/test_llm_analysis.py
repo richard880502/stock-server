@@ -232,3 +232,53 @@ async def test_context_rejects_incompatible_backtest(
             symbol="TEST", as_of=cutoff, market="TW", benchmark="^TWII",
             strategy_version="regime_v1", backtest_job_id=uuid4(),
         )
+
+
+class VerboseDebateLLMClient(FakeDebateLLMClient):
+    """Answers like Claude did in production: more list items than the schema allows."""
+
+    model_name = "verbose-debater"
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        assert "每個陣列最多 8 項" in system_prompt
+        result = await super().complete_json(system_prompt, payload)
+        if "stance" in result and "thesis" in result:
+            result["key_evidence"] = [f"證據 {i}" for i in range(1, 10)]  # 9 items
+            result["counterpoints_to_address"] = [f"反駁 {i}" for i in range(1, 11)]  # 10
+        if "invalidation_conditions" in result:
+            result["risk_warnings"] = [f"風險 {i}" for i in range(1, 12)]
+        if "headline" in result:
+            result["scenarios"] = [
+                {"name": f"情境 {i}", "condition": "條件", "response": "應對"} for i in range(7)
+            ]
+        return result
+
+
+async def test_debate_keeps_the_most_important_items_when_a_model_lists_too_many(
+    trending_bars: list[Bar],
+    healthy_market: list[MarketObservation],
+) -> None:
+    repository = MemoryQuantRepository()
+    await repository.upsert_bars(trending_bars)
+    await repository.upsert_market_observations(healthy_market)
+
+    report = await DebateAnalysisService(repository, VerboseDebateLLMClient()).analyze(
+        symbol="TEST",
+        as_of=trending_bars[-1].trading_date,
+    )
+
+    assert report.bull_case.key_evidence == [f"證據 {i}" for i in range(1, 9)]
+    assert len(report.bear_case.counterpoints_to_address) == 8
+    assert report.bear_case.counterpoints_to_address[0] == "反駁 1"
+    assert report.risk_review is not None and len(report.risk_review.risk_warnings) == 8
+    assert len(report.judgement.scenarios) == 5
+
+
+def test_an_answer_in_the_wrong_shape_becomes_a_readable_error() -> None:
+    from quant_signal.application.llm_analysis import LLMProviderError, validate_llm_output
+    from quant_signal.domain.models import DebateCase
+
+    with pytest.raises(LLMProviderError, match="key_evidence") as caught:
+        validate_llm_output(DebateCase, {"stance": "bullish", "thesis": "x", "key_evidence": []})
+    assert "請再試一次" in str(caught.value)
+    assert isinstance(caught.value, ValueError)  # routes still answer 502
