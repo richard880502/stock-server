@@ -49,6 +49,12 @@
   flex: none;
 }
 
+@media (pointer: coarse) {
+  .brand {
+    min-height: var(--touch, 44px);
+  }
+}
+
 .brand-text {
   display: flex;
   flex-direction: column;
@@ -301,7 +307,6 @@
 
   .query-bar input[type="date"] {
     padding-inline: var(--space-2);
-    font-size: var(--text-sm);
   }
 }
 

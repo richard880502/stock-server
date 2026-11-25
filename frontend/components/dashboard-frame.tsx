@@ -3,7 +3,7 @@
 import { usePathname } from "next/navigation";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
-import { shouldShowCompactQuery } from "@/lib/default-as-of";
+import { shouldShowCompactQuery } from "@/lib/query-collapse";
 import { CommandPalette, useCommandPaletteShortcut } from "./command-palette";
 import { ErrorBanner } from "./error-banner";
 import { focusSymbolField, QueryBar, QuerySummary } from "./query-bar";
