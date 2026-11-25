@@ -58,6 +58,10 @@
   --series-baseline: light-dark(#7a766b, #9d9a90);
   --series-history: light-dark(#4f4d46, #b7b5ad);
   --series-band: light-dark(rgb(42 120 214 / 0.14), rgb(77 147 236 / 0.2));
+  /* Moving averages on the candle chart: never red / green (those mean up / down). */
+  --series-ma5: light-dark(#a86a12, #e0b25a);
+  --series-ma20: light-dark(#246fd0, #6ea8f0);
+  --series-ma60: light-dark(#7446c4, #b49af0);
   --chart-grid: light-dark(#e8e5dd, #262a33);
   --chart-axis: var(--text-3);
 

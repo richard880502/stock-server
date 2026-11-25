@@ -23,6 +23,7 @@ import type {
   MarketMetric,
   MarketRankings,
   MarketScope,
+  PriceSeries,
   Signal,
   StockOverview,
   SyncSymbolRequest,
@@ -250,6 +251,20 @@ export const getMarketDataStatus = (init?: Init) =>
 /** Whole-market backfill progress, one item per exchange (TW 上市, TWO 上櫃). */
 export const getBackfillStatus = (init?: Init) =>
   fetchJson<BackfillStatus[]>(apiUrl("/api/v1/market/backfill-status"), init);
+
+/** Daily candles for charts (indexes too); point-in-time filtered by `asOf`. */
+export function getBars(
+  symbol: string,
+  params: { asOf?: string; start?: string; adjust?: "back" | "none" } = {},
+  init?: Init,
+) {
+  const search = new URLSearchParams();
+  if (params.asOf) search.set("as_of", params.asOf);
+  if (params.start) search.set("start", params.start);
+  if (params.adjust) search.set("adjust", params.adjust);
+  const qs = search.toString();
+  return fetchJson<PriceSeries>(apiUrl(`/api/v1/bars/${enc(symbol.trim())}${qs ? `?${qs}` : ""}`), init);
+}
 
 /** Instant snapshot-based quick view for any listed stock; 404 detail is already Chinese. */
 export const getStockOverview = (symbol: string, init?: Init) =>

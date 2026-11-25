@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Card } from "@/components/card";
 import { LlmSection } from "@/features/llm/llm-section";
+import { PriceChartCard } from "@/features/stock/price-chart-card";
 import { QuickStockPanel } from "@/features/stock/quick-stock-panel";
 import { useDashboard } from "@/lib/dashboard-context";
 import { ChipPanel } from "./chip-panel";
@@ -76,6 +77,9 @@ function SignalDetail() {
         alertCount={alerts.length}
         refreshing={refreshing}
       />
+      <div className={refreshing ? "is-refreshing" : undefined}>
+        <PriceChartCard symbol={signal.symbol} name={name} asOf={signal.as_of} />
+      </div>
       <div className={`evidence${refreshing ? " is-refreshing" : ""}`}>
         <div className="section-title">
           <h2>支持這個結論的證據</h2>
