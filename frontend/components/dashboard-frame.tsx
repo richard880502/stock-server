@@ -1,8 +1,9 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
+import { CommandPalette, useCommandPaletteShortcut } from "./command-palette";
 import { ErrorBanner } from "./error-banner";
 import { QueryBar } from "./query-bar";
 import { SyncPendingNotice } from "./sync-pending-notice";
@@ -18,6 +19,9 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   const onSignalRoute = path === "";
   // The watchlist page has its own "add a stock" search; the analysis query bar does not apply.
   const onWatchlistRoute = path === "/watchlist";
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  useCommandPaletteShortcut(openPalette);
 
   return (
     <div className="app">
@@ -26,7 +30,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       </a>
       <header className="app-header">
         <div className="container">
-          <Topbar />
+          <Topbar onOpenPalette={openPalette} />
           {!onWatchlistRoute && <QueryBar />}
         </div>
       </header>
@@ -38,6 +42,8 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
         )}
         {children}
       </main>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
 
       <footer className="app-footer">
         <div className="container footer-inner">
