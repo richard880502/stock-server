@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Query
 
 SEARXNG_PROXY_KEY = os.environ["SEARXNG_PROXY_KEY"]
-SEARXNG_UPSTREAM = os.environ.get("SEARXNG_UPSTREAM", "http://searxng.zeabur.internal:8080")
+SEARXNG_UPSTREAM = os.environ.get("SEARXNG_UPSTREAM", "http://searxng:8080")
 
 app = FastAPI(title="searxng-proxy")
 

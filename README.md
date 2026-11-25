@@ -879,8 +879,8 @@ credentials, API-auth settings, and LLM settings as private Coolify environment
 variables. Rewrite only the database host in `DATABASE_URL` to `postgres:5432`.
 Do not commit secrets. Restore a consistent PostgreSQL custom-format dump into
 the new database, compare table counts, and verify authenticated requests,
-backtest execution, and prediction before switching clients. Retain the Zeabur
-source and backup until the new environment is accepted. The separate deployment
+backtest execution, and prediction before switching clients. Coolify is the only
+production environment; the earlier Zeabur deployment is retired. The separate deployment
 file does not publish database or inference ports and does not run demo seeding.
 After preloading a complete verified model cache, `KRONOS_OFFLINE=1` skips Hub
 network lookups on startup; leave it unset for first-time weight downloads.
