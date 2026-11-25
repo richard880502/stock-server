@@ -1,0 +1,20 @@
+{
+  "name": "quant-signal",
+  "version": "0.1.0",
+  "description": "台股每日量化訊號、時點正確(point-in-time)回測、籌碼流向與 LLM 分析師的 MCP 技能包。策略建議必須以確定性回測驗證。",
+  "keywords": [
+    "quant-signal",
+    "taiwan-stock",
+    "backtest",
+    "mcp"
+  ],
+  "mcpServers": {
+    "quant-signal": {
+      "type": "http",
+      "url": "http://127.0.0.1:18101/mcp",
+      "headers": {
+        "Authorization": "Bearer ${QUANT_SIGNAL_API_KEY:-}"
+      }
+    }
+  }
+}
