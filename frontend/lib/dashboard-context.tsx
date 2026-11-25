@@ -7,13 +7,20 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useBacktest } from "@/features/backtest/use-backtest";
 import { useLlmAnalysis } from "@/features/llm/use-llm-analysis";
 import { useSignalData } from "@/features/signal/use-signal-data";
-import { getDataStatus, getLlmStatus, searchInstruments } from "./api/endpoints";
+import {
+  getDataStatus,
+  getLlmStatus,
+  getMarketDataStatus,
+  searchInstruments,
+} from "./api/endpoints";
 import type { DataStatus, LlmStatus } from "./api/types";
+import { pickDefaultAsOf } from "./default-as-of";
 import { today } from "./format";
 import { getRecentSymbols, type RecentSymbol, rememberSymbol } from "./recent-symbols";
 import {
@@ -26,7 +33,16 @@ import {
 function useDashboardState() {
   const [symbol, setSymbolState] = useState(DEFAULT_SYMBOL);
   const [benchmark, setBenchmark] = useState(DEFAULT_BENCHMARK);
-  const [asOf, setAsOf] = useState(today);
+  const [asOf, setAsOfState] = useState(today);
+  // A date the user picked (or a query they submitted) must never be replaced by the resolved default.
+  const asOfChosen = useRef(false);
+  const asOfRef = useRef(asOf);
+  const loadedByUser = useRef(false);
+  const setAsOf = useCallback((next: string) => {
+    asOfChosen.current = true;
+    asOfRef.current = next;
+    setAsOfState(next);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [dataStatus, setDataStatus] = useState<DataStatus | null>(null);
@@ -74,6 +90,7 @@ function useDashboardState() {
     setSymbolState(nextSymbol);
     setBenchmark(nextBenchmark);
     setAsOf(nextAsOf);
+    loadedByUser.current = true;
     resetStream();
     resetBacktest();
     void load({
@@ -91,8 +108,37 @@ function useDashboardState() {
     asOf: today(),
     market: marketOf(DEFAULT_SYMBOL),
   }));
+  // The default as-of date is the latest trading day that has data (not "today", which has none
+  // until the exchange publishes), so the first load waits briefly for the market data status.
   useEffect(() => {
-    void load(initialQuery);
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 4000);
+    (async () => {
+      let resolved = initialQuery.asOf;
+      try {
+        resolved = pickDefaultAsOf(
+          await getMarketDataStatus({ signal: controller.signal }),
+          initialQuery.asOf,
+        );
+      } catch {
+        // Keep today as the fallback.
+      }
+      window.clearTimeout(timer);
+      if (cancelled || loadedByUser.current) return;
+      let nextAsOf = asOfRef.current;
+      if (!asOfChosen.current) {
+        nextAsOf = resolved;
+        asOfRef.current = resolved;
+        setAsOfState(resolved);
+      }
+      void load({ ...initialQuery, asOf: nextAsOf });
+    })();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [load, initialQuery]);
 
   // Recent symbols live in localStorage, so they can only be read after mount.

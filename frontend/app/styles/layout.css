@@ -21,12 +21,13 @@
 /* ---- Header ---------------------------------------------------------- */
 
 .app-header {
+  position: relative;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: var(--z-header);
 }
 
-@media (min-width: 900px) {
+@media (min-width: 641px) {
   .app-header {
     position: sticky;
     top: 0;
@@ -183,13 +184,93 @@
 
 /* ---- Query bar ------------------------------------------------------- */
 
+/* In normal flow under the sticky topbar, so collapsing never shifts the page. */
+.query-wrap {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* One-line digest: slides in under the topbar once the full form has scrolled away (desktop),
+   always shown in place of the form on phones. Only transform/opacity animate. */
+.query-summary {
+  position: absolute;
+  inset: 100% 0 auto 0;
+  z-index: -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding-inline: max(var(--gutter), calc((100% - var(--content-max)) / 2));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-100%);
+  transition:
+    transform var(--dur) var(--ease-out),
+    opacity var(--dur) var(--ease-out),
+    visibility 0s linear var(--dur);
+}
+
+.query-summary[data-visible="true"] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0s;
+}
+
+.query-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+.query-summary-name,
+.query-summary-meta {
+  color: var(--text-2);
+}
+
+.query-summary-edit {
+  flex: none;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .query-summary {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .query-summary {
+    position: static;
+    z-index: auto;
+    padding-inline: 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+    box-shadow: none;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition: none;
+  }
+
+  .query-wrap[data-expanded="false"] {
+    display: none;
+  }
+}
+
 .query-bar {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) 11rem 10rem auto;
   gap: var(--space-3);
   align-items: end;
   padding-block: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border);
 }
 
 .field,

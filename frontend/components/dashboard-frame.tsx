@@ -1,11 +1,12 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
+import { shouldShowCompactQuery } from "@/lib/default-as-of";
 import { CommandPalette, useCommandPaletteShortcut } from "./command-palette";
 import { ErrorBanner } from "./error-banner";
-import { QueryBar } from "./query-bar";
+import { focusSymbolField, QueryBar, QuerySummary } from "./query-bar";
 import { SyncPendingNotice } from "./sync-pending-notice";
 import { Topbar } from "./topbar";
 
@@ -23,6 +24,53 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   useCommandPaletteShortcut(openPalette);
 
+  // Phones show only the one-line query summary until expanded; on desktop the full form stays in
+  // the page flow and the summary slides in under the sticky topbar once the form has scrolled away.
+  const [queryExpanded, setQueryExpanded] = useState(false);
+  const [compactShown, setCompactShown] = useState(false);
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setCompactShown((was) => shouldShowCompactQuery(window.scrollY, was));
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, []);
+  const editQuery = useCallback(() => {
+    const phone = window.matchMedia("(max-width: 640px)").matches;
+    if (phone && queryExpanded) {
+      setQueryExpanded(false);
+      return;
+    }
+    setQueryExpanded(true);
+    window.scrollTo({ top: 0 });
+    // The form is display:none on phones until expanded, so focus after it renders.
+    window.requestAnimationFrame(focusSymbolField);
+  }, [queryExpanded]);
+  // "/" focuses the symbol field; on phones the field must be expanded first.
+  useEffect(() => {
+    if (onWatchlistRoute) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        setQueryExpanded(true);
+        window.requestAnimationFrame(focusSymbolField);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onWatchlistRoute]);
+
   return (
     <div className="app">
       <a className="skip-link" href="#main">
@@ -31,9 +79,18 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       <header className="app-header">
         <div className="container">
           <Topbar onOpenPalette={openPalette} />
-          {!onWatchlistRoute && <QueryBar />}
+          {!onWatchlistRoute && (
+            <QuerySummary visible={compactShown} expanded={queryExpanded} onEdit={editQuery} />
+          )}
         </div>
       </header>
+      {!onWatchlistRoute && (
+        <div className="query-wrap" data-expanded={queryExpanded}>
+          <div className="container">
+            <QueryBar expanded={queryExpanded} />
+          </div>
+        </div>
+      )}
 
       <main id="main" className="container page" tabIndex={-1}>
         {syncWait && !onSignalRoute && !onWatchlistRoute && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}

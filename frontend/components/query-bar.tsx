@@ -5,8 +5,55 @@ import { useDashboard } from "@/lib/dashboard-context";
 import { ChevronDownIcon } from "./icons";
 import { SymbolCombobox } from "./symbol-combobox";
 
+export const QUERY_FORM_ID = "query-form";
+
+/** Focus the symbol field of the full query form (it must be visible). */
+export function focusSymbolField() {
+  const input = document.querySelector<HTMLInputElement>(`#${QUERY_FORM_ID} input[role="combobox"]`);
+  input?.focus();
+  input?.select();
+}
+
+/**
+ * One-line digest of the current query. Fixed under the topbar once the full form has scrolled
+ * away (desktop); the only visible form on phones until expanded.
+ */
+export function QuerySummary({
+  visible,
+  expanded,
+  onEdit,
+}: {
+  visible: boolean;
+  expanded: boolean;
+  onEdit: () => void;
+}) {
+  const { query, instrumentName } = useDashboard();
+  const name = instrumentName?.symbol === query.symbol ? instrumentName.name : "";
+  return (
+    <div className="query-summary" data-visible={visible} aria-label="目前分析條件" role="group">
+      <p className="query-summary-text">
+        <strong className="mono">{query.symbol}</strong>
+        {name && <span className="query-summary-name"> {name}</span>}
+        <span className="query-summary-meta num">
+          {" · "}截止 {query.asOf}
+          {query.benchmark ? ` · ${query.benchmark}` : ""}
+        </span>
+      </p>
+      <button
+        type="button"
+        className="button small query-summary-edit"
+        aria-expanded={expanded}
+        aria-controls={QUERY_FORM_ID}
+        onClick={onEdit}
+      >
+        {expanded ? "收合" : "修改"}
+      </button>
+    </div>
+  );
+}
+
 /** Symbol / as-of date / benchmark shared by every view. */
-export function QueryBar() {
+export function QueryBar({ expanded }: { expanded: boolean }) {
   const { query, signalData, refresh, recentSymbols } = useDashboard();
   const [benchmarkOpen, setBenchmarkOpen] = useState(false);
   const benchmarkRef = useRef<HTMLDivElement>(null);
@@ -34,7 +81,13 @@ export function QueryBar() {
   };
 
   return (
-    <form className="query-bar" aria-label="分析條件" onSubmit={submit}>
+    <form
+      id={QUERY_FORM_ID}
+      className="query-bar"
+      data-expanded={expanded}
+      aria-label="分析條件"
+      onSubmit={submit}
+    >
       <SymbolCombobox
         value={query.symbol}
         recents={recentSymbols}
