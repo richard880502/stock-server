@@ -7,25 +7,30 @@ that signals and backtests need is queued in the background.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
 from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from quant_signal.application.data_sync import _recently_synced
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.sync_jobs import request_symbol_sync
 from quant_signal.domain.models import (
     MarketStockDay,
+    PriceBar,
+    PriceSeries,
     StockDayPoint,
     StockOverview,
     StockSummary,
     Watchlist,
     WatchlistItem,
 )
+from quant_signal.quant.point_in_time import select_latest_records
 
 OVERVIEW_SESSIONS = 360  # about 17 months of trading days
 MINIMUM_BARS = 60
 LOOKUP_SESSIONS = 20  # a stock halted today is still found by its latest quote
+WATCHLIST_SESSIONS = 21  # 20 sessions of sparkline plus the base close for the 20-day change
 
 
 class StockNotFound(LookupError):
@@ -135,6 +140,51 @@ async def normalize_listed_symbol(repository: QuantRepository, raw: str) -> str:
     return matches[0]
 
 
+class PriceSeriesNotFound(LookupError):
+    def __init__(self, symbol: str) -> None:
+        super().__init__(f"{symbol} 尚無日 K 資料")
+        self.symbol = symbol
+
+
+class PriceSeriesService:
+    """Daily candles for the chart, point-in-time filtered like the signal engine."""
+
+    def __init__(self, repository: QuantRepository) -> None:
+        self.repository = repository
+
+    async def get(
+        self,
+        raw_symbol: str,
+        *,
+        as_of: date | None = None,
+        start: date | None = None,
+        adjust: Literal["back", "none"] = "back",
+    ) -> PriceSeries:
+        symbol = raw_symbol.strip().upper()
+        bars = await self.repository.list_bars(symbol, end=as_of, start=start)
+        if as_of is not None:
+            cutoff = datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei"))
+            bars = [bar for bar in bars if bar.available_at <= cutoff]
+        bars = select_latest_records(bars, as_of=as_of)
+        if not bars:
+            raise PriceSeriesNotFound(symbol)
+        anchor = bars[-1].adjustment_factor
+        candles = []
+        for bar in bars:
+            scale = bar.adjustment_factor / anchor if adjust == "back" else 1.0
+            candles.append(
+                PriceBar(
+                    trading_date=bar.trading_date,
+                    open=round(bar.open * scale, 4),
+                    high=round(bar.high * scale, 4),
+                    low=round(bar.low * scale, 4),
+                    close=round(bar.close * scale, 4),
+                    volume=bar.volume,
+                )
+            )
+        return PriceSeries(symbol=symbol, adjust=adjust, as_of=as_of, bars=candles)
+
+
 class StockOverviewService:
     def __init__(self, repository: QuantRepository) -> None:
         self.repository = repository
@@ -181,7 +231,9 @@ class WatchlistService:
         entries = await self.repository.list_watchlist(user_id)
         if not entries:
             return Watchlist(limit=self.limit, count=0, items=[])
-        dates = await self.repository.list_market_trading_dates(None, as_of=None, limit=6)
+        dates = await self.repository.list_market_trading_dates(
+            None, as_of=None, limit=WATCHLIST_SESSIONS
+        )
         rows = await self.repository.list_market_stock_rows([e[0] for e in entries], dates)
         by_symbol: dict[str, list[MarketStockDay]] = {}
         for row in rows:
@@ -203,6 +255,12 @@ class WatchlistService:
                     flows_through=_flows_through(points),
                     foreign_net_1d_lots=_sum_flow(points, "foreign_net_lots", 1),
                     total_net_5d_lots=_sum_flow(points, "total_net_lots", 5),
+                    recent_closes=[point.close for point in points[-20:]],
+                    change_20d_pct=(
+                        _pct(points[-1].close, points[0].close)
+                        if len(points) == WATCHLIST_SESSIONS
+                        else None
+                    ),
                     full_analysis="ready" if symbol in tracked else "preparing",
                 )
             )

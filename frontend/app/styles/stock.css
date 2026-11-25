@@ -295,6 +295,7 @@
     grid-template-areas:
       "stock stock remove"
       "close change status"
+      "spark spark spark"
       "flow1 flow5 flow5"
       "strategy strategy strategy";
     align-items: center;
@@ -340,6 +341,7 @@
     grid-area: flow1;
   }
   .watch-row .col-strategy { grid-area: strategy; }
+  .watch-row .col-spark { grid-area: spark; }
 
   .watch-row .col-flow5 {
     grid-area: flow5;
@@ -347,6 +349,7 @@
 
   .watch-row .col-close::before,
   .watch-row .col-change::before,
+  .watch-row .col-spark::before,
   .watch-row .col-flow1::before,
   .watch-row .col-flow5::before {
     content: attr(data-label);
@@ -355,6 +358,18 @@
     color: var(--text-3);
   }
 }
+
+/* Watchlist sparkline + sortable headers */
+.spark-cell { display: flex; align-items: center; gap: var(--space-2); }
+.spark-change { font-size: var(--text-xs); min-width: 4.5em; }
+.sort-button {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: pointer; white-space: nowrap;
+}
+.sort-button:hover { color: var(--text); }
+.sort-mark { font-size: 0.7em; color: var(--text-3); }
+th[aria-sort="ascending"] .sort-mark,
+th[aria-sort="descending"] .sort-mark { color: var(--accent); }
 
 /* ---- Watchlist: add-a-stock search ---------------------------------------- */
 

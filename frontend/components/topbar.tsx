@@ -4,6 +4,7 @@ import Link from "next/link";
 import { signOut, useSession } from "@/lib/api/session";
 import { useDashboard } from "@/lib/dashboard-context";
 import { BrandMark } from "./brand";
+import { CommandPaletteButton } from "./command-palette";
 import { LogoutIcon } from "./icons";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
@@ -18,7 +19,7 @@ function StatusPill({ ok, children }: { ok: boolean | null; children: string }) 
   );
 }
 
-export function Topbar() {
+export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const { dataStatus, llmStatus } = useDashboard();
   const { user } = useSession();
   return (
@@ -32,6 +33,7 @@ export function Topbar() {
       </Link>
       <ViewTabs />
       <div className="topbar-end">
+        <CommandPaletteButton onOpen={onOpenPalette} />
         <div className="service-state" aria-label="服務狀態">
           <StatusPill ok={dataStatus ? dataStatus.real_data_ready : null}>
             {dataStatus ? (dataStatus.real_data_ready ? "資料：交易所官方" : "資料：示範") : "資料：—"}

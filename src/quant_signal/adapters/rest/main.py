@@ -43,6 +43,8 @@ from quant_signal.application.services import (
     SignalService,
 )
 from quant_signal.application.stocks import (
+    PriceSeriesNotFound,
+    PriceSeriesService,
     StockNotFound,
     StockOverviewService,
     WatchlistFull,
@@ -78,6 +80,7 @@ from quant_signal.domain.models import (
     MarketFlowSeries,
     MarketRanking,
     NewsSentimentSnapshot,
+    PriceSeries,
     RankingMetric,
     SignalSnapshot,
     StockOverview,
@@ -536,6 +539,23 @@ def create_app() -> FastAPI:
         try:
             return await StockOverviewService(repository).get(symbol)
         except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/bars/{symbol}", response_model=PriceSeries)
+    async def price_series(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: date | None = None,
+        start: date | None = None,
+        adjust: Literal["back", "none"] = "back",
+    ) -> PriceSeries:
+        """Daily candles for charts (indexes included). Point-in-time filtered by
+        ``as_of``; ``adjust=back`` keeps the latest price real and history comparable."""
+        try:
+            return await PriceSeriesService(repository).get(
+                normalize_symbol(symbol), as_of=as_of, start=start, adjust=adjust
+            )
+        except PriceSeriesNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     def _watchlist_user(principal: Principal) -> UUID:

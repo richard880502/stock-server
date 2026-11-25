@@ -8,6 +8,7 @@ import { ResearchTable } from "@/components/research-table";
 import { Stat, StatGrid } from "@/components/stat";
 import { JobStatusChip } from "@/components/status-chip";
 import { EquityChart } from "@/components/charts/equity-chart";
+import { PriceChartCard } from "@/features/stock/price-chart-card";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatNumber, formatPct, formatSignedPct } from "@/lib/format";
 
@@ -51,15 +52,15 @@ export function BacktestResult() {
           <ResultSkeleton status="建立中" />
         ) : (
           <div className="lab-empty">
-            <div className="lab-empty-visual" aria-hidden="true">
-              <span className="lab-empty-grid" />
-              <svg viewBox="0 0 520 180" preserveAspectRatio="none">
-                <path d="M0 145 C60 138 72 105 126 112 S194 78 242 91 S318 52 372 62 S438 30 520 38" />
-                <path className="lab-empty-baseline" d="M0 148 C82 142 116 126 172 130 S258 102 322 110 S414 82 520 86" />
-              </svg>
-            </div>
+            <PriceChartCard
+              symbol={query.symbol}
+              asOf={query.asOf}
+              title={`${query.symbol} 價格走勢`}
+              sub="執行回測後，買進與賣出的位置會直接標在這張 K 線圖上。"
+              defaultRange="1y"
+            />
             <EmptyState icon={<ChartIcon size={22} />} title="準備建立第一組策略曲線">
-              從左側選擇範本或自行調整參數。完成後，這裡會顯示績效、風險、交易明細與可自由畫線的互動圖表。
+              從左側選擇範本或自行調整參數。完成後，這裡會顯示績效、風險、交易明細，以及標在 K 線上的進出場點。
             </EmptyState>
           </div>
         )
@@ -107,6 +108,18 @@ export function BacktestResult() {
               <span>{warning}</span>
             </p>
           ))}
+
+          <PriceChartCard
+            symbol={job.spec?.symbol ?? query.symbol}
+            asOf={job.spec?.end ?? query.asOf}
+            title="進出場位置"
+            sub={`▲ 買進、▼ 賣出（訊號在前一日收盤成立，標記在實際成交的開盤日）· 共 ${result.transactions?.length ?? 0} 筆`}
+            markers={(result.transactions ?? []).map((t) => ({
+              time: t.trading_date,
+              side: t.side === "buy" ? "buy" : "sell",
+            }))}
+            defaultRange="all"
+          />
 
           <EquityChart strategy={result.equity_curve} buyHold={result.buy_hold_curve ?? []} />
 

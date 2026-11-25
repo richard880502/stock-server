@@ -176,6 +176,7 @@ export type BacktestJob = {
   id: string;
   status: "queued" | "running" | "completed" | "failed";
   error: string | null;
+  spec?: { symbol: string; start: string; end: string; entry_score: number; exit_score: number };
   result: null | {
     observations: number;
     trades: number;
@@ -276,6 +277,24 @@ export type StockSummary = {
 };
 
 /** Snapshot-based quick view that works for any listed stock. */
+/** One daily candle from `GET /api/v1/bars/{symbol}`. */
+export type PriceBar = {
+  trading_date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type PriceSeries = {
+  symbol: string;
+  /** "back": latest bar is the real price, history rescaled across ex-dates. */
+  adjust: "back" | "none";
+  as_of: string | null;
+  bars: PriceBar[];
+};
+
 export type StockOverview = {
   symbol: string;
   name: string;
@@ -301,6 +320,9 @@ export type WatchlistItem = {
   foreign_net_1d_lots: number | null;
   /** Last 5 published sessions. */
   total_net_5d_lots: number | null;
+  /** Latest closes, oldest first (raw prices), for the sparkline. */
+  recent_closes?: number[];
+  change_20d_pct?: number | null;
   full_analysis: Exclude<FullAnalysisState, "insufficient">;
 };
 

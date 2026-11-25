@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/card";
+import { Sparkline } from "@/components/charts/sparkline";
 import { EmptyState } from "@/components/empty-state";
 import { SymbolCombobox } from "@/components/symbol-combobox";
 import { AlertIcon, InfoIcon, StarIcon, XIcon } from "@/components/icons";
@@ -87,6 +88,19 @@ function Row({
       <td className="col-change num" data-label="當日漲跌">
         <PctChange value={item.day_change_pct} />
       </td>
+      <td className="col-spark" data-label="20 日走勢">
+        <div className="spark-cell">
+          <Sparkline
+            values={item.recent_closes ?? []}
+            label={`${item.name || code} 近 ${item.recent_closes?.length ?? 0} 日收盤走勢${
+              item.change_20d_pct == null ? "" : `，20 日 ${item.change_20d_pct >= 0 ? "上漲" : "下跌"} ${Math.abs(item.change_20d_pct).toFixed(2)}%`
+            }`}
+          />
+          <span className="num spark-change">
+            <PctChange value={item.change_20d_pct ?? null} />
+          </span>
+        </div>
+      </td>
       <td className="col-flow1 num" data-label="外資 1 日（張）">
         <Lots value={item.foreign_net_1d_lots} empty="—" />
       </td>
@@ -120,6 +134,52 @@ function Row({
   );
 }
 
+type SortKey = "added" | "day_change_pct" | "change_20d_pct" | "foreign_net_1d_lots" | "total_net_5d_lots";
+type Sort = { key: SortKey; dir: "desc" | "asc" };
+
+function sortItems(items: WatchlistItem[], sort: Sort): WatchlistItem[] {
+  if (sort.key === "added") return items;
+  const key = sort.key;
+  const sign = sort.dir === "desc" ? -1 : 1;
+  // Missing values always sink to the bottom, whatever the direction.
+  return [...items].sort((a, b) => {
+    const av = a[key] ?? null;
+    const bv = b[key] ?? null;
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return sign * (av - bv);
+  });
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: Sort;
+  onSort: (key: SortKey) => void;
+  className: string;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      scope="col"
+      className={className}
+      aria-sort={active ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}
+    >
+      <button type="button" className="sort-button" onClick={() => onSort(sortKey)}>
+        {label}
+        <span className="sort-mark" aria-hidden="true">{active ? (sort.dir === "desc" ? "▼" : "▲") : "↕"}</span>
+      </button>
+    </th>
+  );
+}
+
 export function WatchlistView() {
   const { user } = useSession();
   const { refresh: openSymbol } = useDashboard();
@@ -128,6 +188,17 @@ export function WatchlistView() {
   const { refresh: refreshList, setMember } = watchlist;
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [addNote, setAddNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [sort, setSort] = useState<Sort>({ key: "added", dir: "desc" });
+  // First click sorts high → low, second low → high, third returns to the order added.
+  const onSort = useCallback((key: SortKey) => {
+    setSort((current) =>
+      current.key !== key
+        ? { key, dir: "desc" }
+        : current.dir === "desc"
+          ? { key, dir: "asc" }
+          : { key: "added", dir: "desc" },
+    );
+  }, []);
 
   useEffect(() => {
     refreshList(STALE_AFTER_MS);
@@ -165,6 +236,7 @@ export function WatchlistView() {
   );
 
   const items = useMemo(() => watchlist.watchlist?.items ?? [], [watchlist.watchlist]);
+  const sortedItems = useMemo(() => sortItems(items, sort), [items, sort]);
   const { phase, count, limit } = watchlist;
   const full = phase === "ready" && count >= limit;
   const memberSymbols = useMemo(
@@ -243,15 +315,10 @@ export function WatchlistView() {
                 <th scope="col" className="col-close">
                   收盤
                 </th>
-                <th scope="col" className="col-change">
-                  當日漲跌
-                </th>
-                <th scope="col" className="col-flow1">
-                  外資 1 日（張）
-                </th>
-                <th scope="col" className="col-flow5">
-                  三大法人 5 日（張）
-                </th>
+                <SortHeader label="當日漲跌" sortKey="day_change_pct" sort={sort} onSort={onSort} className="col-change" />
+                <SortHeader label="20 日走勢" sortKey="change_20d_pct" sort={sort} onSort={onSort} className="col-spark" />
+                <SortHeader label="外資 1 日（張）" sortKey="foreign_net_1d_lots" sort={sort} onSort={onSort} className="col-flow1" />
+                <SortHeader label="三大法人 5 日（張）" sortKey="total_net_5d_lots" sort={sort} onSort={onSort} className="col-flow5" />
                 <th scope="col" className="col-status">
                   分析狀態
                 </th>
@@ -262,7 +329,7 @@ export function WatchlistView() {
               </tr>
             </thead>
             <tbody>
-              {user && items.map((item) => (
+              {user && sortedItems.map((item) => (
                 <Row
                   key={user.id + ":" + item.symbol}
                   userId={user.id}
