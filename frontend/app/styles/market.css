@@ -156,7 +156,8 @@
 
 .rank-table th,
 .rank-table td {
-  padding: var(--space-2) var(--space-3);
+  /* Tight horizontal padding keeps six single-line columns inside a half-width board. */
+  padding: var(--space-2) var(--space-2);
   text-align: right;
   vertical-align: middle;
   font-weight: var(--weight-regular);
@@ -220,9 +221,10 @@
   color: var(--text);
 }
 
-/* One line per stock: a long name is cut with an ellipsis (full name in the title). */
+/* One line per stock: a long name is cut with an ellipsis (full name in the title),
+   but never below four characters, so common names like 台積電 or 京元電子 stay whole. */
 .stock-name {
-  min-width: 0;
+  min-width: min(4em, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
