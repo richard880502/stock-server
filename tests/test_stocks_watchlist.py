@@ -136,6 +136,9 @@ async def test_watchlist_add_list_remove_and_background_sync(repo) -> None:
     first = listing.items[0]
     assert first.symbol == "2330.TW" and first.close == 1060 and first.full_analysis == "preparing"
     assert first.total_net_5d_lots == 10000
+    # Sparkline: every stored session, oldest first; too short for a 20-day change.
+    assert first.recent_closes == [1000, 1010, 1020, 1030, 1040, 1050, 1060]
+    assert first.change_20d_pct is None
     assert any(j.symbol == "2330.TW" for j in repo.sync_jobs.values())
 
     assert await service.remove(ME, "2330.tw") is True

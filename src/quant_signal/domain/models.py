@@ -704,6 +704,31 @@ class StockSummary(BaseModel):
     avg_volume_20d_lots: float | None = None
 
 
+class PriceBar(BaseModel):
+    """One daily candle for charting, on the price scale chosen by ``PriceSeries.adjust``."""
+
+    trading_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class PriceSeries(BaseModel):
+    """Daily candles for a chart.
+
+    ``adjust="back"`` rescales history so the latest bar shows the real traded price and
+    earlier bars are comparable across ex-right/ex-dividend dates. ``"none"`` returns
+    the raw exchange prices. Only bars available on or before ``as_of`` are included.
+    """
+
+    symbol: str
+    adjust: Literal["back", "none"]
+    as_of: date | None
+    bars: list[PriceBar]
+
+
 class StockOverview(BaseModel):
     """A stock's recent quotes, flows and credit from the whole-market snapshot."""
 
@@ -731,6 +756,9 @@ class WatchlistItem(BaseModel):
     flows_through: date | None = None
     foreign_net_1d_lots: float | None = None
     total_net_5d_lots: float | None = None
+    # Closing prices of the latest sessions (oldest first) for a sparkline; raw, unadjusted.
+    recent_closes: list[float] = Field(default_factory=list)
+    change_20d_pct: float | None = None
     full_analysis: Literal["ready", "preparing"] = "preparing"
 
 
