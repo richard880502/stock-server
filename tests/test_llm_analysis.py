@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from datetime import timedelta
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+
 from quant_signal.application.llm_analysis import (
+    AnalysisContextService,
+    BacktestJobService,
     DebateAnalysisService,
     LLMAnalysisService,
     OpenAICompatibleClient,
 )
-from quant_signal.domain.models import Bar, MarketObservation
+from quant_signal.domain.models import Bar, JobStatus, MarketObservation
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 
 
@@ -73,6 +81,10 @@ class FakeDebateLLMClient:
                 "key_evidence": ["合成資料樣本不足"],
                 "counterpoints_to_address": ["個股分數持續偏多"],
             }
+        if "風險管理研究員" in system_prompt and "裁決者" not in system_prompt:
+            return {"summary": "注意資料限制", "risk_warnings": ["資料限制"],
+                    "invalidation_conditions": ["訊號轉弱"],
+                    "evidence_refs": ["symbol_signal", "invented"]}
         assert "裁決者" in system_prompt
         assert payload["bull_case"]["stance"] == "bullish"
         assert payload["bear_case"]["stance"] == "bearish"
@@ -104,7 +116,9 @@ async def test_debate_analysis_weighs_bull_and_bear_cases(
     assert report.judge_model == "fake-debater"
     assert report.bull_case.stance == "bullish"
     assert report.bear_case.stance == "bearish"
-    assert report.judgement.stance == "bullish"
+    assert report.risk_review is not None
+    assert report.risk_review.evidence_refs == ["symbol_signal"]
+    assert {e.id for e in report.evidence} >= {"symbol_signal", "market_environment"}
     assert "合成資料" in " ".join(report.judgement.risk_warnings)
 
 
@@ -177,3 +191,44 @@ def test_openai_compatible_client_accepts_base_or_completion_url() -> None:
 
     assert base_client.completion_url == "https://example.test/v1/chat/completions"
     assert endpoint_client.completion_url == "https://example.test/v1/chat/completions"
+
+
+async def test_debate_synthetic_market_forces_wait(
+    trending_bars: list[Bar], healthy_market: list[MarketObservation],
+) -> None:
+    repository = MemoryQuantRepository()
+    await repository.upsert_bars(trending_bars)
+    await repository.upsert_market_observations(
+        [item.model_copy(update={"source": "synthetic_demo"}) for item in healthy_market]
+    )
+    service = DebateAnalysisService(repository, FakeDebateLLMClient())
+    report = await service.analyze(symbol="TEST", as_of=trending_bars[-1].trading_date)
+    assert not report.data_sufficient
+    assert report.judgement.stance == "neutral"
+    assert "觀望" in report.judgement.operation_guide
+    assert not report.judgement.scenarios
+
+
+@pytest.mark.parametrize("symbol_mismatch", [False, True])
+async def test_context_rejects_incompatible_backtest(
+    trending_bars: list[Bar], healthy_market: list[MarketObservation], monkeypatch,
+    symbol_mismatch: bool,
+) -> None:
+    repository = MemoryQuantRepository()
+    await repository.upsert_bars(trending_bars)
+    await repository.upsert_market_observations(healthy_market)
+    cutoff = trending_bars[-1].trading_date
+    spec = SimpleNamespace(
+        symbol="OTHER" if symbol_mismatch else "TEST",
+        end=cutoff if symbol_mismatch else cutoff + timedelta(days=1),
+    )
+
+    async def get_job(self, job_id):
+        return SimpleNamespace(status=JobStatus.COMPLETED, result=SimpleNamespace(spec=spec))
+
+    monkeypatch.setattr(BacktestJobService, "get", get_job)
+    with pytest.raises(ValueError, match="backtest symbol" if symbol_mismatch else "backtest end"):
+        await AnalysisContextService(repository).build(
+            symbol="TEST", as_of=cutoff, market="TW", benchmark="^TWII",
+            strategy_version="regime_v1", backtest_job_id=uuid4(),
+        )

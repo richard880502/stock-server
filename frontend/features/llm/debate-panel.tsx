@@ -30,6 +30,7 @@ function DebateCaseColumn({
           <li key={item}>{item}</li>
         ))}
       </ul>
+      {Boolean(debateCase.evidence_refs?.length) && <p className="note">證據來源：{debateCase.evidence_refs?.join("、")}</p>}
       <h4 className="column-label">{counterLabel}</h4>
       <ul className="bullet-list">
         {debateCase.counterpoints_to_address.map((item) => (
@@ -49,7 +50,7 @@ export function DebatePanel() {
     <div className="llm-body">
       <div className="llm-toolbar">
         <p className="note">
-          多方與空方各自舉證，再由裁決者整合成最終的操作指南；通常需要數十秒。
+          多方、空方與風控檢視同一截止日的證據，再由裁決者提出條件式研究計畫；通常需要數十秒。
         </p>
         <button
           type="button"
@@ -80,18 +81,7 @@ export function DebatePanel() {
         </div>
       ) : debateReport ? (
         <div className="llm-result">
-          <div className="debate-columns">
-            <DebateCaseColumn
-              side="bull"
-              debateCase={debateReport.bull_case}
-              counterLabel="預期空方反駁"
-            />
-            <DebateCaseColumn
-              side="bear"
-              debateCase={debateReport.bear_case}
-              counterLabel="預期多方反駁"
-            />
-          </div>
+          <p className="note">證據截止日：{debateReport.as_of}。{debateReport.data_sufficient === false ? "市場資料為示範資料，維持觀望。" : ""}</p>
           <div className="judgement-card">
             <p className="column-label">裁決</p>
             <JudgementSummary
@@ -106,8 +96,36 @@ export function DebatePanel() {
               }
             />
             <EvidenceColumns evidenceLabel="裁決證據" judgement={debateReport.judgement} />
+            <p className="note">證據來源：{debateReport.judgement.evidence_refs?.join("、") || "未提供"}</p>
             <ScenarioRow scenarios={debateReport.judgement.scenarios} />
           </div>
+          <div className="debate-columns">
+            <DebateCaseColumn
+              side="bull"
+              debateCase={debateReport.bull_case}
+              counterLabel="預期空方反駁"
+            />
+            <DebateCaseColumn
+              side="bear"
+              debateCase={debateReport.bear_case}
+              counterLabel="預期多方反駁"
+            />
+          </div>
+          {debateReport.risk_review && (
+            <div className="judgement-card">
+              <p className="column-label">風險審查</p>
+              <p>{debateReport.risk_review.summary}</p>
+              <h4 className="column-label">風險與失效條件</h4>
+              <ul className="bullet-list">{[...debateReport.risk_review.risk_warnings, ...debateReport.risk_review.invalidation_conditions].map((item, index) => <li key={index}>{item}</li>)}</ul>
+              <p className="note">證據來源：{debateReport.risk_review.evidence_refs.join("、") || "未提供"}</p>
+            </div>
+          )}
+          {Boolean(debateReport.evidence?.length) && (
+            <details><summary>查看原始證據與日期</summary>
+              {debateReport.evidence?.map((item) => <details key={item.id}><summary>{item.id} · {item.as_of}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(item.details, null, 2)}</pre></details>)}
+            </details>
+          )}
+
         </div>
       ) : llm.debateError ? null : (
         <EmptyState icon={<SparkIcon size={22} />} title={llmStatus?.configured ? "尚未啟動辯論" : "LLM 尚未設定"}>

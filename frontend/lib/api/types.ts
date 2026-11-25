@@ -137,6 +137,7 @@ export type Judgement = {
   risk_warnings: string[];
   scenarios: { name: string; condition: string; response: string }[];
   limitations: string[];
+  evidence_refs?: string[];
 };
 
 export type DebateCase = {
@@ -144,6 +145,7 @@ export type DebateCase = {
   thesis: string;
   key_evidence: string[];
   counterpoints_to_address: string[];
+  evidence_refs?: string[];
 };
 
 export type DebateReport = {
@@ -153,6 +155,10 @@ export type DebateReport = {
   bull_case: DebateCase;
   bear_case: DebateCase;
   judgement: Judgement;
+  as_of?: string;
+  data_sufficient?: boolean;
+  evidence?: { id: string; source: string; as_of: string; details: Record<string, unknown> }[];
+  risk_review?: { summary: string; risk_warnings: string[]; invalidation_conditions: string[]; evidence_refs: string[] } | null;
 };
 
 /** Payload of the `meta` / `delta` / `error` events on the LLM SSE stream. */

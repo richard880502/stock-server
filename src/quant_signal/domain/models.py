@@ -573,6 +573,7 @@ class LLMJudgement(BaseModel):
     risk_warnings: list[str] = Field(default_factory=list, max_length=8)
     scenarios: list[AnalysisScenario] = Field(default_factory=list, max_length=5)
     limitations: list[str] = Field(default_factory=list, max_length=8)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
 
 
 class LLMAnalysisContext(BaseModel):
@@ -598,6 +599,21 @@ class DebateCase(BaseModel):
     thesis: str
     key_evidence: list[str] = Field(min_length=1, max_length=8)
     counterpoints_to_address: list[str] = Field(default_factory=list, max_length=8)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
+
+
+class DebateRiskReview(BaseModel):
+    summary: str
+    risk_warnings: list[str] = Field(default_factory=list, max_length=8)
+    invalidation_conditions: list[str] = Field(default_factory=list, max_length=8)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=8)
+
+
+class DebateEvidence(BaseModel):
+    id: str
+    source: str
+    as_of: date
+    details: dict[str, Any]
 
 
 class DebateAnalysisReport(BaseModel):
@@ -611,6 +627,9 @@ class DebateAnalysisReport(BaseModel):
     bear_case: DebateCase
     judgement: LLMJudgement
     context: LLMAnalysisContext
+    evidence: list[DebateEvidence] = Field(default_factory=list)
+    risk_review: DebateRiskReview | None = None
+    data_sufficient: bool = True
 
 
 class ApiKey(BaseModel):

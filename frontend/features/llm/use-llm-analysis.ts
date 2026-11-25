@@ -44,6 +44,9 @@ export function useLlmAnalysis(query: Query, backtestJobId: string | null) {
 
   const resetStream = () => {
     stream.cancel();
+    debate.cancel();
+    setDebateReport(null);
+    setDebateError(null);
     setStreamedGuide("");
     setStreamModel(null);
     setStreamError(null);

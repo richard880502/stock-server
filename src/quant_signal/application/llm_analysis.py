@@ -20,6 +20,8 @@ from quant_signal.application.services import (
 from quant_signal.domain.models import (
     DebateAnalysisReport,
     DebateCase,
+    DebateEvidence,
+    DebateRiskReview,
     JobStatus,
     LLMAnalysisContext,
     LLMAnalysisReport,
@@ -28,7 +30,7 @@ from quant_signal.domain.models import (
 from quant_signal.settings import Settings
 
 PROMPT_VERSION = "quant_analyst_v1"
-DEBATE_PROMPT_VERSION = "debate_v1"
+DEBATE_PROMPT_VERSION = "debate_v2"
 
 SYSTEM_PROMPT = """你是一位以風險管理為優先的量化市場分析師。
 你會收到由確定性程式計算的市場寬度、資金環境、個股、異常與可選回測證據。
@@ -70,7 +72,8 @@ BULL_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「多方（看�
   "stance": "bullish",
   "thesis": "一段多方論證",
   "key_evidence": ["支持看漲的具體證據"],
-  "counterpoints_to_address": ["空方可能提出的反駁"]
+  "counterpoints_to_address": ["空方可能提出的反駁"],
+  "evidence_refs": ["引用 evidence 中的 ID"]
 }
 """
 
@@ -89,13 +92,22 @@ BEAR_SYSTEM_PROMPT = """你是投資研究團隊中負責提出「空方（看�
   "stance": "bearish",
   "thesis": "一段空方論證",
   "key_evidence": ["支持看跌的具體證據"],
-  "counterpoints_to_address": ["多方可能提出的反駁"]
+  "counterpoints_to_address": ["多方可能提出的反駁"],
+  "evidence_refs": ["引用 evidence 中的 ID"]
 }
+"""
+
+RISK_SYSTEM_PROMPT = """你是風險管理研究員。只使用輸入 JSON 的原始證據與多空論點，不得補造資料。
+檢查證據不足、衝突及交易假設失效條件，使用繁體中文。
+只輸出 JSON：{"summary":"風險摘要","risk_warnings":["風險"],
+"invalidation_conditions":["失效條件"],"evidence_refs":["證據 ID"]}。
+引用 evidence 中的 ID，無支持時留空，不得自行創造 ID。
 """
 
 DEBATE_SYNTHESIS_PROMPT = """你是以風險管理為優先的量化市場分析師，同時是這場多空辯論的最終裁決者。
 你會收到原始的量化證據（可能包含 news_sentiment，即分析日期當下已發布新聞標題的情緒分類），
-以及多方研究員與空方研究員各自提出的論證。
+以及多方研究員、空方研究員與風險管理研究員各自提出的論證。
+在 evidence_refs 陣列引用原始 evidence ID；若 data_sufficient 為 false，必須觀望。
 
 規則：
 1. 只能使用輸入 JSON 內的證據（包含 bull_case 與 bear_case），不得補造新聞、價格、基本面或即時資訊。
@@ -368,6 +380,10 @@ class AnalysisContextService:
                 raise LookupError("backtest job not found")
             if job.status != JobStatus.COMPLETED or job.result is None:
                 raise ValueError("backtest job is not completed")
+            if job.result.spec.symbol.strip().upper() != symbol.strip().upper():
+                raise ValueError("backtest symbol must match analysis symbol")
+            if job.result.spec.end > as_of:
+                raise ValueError("backtest end must not be after analysis as_of")
             backtest = job.result
         return LLMAnalysisContext(
             symbol_signal=symbol_signal,
@@ -481,23 +497,65 @@ class DebateAnalysisService:
             strategy_version=strategy_version,
             backtest_job_id=backtest_job_id,
         )
+        evidence = []
+        for source in (
+            "symbol_signal", "market_environment", "chip_flow", "news_sentiment", "backtest"
+        ):
+            item = getattr(context, source)
+            if item is not None:
+                evidence.append(DebateEvidence(
+                    id=source, source=source,
+                    as_of=item.spec.end if source == "backtest" else item.as_of,
+                    details=item.model_dump(mode="json"),
+                ))
+        data_sufficient = context.market_environment.latest.source != "synthetic_demo"
         evidence_payload = context.model_dump(mode="json")
+        evidence_payload["evidence"] = [
+            item.model_dump(mode="json", exclude={"details"}) for item in evidence
+        ]
+        evidence_payload["as_of"] = as_of.isoformat()
+        evidence_payload["data_sufficient"] = data_sufficient
         bull_payload, bear_payload = await asyncio.gather(
             self.client.complete_json(BULL_SYSTEM_PROMPT, evidence_payload),
             self.client.complete_json(BEAR_SYSTEM_PROMPT, evidence_payload),
         )
         bull_case = DebateCase.model_validate(bull_payload)
         bear_case = DebateCase.model_validate(bear_payload)
+        valid_refs = {item.id for item in evidence}
+        for case in (bull_case, bear_case):
+            case.evidence_refs = [ref for ref in case.evidence_refs if ref in valid_refs]
+        risk_payload = {
+            **evidence_payload,
+            "bull_case": bull_case.model_dump(mode="json"),
+            "bear_case": bear_case.model_dump(mode="json"),
+        }
+        risk_review = DebateRiskReview.model_validate(
+            await self.client.complete_json(RISK_SYSTEM_PROMPT, risk_payload)
+        )
+        risk_review.evidence_refs = [ref for ref in risk_review.evidence_refs if ref in valid_refs]
         synthesis_payload = {
             **evidence_payload,
             "bull_case": bull_case.model_dump(mode="json"),
             "bear_case": bear_case.model_dump(mode="json"),
+            "risk_review": risk_review.model_dump(mode="json"),
         }
         judgement_payload = await self.judge_client.complete_json(
             DEBATE_SYNTHESIS_PROMPT,
             synthesis_payload,
         )
         judgement = LLMJudgement.model_validate(judgement_payload)
+        judgement.evidence_refs = [ref for ref in judgement.evidence_refs if ref in valid_refs]
+        if not data_sufficient:
+            judgement.stance = "neutral"
+            judgement.headline = "資料不足，維持觀望"
+            judgement.operation_guide = (
+                "市場資料為示範資料，維持觀望；待真實市場資料可用後重新評估。"
+            )
+            judgement.scenarios = []
+            judgement.limitations = (
+                judgement.limitations
+                + ["市場環境使用 synthetic_demo，無法形成可靠的交易研究計畫。"]
+            )[-8:]
         return DebateAnalysisReport(
             symbol=symbol,
             as_of=as_of,
@@ -509,4 +567,7 @@ class DebateAnalysisService:
             bear_case=bear_case,
             judgement=judgement,
             context=context,
+            evidence=evidence,
+            risk_review=risk_review,
+            data_sufficient=data_sufficient,
         )

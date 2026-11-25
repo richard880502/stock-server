@@ -16,10 +16,10 @@ type Tab = "guide" | "debate";
  */
 export function LlmSection() {
   const { llmStatus } = useDashboard();
-  const [tab, setTab] = useState<Tab>("guide");
+  const [tab, setTab] = useState<Tab>("debate");
   const tabs: { id: Tab; label: string }[] = [
+    { id: "debate", label: "辯論交易計畫" },
     { id: "guide", label: "操作指南" },
-    { id: "debate", label: "多空辯論" },
   ];
 
   return (

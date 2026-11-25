@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { Card } from "@/components/card";
 import { LlmSection } from "@/features/llm/llm-section";
 import { QuickStockPanel } from "@/features/stock/quick-stock-panel";
 import { useDashboard } from "@/lib/dashboard-context";
 import { ChipPanel } from "./chip-panel";
 import { AlertsCard, FactorsCard, type SourcedAlert } from "./evidence-cards";
-import { MarketPanel } from "./market-panel";
+import { MarketOverview } from "./market-overview";
 import { VerdictHero, VerdictSkeleton } from "./verdict-hero";
 
 function SignalSkeleton() {
@@ -32,6 +33,10 @@ function SignalSkeleton() {
 }
 
 export function SignalView() {
+  return <><MarketOverview /><div id="stock-signal" className="scroll-target"><SignalDetail /></div></>;
+}
+
+function SignalDetail() {
   const { query, signalData, error, refresh, instrumentName } = useDashboard();
   const { signal, marketEnvironment, chipFlow, loading, syncWait, cancelSync } = signalData;
 
@@ -86,20 +91,14 @@ export function SignalView() {
         </div>
       </div>
       <div className={`grid${refreshing ? " is-refreshing" : ""}`}>
-        <div className="span-7">
-          {marketEnvironment ? (
-            <MarketPanel market={query.market} environment={marketEnvironment} asOf={query.asOf} />
-          ) : (
-            <Card title="市場環境" sub="尚無此市場的環境資料">
-              <p className="note">取得市場寬度與資金流資料後，這裡會顯示大盤的風險環境。</p>
-            </Card>
-          )}
-        </div>
-        <div className="span-5">
+        <div className="span-12">
           <ChipPanel chipFlow={chipFlow} />
         </div>
       </div>
       <LlmSection />
+      <Card title="用歷史資料檢驗策略" sub={`以 ${query.symbol}、截止 ${query.asOf} 的目前查詢設定回測。`}>
+        <Link href="/backtest" className="button primary">前往策略回測</Link>
+      </Card>
     </>
   );
 }

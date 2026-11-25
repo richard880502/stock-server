@@ -1061,3 +1061,16 @@ fieldset.field-row,
   min-width: 0;
   scroll-margin-top: var(--space-4);
 }
+
+/* Market discovery on the overview */
+.home-market { display: grid; gap: var(--space-4); }
+#stock-signal { display: grid; gap: var(--space-6); }
+@media (min-width: 900px) {
+  #stock-signal { scroll-margin-top: calc(var(--header-h) + 7rem); }
+}
+.home-candidates { list-style: none; padding: 0; margin: 0; }
+.home-candidates li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border); }
+.home-candidates li > span:first-child { display: grid; gap: var(--space-1); }
+.home-candidates small { color: var(--text-3); }
+.home-candidate-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+@media (max-width: 480px) { .home-candidates li { align-items: flex-start; flex-direction: column; } }
