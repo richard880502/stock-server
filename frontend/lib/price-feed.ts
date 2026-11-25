@@ -2,16 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { getBars } from "./api/endpoints";
+import { type Candle, historyStart, wantsLive } from "./candles";
 
-/** One candle on the chart. `time` is a trading date "YYYY-MM-DD" for daily bars. */
-export type Candle = {
-  time: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
+export type { Candle } from "./candles";
 
 /**
  * Where the chart gets its prices. The daily feed reads stored, point-in-time bars;
@@ -48,14 +41,6 @@ export type CandleState = {
   error: string | null;
 };
 
-const YEARS_OF_HISTORY = 3;
-
-function startFor(asOf: string | undefined): string {
-  const end = asOf ? new Date(`${asOf}T00:00:00`) : new Date();
-  end.setFullYear(end.getFullYear() - YEARS_OF_HISTORY);
-  return end.toISOString().slice(0, 10);
-}
-
 type Loaded = { key: string; candles: Candle[] | null; error: string | null };
 
 /** Loads up to three years of candles ending at `asOf` and follows live updates if the feed has them. */
@@ -72,7 +57,7 @@ export function useCandles(
     if (!symbol) return;
     const controller = new AbortController();
     feed
-      .history(symbol, { asOf, start: startFor(asOf), signal: controller.signal })
+      .history(symbol, { asOf, start: historyStart(asOf), signal: controller.signal })
       .then((candles) => setLoaded({ key, candles, error: null }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
@@ -82,7 +67,7 @@ export function useCandles(
     // Live updates only make sense when looking at today, not a historical as-of date.
     const today = new Date().toISOString().slice(0, 10);
     const unsubscribe =
-      feed.subscribe && (!asOf || asOf >= today)
+      feed.subscribe && wantsLive(asOf, today)
         ? feed.subscribe(symbol, (candle) => setLive({ key, candle }))
         : undefined;
     return () => {

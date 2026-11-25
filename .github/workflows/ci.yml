@@ -35,7 +35,7 @@ jobs:
         run: uv run --all-groups pytest -q
 
   frontend:
-    name: Frontend (eslint + build)
+    name: Frontend (eslint + vitest + build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -53,5 +53,5 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Lint and build
+      - name: Lint, unit tests and build
         run: npm test
