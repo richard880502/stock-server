@@ -282,3 +282,30 @@ def test_an_answer_in_the_wrong_shape_becomes_a_readable_error() -> None:
         validate_llm_output(DebateCase, {"stance": "bullish", "thesis": "x", "key_evidence": []})
     assert "請再試一次" in str(caught.value)
     assert isinstance(caught.value, ValueError)  # routes still answer 502
+
+
+def test_openai_compatible_errors_keep_the_provider_reason() -> None:
+    import httpx
+
+    from quant_signal.application.llm_analysis import LLMProviderError
+
+    request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+    too_long = httpx.Response(
+        400,
+        request=request,
+        json={"error": {"message": "This model's maximum context length is 8192 tokens",
+                        "code": "context_length_exceeded"}},
+    )
+    with pytest.raises(LLMProviderError) as caught:
+        OpenAICompatibleClient._raise_for_status(too_long)
+    message = str(caught.value)
+    assert "api.example.test" in message and "HTTP 400" in message
+    assert "maximum context length" in message
+
+    leaky = httpx.Response(401, request=request, text="invalid key sk-abcdefghijklmnop")
+    with pytest.raises(LLMProviderError) as caught:
+        OpenAICompatibleClient._raise_for_status(leaky)
+    assert "sk-abcdefghijklmnop" not in str(caught.value)
+    assert "[redacted]" in str(caught.value)
+
+    OpenAICompatibleClient._raise_for_status(httpx.Response(200, request=request, json={}))
