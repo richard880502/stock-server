@@ -11,6 +11,7 @@ import { AlertIcon, InfoIcon, StarIcon, XIcon } from "@/components/icons";
 import { JobStatusChip } from "@/components/status-chip";
 import type { WatchlistItem } from "@/lib/api/types";
 import { useSession } from "@/lib/api/session";
+import { nextSort, type Sort, type SortKey, sortItems } from "./sort";
 import { StrategyCell } from "./strategy-cell";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatPrice, shortDate } from "@/lib/format";
@@ -134,24 +135,6 @@ function Row({
   );
 }
 
-type SortKey = "added" | "day_change_pct" | "change_20d_pct" | "foreign_net_1d_lots" | "total_net_5d_lots";
-type Sort = { key: SortKey; dir: "desc" | "asc" };
-
-function sortItems(items: WatchlistItem[], sort: Sort): WatchlistItem[] {
-  if (sort.key === "added") return items;
-  const key = sort.key;
-  const sign = sort.dir === "desc" ? -1 : 1;
-  // Missing values always sink to the bottom, whatever the direction.
-  return [...items].sort((a, b) => {
-    const av = a[key] ?? null;
-    const bv = b[key] ?? null;
-    if (av === null && bv === null) return 0;
-    if (av === null) return 1;
-    if (bv === null) return -1;
-    return sign * (av - bv);
-  });
-}
-
 function SortHeader({
   label,
   sortKey,
@@ -189,16 +172,7 @@ export function WatchlistView() {
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [addNote, setAddNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [sort, setSort] = useState<Sort>({ key: "added", dir: "desc" });
-  // First click sorts high → low, second low → high, third returns to the order added.
-  const onSort = useCallback((key: SortKey) => {
-    setSort((current) =>
-      current.key !== key
-        ? { key, dir: "desc" }
-        : current.dir === "desc"
-          ? { key, dir: "asc" }
-          : { key: "added", dir: "desc" },
-    );
-  }, []);
+  const onSort = useCallback((key: SortKey) => setSort((current) => nextSort(current, key)), []);
 
   useEffect(() => {
     refreshList(STALE_AFTER_MS);

@@ -230,7 +230,8 @@
 
 .watch-table .col-stock,
 .watch-table .col-strategy,
-.watch-table .col-status {
+.watch-table .col-status,
+.watch-table .col-spark {
   text-align: left;
 }
 

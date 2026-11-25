@@ -17,21 +17,13 @@ import {
 } from "lightweight-charts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { subscribeTheme } from "@/lib/theme";
-import type { Candle } from "@/lib/price-feed";
+import { type Candle, mergeLive, movingAverage, visibleWindow } from "@/lib/candles";
+import { MA_PERIODS, type MaPeriod, RANGE_PRESETS, type RangeKey } from "./chart-presets";
 
 export type TradeMarker = { time: string; side: "buy" | "sell"; label?: string };
 
-export const MA_PERIODS = [5, 20, 60] as const;
-export type MaPeriod = (typeof MA_PERIODS)[number];
-
-/** Visible window presets, in trading days ("all" = everything loaded). */
-export const RANGE_PRESETS = [
-  { key: "3m", label: "3月", bars: 63 },
-  { key: "6m", label: "6月", bars: 126 },
-  { key: "1y", label: "1年", bars: 252 },
-  { key: "all", label: "全部", bars: Infinity },
-] as const;
-export type RangeKey = (typeof RANGE_PRESETS)[number]["key"];
+export { MA_PERIODS, RANGE_PRESETS } from "./chart-presets";
+export type { MaPeriod, RangeKey } from "./chart-presets";
 
 type Palette = {
   text: string;
@@ -70,25 +62,6 @@ function withAlpha(color: string, alpha: number): string {
   if (!match) return color;
   const [r, g, b] = match[1].split(/[ ,/]+/).filter(Boolean);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-function movingAverage(candles: Candle[], period: number) {
-  const out: { time: Time; value: number }[] = [];
-  let sum = 0;
-  candles.forEach((candle, index) => {
-    sum += candle.close;
-    if (index >= period) sum -= candles[index - period].close;
-    if (index >= period - 1) out.push({ time: candle.time as Time, value: sum / period });
-  });
-  return out;
-}
-
-function mergeLive(candles: Candle[], live: Candle | null): Candle[] {
-  if (!live || candles.length === 0) return candles;
-  const last = candles[candles.length - 1];
-  if (live.time === last.time) return [...candles.slice(0, -1), live];
-  if (live.time > last.time) return [...candles, live];
-  return candles;
 }
 
 const formatPrice = (value: number) =>
@@ -134,7 +107,10 @@ export function CandleChart({
 
   const data = useMemo(() => mergeLive(candles, live), [candles, live]);
   const maData = useMemo(
-    () => Object.fromEntries(MA_PERIODS.map((p) => [p, movingAverage(data, p)])) as Record<MaPeriod, { time: Time; value: number }[]>,
+    () =>
+      Object.fromEntries(
+        MA_PERIODS.map((p) => [p, movingAverage(data, p).map((point) => ({ time: point.time as Time, value: point.value }))]),
+      ) as Record<MaPeriod, { time: Time; value: number }[]>,
     [data],
   );
 
@@ -265,9 +241,8 @@ export function CandleChart({
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
     const preset = RANGE_PRESETS.find((p) => p.key === range) ?? RANGE_PRESETS[1];
-    const to = candles.length - 1 + 4;
-    const from = Number.isFinite(preset.bars) ? Math.max(0, candles.length - preset.bars) : 0;
-    const apply = () => chart.timeScale().setVisibleLogicalRange({ from, to });
+    const visible = visibleWindow(candles.length, preset.bars);
+    const apply = () => chart.timeScale().setVisibleLogicalRange(visible);
     apply();
     // autoSize measures the container asynchronously; the first measurement re-fits the
     // whole series, so apply the window again once the chart has its real width.

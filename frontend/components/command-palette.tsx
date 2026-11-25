@@ -5,6 +5,7 @@ import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 
 import { searchInstruments } from "@/lib/api/endpoints";
 import type { Instrument } from "@/lib/api/types";
 import { useDashboard } from "@/lib/dashboard-context";
+import { looksLikeSymbol, matchesQuery } from "@/lib/palette-match";
 import { applyThemePreference, getThemePreference, THEME_ORDER } from "@/lib/theme";
 import { useWatchlist } from "@/lib/use-watchlist";
 import { ChartIcon, SearchIcon, StarIcon } from "./icons";
@@ -102,8 +103,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       refresh({ symbol });
       router.push("/backtest");
     };
-    const needle = q.toLowerCase();
-    const matches = (label: string) => needle === "" || label.toLowerCase().includes(needle);
+    const matches = (label: string) => matchesQuery(label, q);
 
     const stocks: Command[] = [];
     const seen = new Set<string>();
@@ -119,7 +119,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       watchlist.watchlist?.items.slice(0, 8).forEach((item) => addStock(item.symbol, item.name, "自選股"));
     }
     // A well-formed code typed directly can be opened even before search answers.
-    if (/^[0-9A-Z^][0-9A-Z.^]{1,15}$/i.test(q) && !seen.has(q.toUpperCase())) addStock(q, undefined, "直接開啟");
+    if (looksLikeSymbol(q) && !seen.has(q.toUpperCase())) addStock(q, undefined, "直接開啟");
 
     const pages: Command[] = VIEWS.filter((v) => matches(v.label)).map((v) => ({
       id: `page:${v.href}`,

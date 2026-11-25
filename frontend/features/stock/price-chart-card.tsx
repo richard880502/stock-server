@@ -5,6 +5,7 @@ import { CandleChart, MA_PERIODS, type MaPeriod, RANGE_PRESETS, type RangeKey, t
 import { SegmentedControl } from "@/components/segmented-control";
 import { readStorage, writeStorage } from "@/lib/safe-storage";
 import { type PriceFeed, useCandles } from "@/lib/price-feed";
+import { DEFAULT_MA, parseMa, parseRange, toggleMa } from "./chart-prefs";
 import { useSyncExternalStore } from "react";
 
 const RANGE_KEY = "quant_signal_chart_range";
@@ -20,18 +21,6 @@ function subscribePrefs(listener: () => void) {
 function savePref(key: string, value: string) {
   writeStorage(key, value);
   prefListeners.forEach((listener) => listener());
-}
-
-function parseRange(stored: string | null, fallback: RangeKey): RangeKey {
-  return RANGE_PRESETS.some((p) => p.key === stored) ? (stored as RangeKey) : fallback;
-}
-
-const DEFAULT_MA = "5,20,60";
-function parseMa(stored: string): MaPeriod[] {
-  return stored
-    .split(",")
-    .map(Number)
-    .filter((n): n is MaPeriod => (MA_PERIODS as readonly number[]).includes(n));
 }
 
 /** Daily K-line card: range presets, MA toggles, volume pane; remembers the viewer's choices. */
@@ -61,10 +50,7 @@ export function PriceChartCard({
   const ma = parseMa(storedMa);
 
   const chooseRange = (value: RangeKey) => savePref(RANGE_KEY, value);
-  const toggleMa = (period: MaPeriod) => {
-    const next = ma.includes(period) ? ma.filter((p) => p !== period) : [...ma, period].sort((a, b) => a - b);
-    savePref(MA_KEY, next.join(","));
-  };
+  const onToggleMa = (period: MaPeriod) => savePref(MA_KEY, toggleMa(ma, period).join(","));
 
   const subtitle =
     sub ?? `${name ? `${name} · ` : ""}還原權值 · 資料截止 ${asOf ?? "最新"} · 往左拖可看更早（最多三年）`;
@@ -85,7 +71,7 @@ export function PriceChartCard({
               type="button"
               className={`ma-toggle ma-${period}`}
               aria-pressed={ma.includes(period)}
-              onClick={() => toggleMa(period)}
+              onClick={() => onToggleMa(period)}
             >
               MA{period}
             </button>
