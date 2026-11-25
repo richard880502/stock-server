@@ -1062,6 +1062,10 @@ fieldset.field-row,
   scroll-margin-top: var(--space-4);
 }
 
+/* Jump link to the stock signal; only needed where the sections stack on a phone. */
+a.home-jump { display: none; min-height: 2.75rem; justify-content: center; }
+@media (max-width: 719px) { a.home-jump { display: inline-flex; } }
+
 /* Market discovery on the overview */
 .home-market { display: grid; gap: var(--space-4); }
 #stock-signal { display: grid; gap: var(--space-6); }

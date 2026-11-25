@@ -1,8 +1,21 @@
 "use client";
 
+import { useState, useSyncExternalStore } from "react";
+import { ChevronDownIcon } from "@/components/icons";
 import { SegmentedControl } from "@/components/segmented-control";
 import type { MarketMetric, MarketScope } from "@/lib/api/types";
 import { METRIC_GROUPS, METRICS, SCOPES, WINDOWS } from "./metrics";
+
+/** Matches the 719px breakpoint in market.css, below which the filters collapse. */
+const NARROW_QUERY = "(max-width: 719px)";
+
+function subscribeNarrow(onChange: () => void) {
+  const query = globalThis.matchMedia(NARROW_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+const isNarrow = () => globalThis.matchMedia(NARROW_QUERY).matches;
 
 const WINDOW_OPTIONS = WINDOWS.map((value) => ({ value, label: `${value}日` }));
 
@@ -21,8 +34,26 @@ export function MarketControls({
   onWindow: (window: number) => void;
   onMetric: (metric: MarketMetric) => void;
 }) {
+  // Open on the server and on desktop; collapsed on phones so the rankings reach the first screen.
+  // Once the user toggles it, their choice wins until the screen crosses the breakpoint again.
+  const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, () => false);
+  const [choice, setChoice] = useState<{ narrow: boolean; open: boolean } | null>(null);
+  const open = choice !== null && choice.narrow === narrow ? choice.open : !narrow;
+  const scopeLabel = SCOPES.find((option) => option.value === market)?.label ?? market;
+  const summary = `篩選：${scopeLabel} · ${window} 日 · ${METRICS[metric].label}`;
+
   return (
-    <section className="card market-controls" aria-label="排行條件">
+    <details
+      className="card market-controls"
+      aria-label="排行條件"
+      open={open}
+      onToggle={(event) => setChoice({ narrow, open: event.currentTarget.open })}
+    >
+      <summary className="market-controls-summary">
+        <span>{summary}</span>
+        <ChevronDownIcon size={16} />
+      </summary>
+      <div className="market-controls-body">
       <div className="control-row">
         <div className="control">
           <span className="field-label">市場</span>
@@ -52,6 +83,7 @@ export function MarketControls({
           ))}
         </div>
       </div>
-    </section>
+      </div>
+    </details>
   );
 }

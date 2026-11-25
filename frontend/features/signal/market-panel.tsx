@@ -1,4 +1,5 @@
 import { Card } from "@/components/card";
+import { showEnvironmentLagNotice } from "@/lib/environment-lag";
 import { Direction } from "@/components/direction";
 import { InfoIcon } from "@/components/icons";
 import { RegimeChip } from "@/components/status-chip";
@@ -8,7 +9,7 @@ import type { MarketEnvironment } from "@/lib/api/types";
 import { marketFactorLabels } from "@/lib/copy";
 import { scoreLine } from "@/lib/backfill";
 import { useBackfillStatus } from "@/lib/use-backfill-status";
-import { formatNumber, formatPct, formatSigned } from "@/lib/format";
+import { formatNumber, formatPct, formatSigned, today } from "@/lib/format";
 
 const isOfficial = (environment: MarketEnvironment) =>
   environment.latest.source === "twse_official" || environment.latest.source === "tpex_official";
@@ -65,7 +66,7 @@ export function MarketPanel({
           ))}
         </ul>
       </div>
-      {environment.as_of < asOf && (
+      {showEnvironmentLagNotice(environment.as_of, asOf, today()) && (
         <p className="callout">
           <InfoIcon size={16} />
           <span>

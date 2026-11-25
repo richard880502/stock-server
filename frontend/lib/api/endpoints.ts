@@ -45,12 +45,18 @@ export async function login(password: string): Promise<LoginResponse> {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    const detail = typeof payload?.detail === "string" && response.status === 503 ? payload.detail : null;
     throw new ApiError(
       response.status === 401
         ? "密碼不正確，請使用 Quant Signal 的登入密碼。"
-        : `登入服務暫時無法使用（HTTP ${response.status}），請稍後重試。`,
+        : detail ?? `登入服務暫時無法使用（HTTP ${response.status}），請稍後重試。`,
       response.status,
     );
+  }
+  // An older server answers 200 with an empty key when none is configured: say so
+  // instead of "succeeding" and leaving the login screen up with no explanation.
+  if (!payload || typeof payload.api_key !== "string" || payload.api_key.trim() === "") {
+    throw new ApiError("伺服器沒有提供 API 金鑰，暫時無法用密碼登入。請管理員設定 DASHBOARD_API_KEY。", 503);
   }
   return payload as LoginResponse;
 }

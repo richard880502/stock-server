@@ -34,7 +34,19 @@ function SignalSkeleton() {
 }
 
 export function SignalView() {
-  return <><MarketOverview /><div id="stock-signal" className="scroll-target"><SignalDetail /></div></>;
+  const { query } = useDashboard();
+  return (
+    <>
+      {/* Phones: the stock verdict sits far below the market overview, so offer a jump to it. */}
+      <a className="home-jump button" href="#stock-signal">
+        ↓ 直接看 {query.symbol} 的訊號
+      </a>
+      <MarketOverview />
+      <div id="stock-signal" className="scroll-target">
+        <SignalDetail />
+      </div>
+    </>
+  );
 }
 
 function SignalDetail() {
