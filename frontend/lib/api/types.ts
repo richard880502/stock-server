@@ -149,6 +149,7 @@ export type DebateCase = {
 };
 
 export type DebateReport = {
+  symbol?: string;
   model: string;
   judge_model: string;
   prompt_version: string;

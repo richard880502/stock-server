@@ -9,6 +9,8 @@ import { SymbolCombobox } from "@/components/symbol-combobox";
 import { AlertIcon, InfoIcon, StarIcon, XIcon } from "@/components/icons";
 import { JobStatusChip } from "@/components/status-chip";
 import type { WatchlistItem } from "@/lib/api/types";
+import { useSession } from "@/lib/api/session";
+import { StrategyCell } from "./strategy-cell";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatPrice, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
@@ -53,11 +55,13 @@ function dataFootnote(items: WatchlistItem[]): string {
 
 function Row({
   item,
+  userId,
   removing,
   onOpen,
   onRemove,
 }: {
   item: WatchlistItem;
+  userId: string;
   removing: boolean;
   onOpen: (symbol: string) => void;
   onRemove: (item: WatchlistItem) => void;
@@ -96,6 +100,7 @@ function Row({
           <JobStatusChip status="running">分析準備中</JobStatusChip>
         )}
       </td>
+      <StrategyCell item={item} userId={userId} />
       <td className="col-remove">
         <button
           type="button"
@@ -116,6 +121,7 @@ function Row({
 }
 
 export function WatchlistView() {
+  const { user } = useSession();
   const { refresh: openSymbol } = useDashboard();
   const router = useRouter();
   const watchlist = useWatchlist();
@@ -249,15 +255,17 @@ export function WatchlistView() {
                 <th scope="col" className="col-status">
                   分析狀態
                 </th>
+                <th scope="col" className="col-strategy">策略研究</th>
                 <th scope="col" className="col-remove">
                   <span className="sr-only">移除</span>
                 </th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {user && items.map((item) => (
                 <Row
-                  key={item.symbol}
+                  key={user.id + ":" + item.symbol}
+                  userId={user.id}
                   item={item}
                   removing={watchlist.pending.has(item.symbol.toUpperCase())}
                   onOpen={open}
@@ -283,7 +291,7 @@ export function WatchlistView() {
       <div className="view-heading watch-heading">
         <div>
           <h1>自選股</h1>
-          <p>追蹤你關心的股票；點選任一檔，就會在今日訊號頁開啟。</p>
+          <p>點股票名稱查看訊號，或開啟策略研究查看條件與風險。研究紀錄儲存在此瀏覽器。</p>
         </div>
         {watchlist.watchlist && phase !== "unavailable" && (
           <span

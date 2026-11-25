@@ -98,6 +98,66 @@ export const getDataStatus = () => fetchJson<DataStatus>(apiUrl("/api/v1/data/st
 export const createDebateAnalysis = (body: AnalysisRequest, init?: Init) =>
   postJson<DebateReport>(apiUrl("/api/v1/debate-analyses"), body, init);
 
+// Keep follow-up requests bounded when raw report context contains long series.
+const clip = (value: string) => value.slice(0, 100);
+const clipList = (values: string[] = []) => values.slice(0, 8).map(clip);
+const projectCase = (value: DebateReport["bull_case"]) => ({
+  stance: value.stance,
+  thesis: clip(value.thesis),
+  key_evidence: clipList(value.key_evidence),
+  counterpoints_to_address: clipList(value.counterpoints_to_address),
+  evidence_refs: clipList(value.evidence_refs),
+});
+
+export const askStrategyQuestion = (
+  report: DebateReport,
+  question: string,
+  held: boolean,
+  init?: Init,
+  history?: { question: string; answer: string }[],
+): Promise<{ answer: string }> => {
+  const judgement = report.judgement;
+  const risk = report.risk_review;
+  const full = {
+    symbol: report.symbol, as_of: report.as_of, data_sufficient: report.data_sufficient,
+    judgement, risk_review: risk, bull_case: report.bull_case, bear_case: report.bear_case,
+    evidence: report.evidence?.map(({ id, source, as_of }) => ({ id, source, as_of })),
+  };
+  const projected = {
+    symbol: report.symbol?.slice(0, 32),
+    as_of: report.as_of,
+    data_sufficient: report.data_sufficient,
+    bull_case: projectCase(report.bull_case),
+    bear_case: projectCase(report.bear_case),
+    judgement: {
+      headline: clip(judgement.headline),
+      stance: judgement.stance,
+      operation_guide: clip(judgement.operation_guide),
+      key_evidence: clipList(judgement.key_evidence),
+      risk_warnings: clipList(judgement.risk_warnings),
+      scenarios: judgement.scenarios.slice(0, 5).map((scenario) => ({
+        name: clip(scenario.name), condition: clip(scenario.condition), response: clip(scenario.response),
+      })),
+      limitations: clipList(judgement.limitations),
+      evidence_refs: clipList(judgement.evidence_refs),
+    },
+    risk_review: risk && {
+      summary: clip(risk.summary),
+      risk_warnings: clipList(risk.risk_warnings),
+      invalidation_conditions: clipList(risk.invalidation_conditions),
+      evidence_refs: clipList(risk.evidence_refs),
+    },
+    evidence: report.evidence?.slice(0, 20).map(({ id, source, as_of }) => ({
+      id: clip(id), source: clip(source), as_of: clip(as_of),
+    })),
+  };
+  return postJson<{ answer: string }>(
+    apiUrl("/api/v1/debate-analyses/questions"),
+    { report: JSON.stringify(full).length < 36000 ? full : projected, question, held, history: history?.slice(-2) },
+    init,
+  );
+};
+
 export const createBacktest = (body: BacktestRequest, init?: Init) =>
   postJson<BacktestJob>(apiUrl("/api/v1/backtests"), body, init);
 

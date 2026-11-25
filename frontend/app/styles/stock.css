@@ -229,9 +229,19 @@
 }
 
 .watch-table .col-stock,
+.watch-table .col-strategy,
 .watch-table .col-status {
   text-align: left;
 }
+
+.watch-strategy-summary {
+  display: grid;
+  justify-items: start;
+  gap: .25rem;
+  max-width: 20rem;
+  overflow-wrap: anywhere;
+}
+.watch-strategy-summary small { color: var(--text-3); }
 
 .watch-table tbody tr + tr > * {
   border-top: 1px solid var(--border);
@@ -285,7 +295,8 @@
     grid-template-areas:
       "stock stock remove"
       "close change status"
-      "flow1 flow5 flow5";
+      "flow1 flow5 flow5"
+      "strategy strategy strategy";
     align-items: center;
     gap: var(--space-2) var(--space-3);
     padding: var(--space-3);
@@ -328,6 +339,7 @@
   .watch-row .col-flow1 {
     grid-area: flow1;
   }
+  .watch-row .col-strategy { grid-area: strategy; }
 
   .watch-row .col-flow5 {
     grid-area: flow5;
