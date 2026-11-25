@@ -1,7 +1,11 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LLMProvider = Literal["openai_compatible", "anthropic"]
+AnthropicEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):
@@ -39,6 +43,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:13000,http://127.0.0.1:13000"
     api_auth_enabled: bool = False
     llm_enabled: bool = False
+    # "openai_compatible": any chat-completions server (local vLLM / Ollama / hosted).
+    # "anthropic": Claude through the official Anthropic SDK (ANTHROPIC_* settings below).
+    llm_provider: LLMProvider = "openai_compatible"
     llm_base_url: str = "http://127.0.0.1:11434/v1"
     llm_model: str | None = None
     llm_api_key: SecretStr = SecretStr("local")
@@ -46,12 +53,22 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=1800, gt=0)
     llm_timeout_seconds: float = Field(default=120, gt=0)
     judge_llm_enabled: bool = False
+    judge_llm_provider: LLMProvider = "openai_compatible"
     judge_llm_base_url: str = "http://127.0.0.1:11434/v1"
     judge_llm_model: str | None = None
     judge_llm_api_key: SecretStr = SecretStr("local")
     judge_llm_temperature: float = Field(default=0.2, ge=0, le=2)
     judge_llm_max_tokens: int = Field(default=1800, gt=0)
     judge_llm_timeout_seconds: float = Field(default=120, gt=0)
+    # Claude (LLM_PROVIDER / JUDGE_LLM_PROVIDER = "anthropic"). The OpenAI-style
+    # LLM_MODEL / LLM_TEMPERATURE / LLM_MAX_TOKENS settings do not apply to Claude:
+    # current Claude models take no temperature, and max_tokens also covers thinking.
+    anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = "claude-opus-5-5"
+    judge_anthropic_model: str | None = None  # defaults to anthropic_model
+    anthropic_effort: AnthropicEffort = "medium"
+    anthropic_max_tokens: int = Field(default=16000, gt=0)
+    anthropic_timeout_seconds: float = Field(default=600, gt=0)
     searxng_proxy_url: str | None = None
     searxng_proxy_key: SecretStr = SecretStr("")
     dashboard_password: SecretStr = SecretStr("")
@@ -85,6 +102,12 @@ class Settings(BaseSettings):
         if not self.llm_enabled:
             return ["LLM_ENABLED"]
         missing: list[str] = []
+        if self.llm_provider == "anthropic":
+            if not self.anthropic_api_key.get_secret_value():
+                missing.append("ANTHROPIC_API_KEY")
+            if not self.anthropic_model:
+                missing.append("ANTHROPIC_MODEL")
+            return missing
         if not self.llm_base_url:
             missing.append("LLM_BASE_URL")
         if not self.llm_model:

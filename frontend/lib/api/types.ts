@@ -104,6 +104,8 @@ export type LlmStatus = {
   enabled: boolean;
   configured: boolean;
   missing: string[];
+  /** "anthropic" (Claude) or "openai_compatible"; absent on older servers. */
+  provider?: "anthropic" | "openai_compatible";
   model: string | null;
   base_url: string;
 };
