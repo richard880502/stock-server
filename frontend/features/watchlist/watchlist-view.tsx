@@ -11,8 +11,9 @@ import { AlertIcon, InfoIcon, StarIcon, XIcon } from "@/components/icons";
 import { JobStatusChip } from "@/components/status-chip";
 import type { WatchlistItem } from "@/lib/api/types";
 import { useSession } from "@/lib/api/session";
-import { nextSort, type Sort, type SortKey, sortItems } from "./sort";
 import { StrategyCell } from "./strategy-cell";
+import { DEFAULT_SORT, nextSort, SORT_OPTIONS, sortItems, sortToValue, valueToSort } from "./sort";
+import type { Sort, SortKey } from "./sort";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatPrice, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
@@ -79,7 +80,7 @@ function Row({
           aria-label={`${item.name || code}（${code}），查看今日訊號`}
         >
           <span className="stock-code num">{code}</span>
-          <span className="stock-name">{item.name}</span>
+          <span className="stock-name" title={item.name}>{item.name}</span>
           <span className="market-tag">{marketLabel[item.market]}</span>
         </button>
       </th>
@@ -171,7 +172,8 @@ export function WatchlistView() {
   const { refresh: refreshList, setMember } = watchlist;
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [addNote, setAddNote] = useState<{ ok: boolean; text: string } | null>(null);
-  const [sort, setSort] = useState<Sort>({ key: "added", dir: "desc" });
+  const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
+  // First click sorts high → low, second low → high, third returns to the order added.
   const onSort = useCallback((key: SortKey) => setSort((current) => nextSort(current, key)), []);
 
   useEffect(() => {
@@ -279,6 +281,16 @@ export function WatchlistView() {
           </p>
         )}
         <Card className="watch-board" aria-label="自選股清單">
+          <label className="watch-sort-select">
+            <span>排序</span>
+            <select value={sortToValue(sort)} onChange={(event) => setSort(valueToSort(event.target.value))}>
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <table className="watch-table">
             <caption className="sr-only">自選股清單，共 {items.length} 檔</caption>
             <thead>

@@ -420,7 +420,9 @@ Set `DASHBOARD_PASSWORD` and `DASHBOARD_API_KEY` (a real key created with
 `quant-signal-manage-keys`) on the `api` service. `POST /api/v1/auth/login`
 checks the password and, on success, hands back `DASHBOARD_API_KEY`; the
 browser stores it and attaches it as `Authorization: Bearer <key>` on every
-request from then on. This only actually restricts data once
+request from then on. Both values are required: with a password but no key,
+`/auth/config` reports `password: false` and the login route answers 503
+instead of handing out an empty key. This only actually restricts data once
 `API_AUTH_ENABLED=true` — a password screen in front of an open API protects
 nothing, since the API would still answer direct requests either way.
 

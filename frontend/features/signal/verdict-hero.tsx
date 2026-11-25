@@ -52,13 +52,13 @@ export function VerdictHero({
           </span>
         </div>
         <p className="hero-kicker">量化訊號</p>
-        <h1 id="hero-title" className="hero-action">
+        <h2 id="hero-title" className="hero-action">
           <span className="hero-action-icon" aria-hidden="true">
             <Icon size={28} />
           </span>
           <span className="sr-only">{signal.symbol}：</span>
           {copy.label}
-        </h1>
+        </h2>
         <p className="hero-guide">{copy.guide}</p>
         <div className="hero-chips">
           <RegimeChip regime={signal.regime} />

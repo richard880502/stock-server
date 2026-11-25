@@ -10,10 +10,36 @@
 
 /* ---- Filters ---------------------------------------------------------- */
 
-.market-controls {
+.market-controls-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+}
+
+/* The summary only exists on phones; on desktop the filters are always shown. */
+.market-controls-summary {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--touch);
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.market-controls-summary::-webkit-details-marker {
+  display: none;
+}
+
+.market-controls-summary svg {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.market-controls[open] .market-controls-summary svg {
+  transform: rotate(180deg);
 }
 
 .control-row {
@@ -51,6 +77,14 @@
 }
 
 @media (max-width: 719px) {
+  .market-controls-summary {
+    display: flex;
+  }
+
+  .market-controls[open] .market-controls-summary {
+    margin-bottom: var(--space-3);
+  }
+
   .control-row > .control {
     flex: 1 1 100%;
   }
@@ -122,7 +156,8 @@
 
 .rank-table th,
 .rank-table td {
-  padding: var(--space-2) var(--space-3);
+  /* Tight horizontal padding keeps six single-line columns inside a half-width board. */
+  padding: var(--space-2) var(--space-2);
   text-align: right;
   vertical-align: middle;
   font-weight: var(--weight-regular);
@@ -165,9 +200,11 @@
 
 .stock-link {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
   gap: 0 var(--space-2);
+  max-width: 100%;
+  min-width: 0;
   min-height: 2rem;
   padding: 0;
   border: 0;
@@ -179,15 +216,23 @@
 }
 
 .stock-code {
+  flex: none;
   font-weight: var(--weight-strong);
   color: var(--text);
 }
 
+/* One line per stock: a long name is cut with an ellipsis (full name in the title),
+   but never below four characters, so common names like 台積電 or 京元電子 stay whole. */
 .stock-name {
+  min-width: min(4em, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-2);
 }
 
 .market-tag {
+  flex: none;
   padding: 0 0.4em;
   border-radius: var(--radius-sm);
   background: var(--flat-soft);
@@ -264,14 +309,13 @@
 
   .rank-row {
     display: grid;
-    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto auto;
     grid-template-areas:
-      "rank stock change"
-      "rank value value"
-      "rank close turnover";
+      "rank stock stock change"
+      "rank value close turnover";
     align-items: center;
-    gap: 2px var(--space-3);
-    padding: var(--space-3);
+    gap: 0 var(--space-3);
+    padding: var(--space-2) var(--space-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface-2);
@@ -285,9 +329,8 @@
 
   .rank-row .col-rank {
     grid-area: rank;
-    align-self: start;
+    align-self: center;
     width: auto;
-    padding-top: 0.3rem;
     text-align: left;
   }
 
@@ -305,15 +348,15 @@
     grid-area: value;
     min-width: 0;
     text-align: left;
-    padding-block: var(--space-1);
   }
 
   .rank-row .col-value .value-num {
-    font-size: var(--text-base);
+    font-size: var(--text-sm);
   }
 
-  .rank-row .value-bar-fill {
-    margin-left: 0;
+  /* The bar would add a third line; the signed value already carries the direction. */
+  .rank-row .value-bar {
+    display: none;
   }
 
   .rank-row .col-close {

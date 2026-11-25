@@ -77,7 +77,7 @@ function Row({
             aria-label={`${entry.name || code}（${code}），查看今日訊號`}
           >
             <span className="stock-code num">{code}</span>
-            <span className="stock-name">{entry.name}</span>
+            <span className="stock-name" title={entry.name}>{entry.name}</span>
             {scope === "ALL" && (
               <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
             )}
@@ -104,7 +104,7 @@ function Row({
         </span>
       </td>
       {showTurnover && (
-        <td className="col-turnover num" data-label="當日成交值">
+        <td className="col-turnover num" data-label="成交值">
           {formatTwdCompact(entry.turnover_value)}
         </td>
       )}

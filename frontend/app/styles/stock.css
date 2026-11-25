@@ -271,6 +271,28 @@
 
 /* Narrow lists (phones): each row becomes a card, like the market ranking boards. */
 @container (max-width: 46rem) {
+  .watch-sort-select {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--text-2);
+  }
+
+  .watch-sort-select select {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--touch);
+    padding: 0 var(--space-3);
+    font: inherit;
+    font-size: max(16px, var(--text-base));
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
   .watch-table,
   .watch-table tbody {
     display: block;
@@ -364,11 +386,17 @@
 .spark-cell { display: flex; align-items: center; gap: var(--space-2); }
 .spark-change { font-size: var(--text-xs); min-width: 4.5em; }
 .sort-button {
-  display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none;
+  display: inline-flex; align-items: center; gap: 4px; min-height: 1.75rem; padding: 0 var(--space-1); border: 0; background: none;
   font: inherit; color: inherit; cursor: pointer; white-space: nowrap;
 }
 .sort-button:hover { color: var(--text); }
-.sort-mark { font-size: 0.7em; color: var(--text-3); }
+.sort-mark { font-size: 0.75rem; line-height: 1; color: var(--text-3); }
+@media (pointer: coarse) {
+  .sort-button { min-height: var(--touch); }
+}
+
+/* The sort <select> replaces the hidden table headers in the card layout only. */
+.watch-sort-select { display: none; }
 th[aria-sort="ascending"] .sort-mark,
 th[aria-sort="descending"] .sort-mark { color: var(--accent); }
 

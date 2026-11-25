@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WatchlistItem } from "@/lib/api/types";
-import { nextSort, sortItems } from "./sort";
+import { DEFAULT_SORT, nextSort, SORT_OPTIONS, sortItems, sortToValue, valueToSort } from "./sort";
 
 const item = (symbol: string, day: number | null, d20: number | null = null): WatchlistItem => ({
   symbol,
@@ -55,5 +55,33 @@ describe("nextSort", () => {
       key: "total_net_5d_lots",
       dir: "desc",
     });
+  });
+});
+
+describe("select value mapping (phone sort menu)", () => {
+  it("round-trips every option", () => {
+    for (const option of SORT_OPTIONS) {
+      expect(valueToSort(option.value)).toEqual(option.sort);
+      expect(sortToValue(option.sort)).toBe(option.value);
+    }
+  });
+
+  it("offers order added plus both directions for each column", () => {
+    expect(SORT_OPTIONS.map((o) => o.value)).toEqual([
+      "added",
+      "day_change_pct:desc",
+      "day_change_pct:asc",
+      "change_20d_pct:desc",
+      "change_20d_pct:asc",
+      "foreign_net_1d_lots:desc",
+      "foreign_net_1d_lots:asc",
+      "total_net_5d_lots:desc",
+      "total_net_5d_lots:asc",
+    ]);
+  });
+
+  it("falls back to the order added for unknown values", () => {
+    expect(valueToSort("bogus")).toEqual(DEFAULT_SORT);
+    expect(sortToValue({ key: "added", dir: "asc" })).toBe("added");
   });
 });
