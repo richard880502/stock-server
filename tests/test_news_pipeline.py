@@ -485,3 +485,22 @@ async def test_old_news_outside_seven_days_is_not_evidence(
     llm = RecordingDebateLLM([])
     await DebateAnalysisService(repository, llm).analyze(symbol="TEST", as_of=as_of)
     assert llm.calls[0][1]["news_items"] == []
+
+
+async def test_aggregate_sentiment_ignores_items_older_than_14_days() -> None:
+    from quant_signal.application.services import NewsSentimentService
+
+    repository = _repo("2330.TW")
+    as_of = date(2026, 11, 26)
+    recent = datetime(2026, 11, 24, 2, tzinfo=UTC)
+    stale = datetime(2026, 11, 1, 2, tzinfo=UTC)
+    await repository.upsert_news_items(
+        [
+            _item("2330.TW", "近期利空", "https://a.test/r", recent, recent, label="bearish"),
+            _item("2330.TW", "過期利多一", "https://a.test/s1", stale, stale),
+            _item("2330.TW", "過期利多二", "https://a.test/s2", stale, stale),
+        ]
+    )
+    snapshot = await NewsSentimentService(repository).analyze("2330.TW", as_of=as_of)
+    assert snapshot.article_count == 1
+    assert snapshot.sentiment_label == "bearish"

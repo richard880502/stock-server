@@ -415,11 +415,13 @@ copies count once.
 the model returns `{"results": [{"index", "label", "score"}]}`; anything missing,
 unknown or sign-inconsistent becomes neutral 0. With the LLM off, items are stored
 unclassified (no score, no label) and classified by a later run once it is on;
-already classified items are never classified again. `NEWS_ANTHROPIC_MODEL` can
-point this job at a cheaper Claude model than the analyst's.
+already classified items are never classified again. Classification uses `NEWS_ANTHROPIC_MODEL` (default `claude-haiku-5-5`) whenever
+`LLM_PROVIDER=anthropic`, so the analyst/debate models (e.g. Opus) are not spent on
+headlines; set it to another model, or empty to reuse `ANTHROPIC_MODEL`.
 
 **In the debate.** The aggregate `news_sentiment` (score, label, count; no raw
-headlines) stays in the evidence. The newest 8 distinct items from the last 7
+headlines; only items from the 14 days before `as_of`, so stale headlines do not
+dominate) stays in the evidence. The newest 8 distinct items from the last 7
 days known at `as_of` are added as separate evidence ids `news:<8 hex>`; the model
 sees source, time, label and a truncated headline (never the URL) and may cite a
 single item in `evidence_refs`. The response's `evidence[].details` carries the

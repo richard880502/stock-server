@@ -45,8 +45,9 @@ class Settings(BaseSettings):
     news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
     # Comma-separated RSS/Atom feed URLs read whole and matched to symbols by code/name.
     news_feed_urls: str = ""
-    # Optional cheaper Claude model used only to classify headlines.
-    news_anthropic_model: str | None = None
+    # Claude model used only to classify headlines (cheap on purpose; the analyst and
+    # debate models are unchanged). Empty falls back to ANTHROPIC_MODEL.
+    news_anthropic_model: str | None = "claude-haiku-5-5"
     # How far back the whole-market snapshot is filled on first run.
     sync_market_lookback_days: int = Field(default=520, ge=30)
     kronos_url: str | None = None
