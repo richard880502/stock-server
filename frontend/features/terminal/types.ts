@@ -6,6 +6,7 @@ export type RailItem = {
   name: string;
   /** Last official daily close; null when the stock has no daily data yet. */
   close: number | null;
+  /** Ratio (-0.0359 = -3.59%), the same unit as LiveQuote.change_pct. */
   dayChangePct: number | null;
   /** Up to 20 recent daily closes for the fallback sparkline. */
   recentCloses: number[];

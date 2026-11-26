@@ -8,7 +8,7 @@ import { type PriceFeed, useCandles } from "@/lib/price-feed";
 import { DEFAULT_MA, parseMa, parseRange, toggleMa } from "./chart-prefs";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { today } from "@/lib/format";
-import { useLiveQuotes } from "@/lib/live-quotes";
+import { type LiveQuote, type LiveQuoteStatus, useLiveQuotes } from "@/lib/live-quotes";
 import { useSession } from "@/lib/api/session";
 import { IntradayChart } from "./intraday-chart";
 
@@ -50,6 +50,7 @@ export function PriceChartCard({
   feed,
   liveAsOf,
   preferLive = false,
+  liveFeed,
 }: {
   symbol: string;
   name?: string | null;
@@ -63,6 +64,8 @@ export function PriceChartCard({
   liveAsOf?: string;
   /** Open in live mode when it is available (the 看盤 page); the viewer can still switch. */
   preferLive?: boolean;
+  /** A page that already streams quotes passes them in, so it doesn't open a second stream. */
+  liveFeed?: { quote?: LiveQuote; status: LiveQuoteStatus };
 }) {
   const currentDate = useSyncExternalStore(subscribeToday, today, () => "");
   const [selection, setSelection] = useState<{ symbol: string; date: string; mode: "daily" | "live" } | null>(null);
@@ -88,7 +91,7 @@ export function PriceChartCard({
   return (
     <Card title={liveMode ? "即時 K 線" : title} sub={liveMode ? `${name ? `${name} · ` : ""}即時分鐘成交 · 台北時間 · 當日資料` : subtitle} className="price-chart-card">
       {canShowLive && <SegmentedControl<"daily" | "live"> label="價格圖模式" value={liveMode ? "live" : "daily"} options={[{ value: "daily", label: "日 K 線" }, { value: "live", label: "即時 K 線" }]} onChange={(mode) => setSelection({ symbol, date: liveAsOf, mode })} />}
-      {liveMode ? <LivePriceChart symbol={symbol} /> : <>
+      {liveMode ? (liveFeed ? <IntradayChart symbol={symbol} quote={liveFeed.quote} status={liveFeed.status} /> : <LivePriceChart symbol={symbol} />) : <>
       <div className="price-chart-controls">
         <SegmentedControl<RangeKey>
           label="顯示區間"

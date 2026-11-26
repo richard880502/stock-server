@@ -46,7 +46,8 @@ export function TerminalView() {
         symbol: item.symbol.toUpperCase(),
         name: item.name,
         close: item.close,
-        dayChangePct: item.day_change_pct,
+        // The watchlist API sends percent (-3.59); live quotes send a ratio (-0.0359).
+        dayChangePct: item.day_change_pct === null ? null : item.day_change_pct / 100,
         recentCloses: item.recent_closes ?? [],
       }));
     return recentSymbols.map((recent) => ({
@@ -83,6 +84,7 @@ export function TerminalView() {
         <section className="terminal-center" aria-label="報價與 K 線">
           <QuoteHeader symbol={symbol} name={name} quote={quote} signal={signal} live={live} />
           <PriceChartCard
+            liveFeed={{ quote, status: live.status }}
             symbol={symbol}
             name={name}
             asOf={signal?.as_of}
