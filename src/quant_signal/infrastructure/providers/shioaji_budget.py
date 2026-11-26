@@ -11,8 +11,11 @@ backfill CLI all draw from the same allowance. It fails closed: if Redis cannot 
 reached or the allowance is used up, the query is not sent.
 
 "During the session" is not defined by Shioaji. To stay safe it is read broadly here:
-weekdays 08:00-14:30 (stocks 09:00-13:30, futures day session 08:45-13:45) plus the
-futures night session 15:00-05:00, which counts toward the day it started on.
+weekdays 08:00-14:30 (stocks 09:00-13:30, odd-lot and after-hours fixed-price trading
+to 14:30, futures day session 08:45-13:45) plus the futures night session 15:00-05:00,
+which counts toward the day it started on.
+So 14:30-15:00 and 05:00-08:00 (and weekends after Saturday 05:00) are off-session:
+the whole-market after-close job spends its ~1,900 kbars queries only there.
 """
 
 from __future__ import annotations

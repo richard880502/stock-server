@@ -27,13 +27,20 @@ It logs in with subscribe_trade=False and subscribes to regular-lot stock trades
   `quote_latest`. Sector rotation reads these.
 * A one-contract snapshot when a symbol is first subscribed, so its page shows
   today's price at once.
-* After `QUOTES_BACKFILL_AFTER_CLOSE` (14:45): official 1-minute kbars for the
+* After `QUOTES_BACKFILL_AFTER_CLOSE` (14:35): official 1-minute kbars for the
   **whole market** (watched symbols first, then TAIEX futures, then everything in the
   latest official day) replace the live minutes. ~2,000 queries at ≤ 40 per 10 s
-  ≈ 9 minutes, ~30 MB of traffic.
+  ≈ 9 minutes, ~30 MB of traffic. These queries are only sent **off-session**
+  (14:30-15:00 and 05:00-08:00 on weekdays, weekends after Saturday 05:00), so they
+  never use the 270-per-day session allowance. Timeline of a trading day: 14:35-15:00
+  is the first window (the job stops at 14:58, two minutes before the night session);
+  whatever is left finishes the next morning in 05:00-08:00 (it stops at 07:58), or on
+  the weekend. A day nothing is known about is probed first with TXF, 2330 and 0050;
+  see "After the close" below for how holidays are recognised.
 * Every history query (kbars, snapshots) goes through the Redis budget
   (`shioaji_budget`): ≤ 40 per rolling 10 s (Shioaji: 50), ≤ 150 kbars during the
-  session (Shioaji: 270). `api.usage()` (UsageStatus) is read at most once a minute
+  session (Shioaji: 270; the session is weekdays 08:00-14:30 plus the 15:00-05:00
+  night session). `api.usage()` (UsageStatus) is read at most once a minute
   and published at Redis key `quant:quotes:usage`; snapshots and the backfill stop
   when today's remaining traffic drops below `QUOTES_USAGE_RESERVE_MB` (100).
 
@@ -141,13 +148,29 @@ last_total_volume=volume. Live flushes never modify official minutes.
   is deduplicated per session through a Redis key with a two-day TTL. The task is
   skipped quietly once the intraday budget is used up.
 - After the close: once per weekday at or after QUOTES_BACKFILL_AFTER_CLOSE
-  (Taipei, default 14:45), the collector replaces up to QUOTES_BACKFILL_MAX_SYMBOLS
+  (Taipei, default 14:35), the collector replaces up to QUOTES_BACKFILL_MAX_SYMBOLS
   symbols (default 300) with official minutes. These are the watchlist symbols,
   symbols seen live that day, and current subscriptions. A Redis key claims the
   day. On failure the claim is released so the run retries. If the budget runs out,
   the run retries after 15 minutes and skips symbols that were already completed.
-  On holidays kbars returns nothing, so the run has no effect. Keep this time
-  between 14:30 and 15:00. Earlier or later times draw on the session allowance.
+  The run only queries off-session: it stops when the session starts (08:00 or
+  15:00) and the previous weekday's unfinished day is resumed in the next
+  off-session window; nothing older is retried. Finished days are remembered for 5
+  days. Nothing is sent within two minutes of the session start (stops at 14:58 and
+  07:58). Holidays: when the live feed and the snapshots saw nothing that day, TXF,
+  2330 and 0050 are queried once (after a forced usage check; unknown or low usage
+  retries later). If all three return nothing the day is marked "closed" for 6 hours,
+  and only a second all-empty probe in a later off-session window marks it done.
+  Failed fetches never count as empty; 10 failures in a row, or more than 20% failed
+  symbols, release the day for a retry instead of marking it done. Keep the start time
+  between 14:30 and 15:00; an earlier time simply waits for 14:30.
+- Redis state (query counters, claims, finished-symbol sets) lives in the quote
+  Redis container with `--appendonly yes` and the named volume `quote_redis_data`
+  mounted at `/data`, so a redeploy no longer resets it. Compose creates the volume
+  automatically.
+- The manual CLI refuses a whole-market run in-session, stops when the session is
+  about to start, pass `--symbol` for single
+  symbols.
 - All history queries run one at a time from a single background queue.
 - Each replaced day is compared with the live minutes. If fewer than 80% of
   closes match, the run logs "Official minutes disagree with live minutes". That
@@ -157,7 +180,7 @@ Collector settings (defaults shown):
 
 ```text
 QUOTES_BACKFILL_ENABLED=true
-QUOTES_BACKFILL_AFTER_CLOSE=14:45
+QUOTES_BACKFILL_AFTER_CLOSE=14:35
 QUOTES_BACKFILL_INTRADAY_MAX=150
 QUOTES_BACKFILL_MAX_SYMBOLS=300
 ```
