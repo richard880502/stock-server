@@ -152,6 +152,47 @@
 .rank-table {
   width: 100%;
   font-size: var(--text-sm);
+  /* Fixed widths for the number columns; the stock column takes what is left, so wide
+     CJK fonts can never push the table past its card. */
+  table-layout: fixed;
+}
+
+.rank-table .col-close {
+  width: 4.25rem;
+}
+
+.rank-table .col-change {
+  width: 5.5rem;
+}
+
+.rank-table .col-value {
+  width: 8rem;
+  min-width: 0;
+}
+
+.rank-table .col-turnover {
+  width: 4.5rem;
+}
+
+/* Code + market on the first line, the name on the second (ellipsis when tight).
+   If even code + market don't fit, the market tag wraps instead of overlapping the star. */
+.rank-table .stock-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  width: 100%;
+  min-height: 0;
+}
+
+.rank-table .market-tag {
+  order: 1;
+}
+
+.rank-table .stock-name {
+  order: 2;
+  flex: 1 0 100%;
+  min-width: 0;
 }
 
 .rank-table th,
@@ -172,7 +213,7 @@
 }
 
 .rank-table .col-rank {
-  width: 2.5rem;
+  width: 2rem;
   text-align: center;
   color: var(--text-3);
 }
