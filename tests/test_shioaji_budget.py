@@ -23,8 +23,8 @@ def test_session_day_reads_the_session_broadly():
     thursday = date(2026, 11, 26)
     assert session_day(datetime(2026, 11, 26, 7, 59, tzinfo=TAIPEI)) is None
     assert session_day(datetime(2026, 11, 26, 8, 0, tzinfo=TAIPEI)) == thursday
-    assert session_day(datetime(2026, 11, 26, 13, 49, tzinfo=TAIPEI)) == thursday
-    assert session_day(datetime(2026, 11, 26, 13, 50, tzinfo=TAIPEI)) is None  # After close.
+    assert session_day(datetime(2026, 11, 26, 14, 29, tzinfo=TAIPEI)) == thursday
+    assert session_day(datetime(2026, 11, 26, 14, 30, tzinfo=TAIPEI)) is None  # After close.
     assert session_day(datetime(2026, 11, 26, 14, 59, tzinfo=TAIPEI)) is None
     assert session_day(datetime(2026, 11, 26, 15, 0, tzinfo=TAIPEI)) == thursday  # Night opens.
     assert session_day(datetime(2026, 11, 28, 4, 59, tzinfo=TAIPEI)) == date(2026, 11, 27)
