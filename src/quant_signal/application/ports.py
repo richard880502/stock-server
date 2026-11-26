@@ -19,11 +19,14 @@ from quant_signal.domain.models import (
     IntradaySnapshot,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
+    MarketEvent,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
     MarketStockDay,
+    MonthlyRevenue,
     NewsItem,
+    RiskFlag,
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
@@ -181,6 +184,26 @@ class QuantRepository(Protocol):
     async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int: ...
 
     async def list_market_industries(self) -> list[MarketIndustry]: ...
+
+    async def upsert_market_events(self, rows: list[MarketEvent]) -> int: ...
+
+    async def upsert_risk_flags(self, rows: list[RiskFlag]) -> int: ...
+
+    async def upsert_monthly_revenue(self, rows: list[MonthlyRevenue]) -> int: ...
+
+    async def list_market_events(
+        self, symbols: list[str] | None, since: datetime, as_of: datetime
+    ) -> list[MarketEvent]: ...
+
+    async def active_risk_flags(
+        self, as_of: datetime, symbols: list[str] | None = None
+    ) -> list[RiskFlag]: ...
+
+    async def monthly_revenue(
+        self, symbol: str, as_of: datetime, months: int = 13
+    ) -> list[MonthlyRevenue]: ...
+
+    async def latest_monthly_revenue(self, as_of: datetime) -> list[MonthlyRevenue]: ...
 
     async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
 

@@ -543,3 +543,59 @@ class WatchlistItemRow(Base):
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class MarketEventRow(Base):
+    """Official material announcements and ex-rights schedule (revisions kept)."""
+
+    __tablename__ = "market_events"
+    __table_args__ = (
+        Index("ix_market_events_announced", "announced_at"),
+        Index("ix_market_events_symbol_announced", "symbol", "announced_at"),
+    )
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    external_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    announced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    clause: Mapped[str | None] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text)
+    effective_date: Mapped[date | None] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MarketRiskFlagRow(Base):
+    """處置股 / 注意股 designations (revisions kept, e.g. an extended disposition)."""
+
+    __tablename__ = "market_risk_flags"
+    __table_args__ = (Index("ix_market_risk_flags_start", "start_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), primary_key=True)
+    start_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MonthlyRevenueRow(Base):
+    """Monthly revenue in NT$ thousands; a restated month is a new revision."""
+
+    __tablename__ = "monthly_revenue"
+    __table_args__ = (Index("ix_monthly_revenue_period", "period"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    revenue: Mapped[float] = mapped_column(Float, nullable=False)
+    mom_pct: Mapped[float | None] = mapped_column(Float)
+    yoy_pct: Mapped[float | None] = mapped_column(Float)
+    cumulative_revenue: Mapped[float | None] = mapped_column(Float)
+    cumulative_yoy_pct: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -59,6 +59,7 @@ from quant_signal.infrastructure.db.models import (
     UserSessionRow,
     WatchlistItemRow,
 )
+from quant_signal.infrastructure.db.official_repository import OfficialDataRepositoryMixin
 from quant_signal.infrastructure.db.prices import (
     LatestQuote,
     MinuteBar,
@@ -67,7 +68,7 @@ from quant_signal.infrastructure.db.prices import (
 )
 
 
-class PostgresQuantRepository:
+class PostgresQuantRepository(OfficialDataRepositoryMixin):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 

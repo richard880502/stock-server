@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from quant_signal.application.market_industry import refresh_industries
+from quant_signal.application.official_events import refresh_official_data
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
     ensure_market_snapshots,
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 # A failed refresh is retried after an hour, not on every poll.
 INDUSTRY_RETRY_AFTER = timedelta(hours=1)
 _industry_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
+# Dataset -> last failed attempt for the official events refresh (see application/official_events).
+_official_attempts: dict[str, datetime] = {}
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -44,6 +47,20 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
             except Exception:
                 # Classification is a weekly nicety; never let it stall the price sync.
                 logger.exception("industry classification refresh failed")
+        if settings.official_events_enabled:
+            try:
+                await refresh_official_data(
+                    repository,
+                    twse,
+                    tpex,
+                    now=now,
+                    attempts=_official_attempts,
+                    material_minutes=settings.official_events_material_minutes,
+                    retry_after=timedelta(minutes=settings.official_events_retry_minutes),
+                )
+            except Exception:
+                # Events are a side feed; never let them stall the price sync.
+                logger.exception("official events refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),

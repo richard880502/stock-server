@@ -898,3 +898,143 @@ class SectorStocks(BaseModel):
     data_time: datetime | None
     backfill_pending: bool = False
     entries: list[SectorStockEntry]
+
+
+# --- Official structured events (TWSE / TPEx OpenAPI) ---------------------------------
+# Point in time: ``available_at`` is when *we* fetched the row, never the publication
+# date. A changed row is stored as a new ``revision`` so "what did we know on date D"
+# stays answerable.
+
+MarketEventKind = Literal["material", "ex_rights"]
+RiskFlagKind = Literal["disposition", "attention"]
+EventCategory = Literal[
+    "buyback",
+    "capital_increase",
+    "m_and_a",
+    "major_contract",
+    "guidance",
+    "clarification",
+    "litigation",
+    "dividend",
+    "executive_change",
+    "other",
+]
+EventPolarity = Literal["positive", "negative", "neutral"]
+
+
+def _require_aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return value
+
+
+class MarketEvent(BaseModel):
+    """A 重大訊息 (material announcement) or an ex-rights/dividend schedule entry."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    kind: MarketEventKind
+    external_key: str = Field(max_length=64)
+    announced_at: datetime
+    title: str
+    clause: str | None = None
+    detail: str | None = None
+    effective_date: date | None = None
+    source: str
+    available_at: datetime
+    revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _aware(self) -> MarketEvent:
+        _require_aware(self.announced_at)
+        _require_aware(self.available_at)
+        return self
+
+
+class RiskFlag(BaseModel):
+    """A 處置股 (disposition) or 注意股 (attention) designation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    kind: RiskFlagKind
+    start_date: date
+    end_date: date | None = None
+    reason: str
+    source: str
+    available_at: datetime
+    revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _aware(self) -> RiskFlag:
+        _require_aware(self.available_at)
+        return self
+
+
+class MonthlyRevenue(BaseModel):
+    """One company's monthly revenue. Amounts are NT$ thousands (仟元) as published."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    period: str = Field(pattern=r"^\d{4}-\d{2}$")
+    revenue: float
+    mom_pct: float | None = None
+    yoy_pct: float | None = None
+    cumulative_revenue: float | None = None
+    cumulative_yoy_pct: float | None = None
+    source: str
+    available_at: datetime
+    revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _aware(self) -> MonthlyRevenue:
+        _require_aware(self.available_at)
+        return self
+
+
+class RevenueMetrics(BaseModel):
+    symbol: str
+    period: str
+    revenue: float
+    yoy_pct: float | None
+    mom_pct: float | None
+    cumulative_yoy_pct: float | None
+    # This month's YoY minus the mean YoY of the three preceding months.
+    acceleration_pct: float | None
+    consecutive_positive_yoy: int
+    # None while fewer than 12 months of history have accumulated.
+    is_12m_high: bool | None
+    months_available: int
+    available_at: datetime
+
+
+class ClassifiedEvent(BaseModel):
+    symbol: str
+    kind: MarketEventKind
+    announced_at: datetime
+    title: str
+    clause: str | None
+    detail: str | None
+    effective_date: date | None
+    source: str
+    category: EventCategory
+    polarity: EventPolarity
+    available_at: datetime
+
+
+class StockEvents(BaseModel):
+    symbol: str
+    as_of: date
+    days: int
+    events: list[ClassifiedEvent]
+    risk_flags: list[RiskFlag]
+    revenue: RevenueMetrics | None
+    note: str
+
+
+class MarketRiskFlags(BaseModel):
+    as_of: date
+    count: int
+    flags: list[RiskFlag]

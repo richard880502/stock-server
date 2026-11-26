@@ -1,0 +1,58 @@
+[
+ {
+  "Date": "1151203",
+  "Code": "1437",
+  "Name": "勤益控",
+  "Exdividend": "息",
+  "StockDividendRatio": "",
+  "SubscriptionRatio": "",
+  "SubscriptionPricePerShare": "",
+  "CashDividend": "0.624652",
+  "SharesOffered": "",
+  "SharesEmpOwner": "",
+  "SharesholderOwner": "",
+  "StockHoldingRatio": ""
+ },
+ {
+  "Date": "1151230",
+  "Code": "1707",
+  "Name": "葡萄王",
+  "Exdividend": "息",
+  "StockDividendRatio": "",
+  "SubscriptionRatio": "",
+  "SubscriptionPricePerShare": "",
+  "CashDividend": "1.900000",
+  "SharesOffered": "",
+  "SharesEmpOwner": "",
+  "SharesholderOwner": "",
+  "StockHoldingRatio": ""
+ },
+ {
+  "Date": "1151221",
+  "Code": "1817",
+  "Name": "凱撒衛",
+  "Exdividend": "息",
+  "StockDividendRatio": "",
+  "SubscriptionRatio": "",
+  "SubscriptionPricePerShare": "",
+  "CashDividend": "1.800000",
+  "SharesOffered": "",
+  "SharesEmpOwner": "",
+  "SharesholderOwner": "",
+  "StockHoldingRatio": ""
+ },
+ {
+  "Date": "1151208",
+  "Code": "00400A",
+  "Name": "主動國泰動能高息",
+  "Exdividend": "息",
+  "StockDividendRatio": "",
+  "SubscriptionRatio": "",
+  "SubscriptionPricePerShare": "",
+  "CashDividend": "",
+  "SharesOffered": "",
+  "SharesEmpOwner": "",
+  "SharesholderOwner": "",
+  "StockHoldingRatio": ""
+ }
+]

@@ -145,6 +145,59 @@ Analyze the resulting chip signal:
 curl "http://127.0.0.1:18100/api/v1/chip-flows/2330.TW?as_of=2026-07-31"
 ```
 
+### Official events, risk flags and monthly revenue
+
+The sync worker (inside the ingest service) also collects structured, point-in-time
+market data from the TWSE / TPEx OpenAPI (free, JSON, no key). Disable it with
+`OFFICIAL_EVENTS_ENABLED=false`.
+
+| Data | TWSE (`https://openapi.twse.com.tw/v1`) | TPEx (`https://www.tpex.org.tw/openapi/v1`) |
+| --- | --- | --- |
+| 重大訊息 material announcements | `/opendata/t187ap04_L` | `/mopsfin_t187ap04_O` |
+| 處置股 disposition | `/announcement/punish` | `/tpex_disposal_information` |
+| 注意股 attention | `/announcement/notice`, `/announcement/notetrans` | `/tpex_trading_warning_information`, `/tpex_trading_warning_note` |
+| 除權息預告 ex-rights schedule | `/exchangeReport/TWT48U_ALL` | `/tpex_exright_prepost` |
+| 月營收 monthly revenue | `/opendata/t187ap05_L` | `/mopsfin_t187ap05_O` |
+
+**These endpoints only return the latest period** (the most recent announcements, the
+currently active flags, the latest reported month). There is no historical backfill:
+history accumulates from the day the worker starts fetching, and an `as_of` before that
+day returns nothing. Only four-digit common-stock codes are stored; warrants, ETFs and
+depositary receipts are skipped.
+
+Schedule (Asia/Taipei, guarded by `fetch_coverage` so a restart never refetches; a failed
+fetch is logged and retried after 10 minutes without touching the price sync):
+
+- risk flags and ex-rights: weekdays after 17:00 and again from 08:00 the next morning
+- material announcements: weekdays 07:00-22:00, every 30 minutes
+- monthly revenue: daily on days 1-15 of the month (companies file through the 10th),
+  weekly otherwise
+
+Tables (migration `0015_market_events`): `market_events` (material + ex-rights),
+`market_risk_flags`, `monthly_revenue`. Every row has `available_at`, the time **we**
+fetched it (never the publication date), and a `revision`. Re-fetching identical content
+is a no-op; changed content (a restated month, an extended disposition, a changed
+dividend) is stored as `revision + 1` with a new `available_at`, so as-of reads
+(`available_at <= as_of`, highest visible revision) answer "what did we know on date D".
+Monthly revenue is in NT$ thousands (仟元), as published.
+
+Read API (`as_of` defaults to today, `days` is 1-365):
+
+```bash
+curl "http://127.0.0.1:18100/api/v1/stocks/2330.TW/events?as_of=2026-11-26&days=30"
+curl "http://127.0.0.1:18100/api/v1/market/risk-flags?as_of=2026-11-26"
+```
+
+`/stocks/{symbol}/events` returns the stock's announcements and ex-rights schedule with a
+rule-based `category` (buyback, capital_increase, m_and_a, major_contract, guidance,
+clarification, litigation, dividend, executive_change, other) and coarse `polarity`
+(`quant/event_classifier.py`, keyword rules, no LLM), its active disposition/attention
+flags, and revenue metrics (`quant/revenue.py`: YoY, MoM, cumulative YoY, acceleration =
+this month's YoY minus the average of the previous three, consecutive positive-YoY
+months, 12-month-high flag). Attention flags are shown for the announcement day and the
+next weekday (no holiday calendar). The MCP tools `get_stock_events` and
+`get_market_risk_flags` return the same payloads.
+
 ### Licensed broker-branch data
 
 Complete daily broker-branch reports are paid exchange information products.
@@ -624,6 +677,8 @@ The MCP server exposes:
 - `get_signal_alerts`
 - `analyze_chip_flow`
 - `analyze_news_sentiment`
+- `get_stock_events`
+- `get_market_risk_flags`
 - `start_backtest`
 - `get_backtest_status`
 - `get_backtest_report`
@@ -798,6 +853,7 @@ Current strategy mechanics:
 - `fetch_coverage`
 - `sync_jobs`
 - `market_stock_daily`
+- `market_events`, `market_risk_flags`, `monthly_revenue`
 - `users`, `user_sessions`, `usage_counters`
 - `watchlist_items`
 
