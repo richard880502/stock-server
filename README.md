@@ -581,6 +581,28 @@ uv run --all-groups pytest
 uv run --all-groups ruff check .
 ```
 
+### Integration tests (real PostgreSQL / Redis)
+
+`uv run --all-groups pytest` skips the database tests unless their URLs are set. CI
+runs them in the job "Backend integration (Postgres + Redis)". Locally, use a
+**dedicated, throwaway** database (the tests clear job queues and write rows, so never
+point them at a database a live worker uses):
+
+```bash
+docker compose up -d postgres redis   # or any Postgres 17 / Redis 7
+docker compose exec postgres psql -U quant -d postgres -c "create database quant_signal_ci"
+export DATABASE_URL=postgresql+asyncpg://quant:quant@127.0.0.1:15432/quant_signal_ci
+export QUANT_TEST_DATABASE_URL=$DATABASE_URL QUOTES_TEST_DATABASE_URL=$DATABASE_URL
+export QUOTES_TEST_REDIS_URL=redis://127.0.0.1:6379/15   # use a spare Redis db number
+uv run --all-groups alembic upgrade head
+uv run --all-groups pytest tests/test_postgres_integration.py \
+  tests/test_quote_storage_integration.py tests/test_schema_drift.py
+```
+
+Add `CI_REQUIRE_INTEGRATION=1` to turn skipped integration tests into failures (what
+CI does). The tests clean up after themselves and can be run repeatedly. Without
+`QUOTES_TEST_REDIS_URL` the Redis tests are skipped.
+
 Start only PostgreSQL:
 
 ```bash

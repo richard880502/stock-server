@@ -34,6 +34,69 @@ jobs:
       - name: Test
         run: uv run --all-groups pytest -q
 
+  integration:
+    name: Backend integration (Postgres + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: quant
+          POSTGRES_PASSWORD: quant
+          POSTGRES_DB: quant_signal_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quant -d quant_signal_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://quant:quant@127.0.0.1:5432/quant_signal_ci
+      QUANT_TEST_DATABASE_URL: postgresql+asyncpg://quant:quant@127.0.0.1:5432/quant_signal_ci
+      QUOTES_TEST_DATABASE_URL: postgresql+asyncpg://quant:quant@127.0.0.1:5432/quant_signal_ci
+      QUOTES_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      # A skipped integration test is a failure here (see tests/conftest.py).
+      CI_REQUIRE_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+
+      - name: Migrate empty database to head
+        run: uv run --all-groups alembic upgrade head
+
+      - name: Schema drift (ORM models vs migrated database)
+        run: uv run --all-groups pytest -q tests/test_schema_drift.py
+
+      - name: Round trip the newest migration
+        run: |
+          uv run --all-groups alembic downgrade -1
+          uv run --all-groups alembic upgrade head
+
+      - name: Integration tests
+        run: >-
+          uv run --all-groups pytest -q -rs
+          tests/test_postgres_integration.py
+          tests/test_quote_storage_integration.py
+          tests/test_schema_drift.py
+
   frontend:
     name: Frontend (eslint + vitest + build)
     runs-on: ubuntu-latest
