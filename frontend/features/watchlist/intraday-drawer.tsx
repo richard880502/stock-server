@@ -6,7 +6,8 @@ import type { LiveQuote, LiveQuoteStatus } from "@/lib/live-quotes";
 import { IntradayChart } from "@/features/stock/intraday-chart";
 import "./intraday-drawer.css";
 
-export function IntradayDrawer({ items, symbol, onSelect, onClose, quote, status }: {
+export function IntradayDrawer({ items, symbol, onSelect, onClose, onOpenTerminal, quote, status }: {
+  onOpenTerminal?: (symbol: string) => void;
   items: WatchlistItem[]; symbol: string; onSelect: (symbol: string) => void; onClose: () => void;
   quote?: LiveQuote; status: LiveQuoteStatus;
 }) {
@@ -28,6 +29,11 @@ export function IntradayDrawer({ items, symbol, onSelect, onClose, quote, status
         <select id="intraday-symbol" className="input" value={symbol} onChange={(event) => onSelect(event.target.value)}>
           {items.map((item) => <option key={item.symbol} value={item.symbol}>{item.name || item.symbol}（{item.symbol.replace(/\.TWO?$/, "")}）</option>)}
         </select>
+        {onOpenTerminal && (
+          <button type="button" className="button small" onClick={() => { onClose(); onOpenTerminal(symbol); }}>
+            在看盤中開啟
+          </button>
+        )}
         <IntradayChart symbol={symbol} quote={quote} status={status} />
       </div>
     </dialog>

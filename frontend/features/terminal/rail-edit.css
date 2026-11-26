@@ -1,0 +1,62 @@
+/* Page heading row: title + 看盤/列表 switch. */
+.terminal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.terminal-head h1 {
+  font-size: var(--text-xl);
+}
+
+/* Add box + remove button (editing the watchlist inside the rail). */
+.rail-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.rail-add .inline-error,
+.rail-note-ok {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.rail-note-ok {
+  color: var(--text-2);
+}
+.rail-item {
+  position: relative;
+}
+.rail-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+}
+.rail-item:hover .rail-remove,
+.rail-remove:focus-visible {
+  opacity: 1;
+}
+.rail-remove:hover {
+  color: var(--text);
+}
+.rail-remove[aria-disabled="true"] {
+  cursor: progress;
+  opacity: 0.4;
+}
+@media (hover: none) {
+  .rail-remove {
+    opacity: 0.7;
+  }
+}

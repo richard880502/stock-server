@@ -1,6 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { Sparkline } from "@/components/charts/sparkline";
+import { XIcon } from "@/components/icons";
+import { SymbolCombobox } from "@/components/symbol-combobox";
+import type { AddNote } from "@/features/watchlist/use-watchlist-add";
+import type { WatchlistToggleResult } from "@/lib/use-watchlist";
 import { actionCopy, actionTone } from "@/lib/copy";
 import { useDashboard } from "@/lib/dashboard-context";
 import { directionOf, formatPrice, formatSignedPct } from "@/lib/format";
@@ -10,6 +15,19 @@ import { useRailSignals } from "./rail-signals";
 import { isStaleQuote } from "./rail-stale";
 import type { LiveState, RailItem } from "./types";
 import "./rail.css";
+import "./rail-edit.css";
+
+export type RailEdit = {
+  onAdd: (symbol: string, name?: string) => void;
+  onRemove: (symbol: string) => Promise<WatchlistToggleResult>;
+  note: AddNote;
+  pending: ReadonlySet<string>;
+  /** Symbols actually on the watchlist (the rail may show recents instead). */
+  members: ReadonlySet<string>;
+  full: boolean;
+  limit: number;
+  loading: boolean;
+};
 
 /** Compact watchlist: live price (else daily close), change, trend line and our signal. */
 export function WatchRail({
@@ -18,13 +36,21 @@ export function WatchRail({
   live,
   selected,
   onSelect,
+  edit,
 }: {
   items: RailItem[];
   signedIn: boolean;
   live: LiveState;
   selected: string;
   onSelect: (symbol: string) => void;
+  edit: RailEdit;
 }) {
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const remove = async (symbol: string) => {
+    setRemoveError(null);
+    const result = await edit.onRemove(symbol);
+    if (!result.ok) setRemoveError(result.message);
+  };
   const { query } = useDashboard();
   const now = useNow(5000);
   const signals = useRailSignals(
@@ -39,12 +65,36 @@ export function WatchRail({
         <span className="rail-count">{items.length || ""}</span>
       </header>
       {!signedIn && <p className="rail-note">登入 Google 帳號後可在此看到自選股{items.length ? "；目前顯示最近查看的股票。" : "。"}</p>}
+      {signedIn && (
+        <div className="rail-add">
+          <SymbolCombobox
+            value=""
+            recents={[]}
+            label="加入自選股"
+            placeholder={edit.full ? `已滿 ${edit.limit} 檔` : "搜尋並加入自選"}
+            resetOnSelect
+            disabled={edit.full || edit.loading}
+            markedSymbols={edit.members}
+            onSelect={edit.onAdd}
+          />
+          {edit.note && (
+            <p className={edit.note.ok ? "rail-note-ok" : "inline-error"} role={edit.note.ok ? "status" : "alert"}>
+              {edit.note.text}
+            </p>
+          )}
+          {removeError && (
+            <p className="inline-error" role="alert">
+              {removeError}
+            </p>
+          )}
+        </div>
+      )}
       {items.length === 0 ? (
-        <p className="rail-empty">還沒有股票。按 ⌘K（或 Ctrl+K）搜尋並加入自選。</p>
+        <p className="rail-empty">{signedIn ? "還沒有股票。用上方搜尋框加入自選。" : "還沒有股票。登入後即可加入自選。"}</p>
       ) : (
         <ul className="rail-list">
           {items.map((item) => (
-            <li key={item.symbol}>
+            <li key={item.symbol} className="rail-item">
               <RailRow
                 item={item}
                 live={live}
@@ -53,6 +103,20 @@ export function WatchRail({
                 active={item.symbol === selected}
                 onSelect={onSelect}
               />
+              {signedIn && edit.members.has(item.symbol) && (
+                <button
+                  type="button"
+                  className="rail-remove"
+                  aria-label={`將 ${item.name || item.symbol} 移出自選股`}
+                  title="移出自選股"
+                  aria-disabled={edit.pending.has(item.symbol) || undefined}
+                  onClick={() => {
+                    if (!edit.pending.has(item.symbol)) void remove(item.symbol);
+                  }}
+                >
+                  <XIcon size={12} />
+                </button>
+              )}
             </li>
           ))}
         </ul>
