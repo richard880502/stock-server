@@ -1,4 +1,8 @@
 /* 看盤: one dense screen on desktop; stacked on narrow screens. */
+/* Three columns need more than the reading width the other pages use. */
+main.container:has(> .terminal) {
+  max-width: calc(1760px + var(--gutter) * 2);
+}
 .terminal {
   display: flex;
   flex-direction: column;
