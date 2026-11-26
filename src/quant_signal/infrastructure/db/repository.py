@@ -7,7 +7,7 @@ from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, case, delete, func, or_, select, text, update
+from sqlalchemy import Select, case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,7 +49,6 @@ from quant_signal.infrastructure.db.models import (
     InstrumentRow,
     MarketEnvironmentSnapshotRow,
     MarketIndustryRow,
-    MarketIntradaySnapshotRow,
     MarketObservationRow,
     MarketStockDayRow,
     NewsItemRow,
@@ -60,7 +59,12 @@ from quant_signal.infrastructure.db.models import (
     UserSessionRow,
     WatchlistItemRow,
 )
-from quant_signal.live_bar import MinuteQuote
+from quant_signal.infrastructure.db.prices import (
+    LatestQuote,
+    MinuteBar,
+    read_latest,
+    read_minutes,
+)
 
 
 class PostgresQuantRepository:
@@ -124,9 +128,7 @@ class PostgresQuantRepository:
         )
         bar_rows = (await self.session.execute(bar_statement)).all()
         market_rows = (await self.session.execute(market_statement)).all()
-        institutional_rows = (
-            await self.session.execute(institutional_statement)
-        ).all()
+        institutional_rows = (await self.session.execute(institutional_statement)).all()
         branch_rows = (await self.session.execute(branch_statement)).all()
         bars = [
             DataSeriesStatus(
@@ -175,43 +177,21 @@ class PostgresQuantRepository:
         ]
         return DataStatus(
             generated_at=datetime.now(UTC),
-            real_data_ready=any(
-                item.is_real and item.observations >= 60 for item in bars
-            ),
+            real_data_ready=any(item.is_real and item.observations >= 60 for item in bars),
             bar_series=bars,
             market_series=markets,
             institutional_series=institutions,
             branch_series=branches,
         )
 
-    async def list_quote_minutes(
+    async def list_minute_bars(
         self, symbol: str, *, since: datetime, until: datetime
-    ) -> list[MinuteQuote]:
-        """Collector minute rows for one symbol, last trade within [since, until]."""
-        from quant_signal.infrastructure.db.models import QuoteMinuteRow
+    ) -> list[MinuteBar]:
+        """1-minute bars for one symbol with ``since <= minute < until``."""
+        return await read_minutes(self.session, symbol, since, until)
 
-        rows = await self.session.scalars(
-            select(QuoteMinuteRow)
-            .where(
-                QuoteMinuteRow.symbol == symbol.upper(),
-                QuoteMinuteRow.minute >= since,
-                QuoteMinuteRow.last_time <= until,
-            )
-            .order_by(QuoteMinuteRow.minute)
-        )
-        return [
-            MinuteQuote(
-                minute=r.minute,
-                last_time=r.last_time,
-                open=r.open,
-                high=r.high,
-                low=r.low,
-                close=r.close,
-                first_total_volume=r.first_total_volume,
-                last_total_volume=r.last_total_volume,
-            )
-            for r in rows
-        ]
+    async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]:
+        return await read_latest(self.session, symbols)
 
     async def list_bars(
         self,
@@ -586,9 +566,7 @@ class PostgresQuantRepository:
             return 0
         market = observations[0].market.upper()
         if any(item.market.upper() != market for item in observations):
-            raise ValueError(
-                "one upsert_market_observations call may contain only one market"
-            )
+            raise ValueError("one upsert_market_observations call may contain only one market")
         inserted = 0
         for item in observations:
             raw = item.model_dump(mode="json")
@@ -771,10 +749,7 @@ class PostgresQuantRepository:
             return (score, symbol)
 
         ranked = sorted(rows, key=rank)[:limit]
-        return [
-            Instrument(symbol=row.symbol, name=row.name, market=row.market)
-            for row in ranked
-        ]
+        return [Instrument(symbol=row.symbol, name=row.name, market=row.market) for row in ranked]
 
     async def list_news_items(
         self,
@@ -795,8 +770,7 @@ class PostgresQuantRepository:
             )
         if end:
             statement = statement.where(
-                NewsItemRow.published_at
-                <= datetime.combine(end, datetime.max.time(), UTC)
+                NewsItemRow.published_at <= datetime.combine(end, datetime.max.time(), UTC)
             )
         rows = (await self.session.execute(statement)).all()
         return [
@@ -951,9 +925,7 @@ class PostgresQuantRepository:
                 select(SyncJobRow).where(
                     SyncJobRow.kind == kind.value,
                     SyncJobRow.symbol == normalized,
-                    SyncJobRow.status.in_(
-                        [JobStatus.QUEUED.value, JobStatus.RUNNING.value]
-                    ),
+                    SyncJobRow.status.in_([JobStatus.QUEUED.value, JobStatus.RUNNING.value]),
                 )
             )
         ).scalar_one()
@@ -1073,58 +1045,38 @@ class PostgresQuantRepository:
             for row in rows
         ]
 
-    async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int:
-        if not rows:
-            return 0
-        written = 0
-        for offset in range(0, len(rows), 1000):
-            chunk = rows[offset : offset + 1000]
-            statement = insert(MarketIntradaySnapshotRow).values(
-                [item.model_dump(mode="python") for item in chunk]
-            )
-            excluded = statement.excluded
-            statement = statement.on_conflict_do_update(
-                index_elements=["symbol", "taken_at"],
-                set_={
-                    column: getattr(excluded, column)
-                    for column in IntradaySnapshot.model_fields
-                    if column not in ("symbol", "taken_at")
-                },
-            )
-            written += (await self.session.execute(statement)).rowcount or 0
-        await self.session.commit()
-        return written
-
     async def latest_intraday_snapshots(
         self, *, day: date, now: datetime
     ) -> list[IntradaySnapshot]:
-        start = datetime.combine(day, time.min, ZoneInfo("Asia/Taipei"))
-        row = MarketIntradaySnapshotRow
-        statement = (
-            select(row)
-            .where(
-                row.taken_at >= start,
-                row.taken_at < start + timedelta(days=1),
-                row.taken_at <= now,
-                row.available_at <= now,
-            )
-            .distinct(row.symbol)
-            .order_by(row.symbol, row.taken_at.desc())
-        )
-        rows = (await self.session.execute(statement)).scalars().all()
-        return [
-            IntradaySnapshot.model_validate(
-                {column: getattr(item, column) for column in IntradaySnapshot.model_fields}
-            )
-            for item in rows
-        ]
+        """Today's latest price per stock (``quote_latest``), as sector-rotation rows.
 
-    async def delete_intraday_snapshots_before(self, cutoff: datetime) -> int:
-        result = await self.session.execute(
-            delete(MarketIntradaySnapshotRow).where(MarketIntradaySnapshotRow.taken_at < cutoff)
-        )
-        await self.session.commit()
-        return result.rowcount or 0
+        Only quotes traded on ``day`` (Taipei), stored by ``now``, with a known
+        reference price (needed for the day's change) are returned.
+        """
+        start = datetime.combine(day, time.min, ZoneInfo("Asia/Taipei"))
+        quotes = await read_latest(self.session)
+        rows = []
+        for quote in quotes.values():
+            change = quote.change_pct
+            if (
+                change is None
+                or not start <= quote.trade_time < start + timedelta(days=1)
+                or quote.updated_at > now
+                or quote.trade_time > now
+            ):
+                continue
+            rows.append(
+                IntradaySnapshot(
+                    symbol=quote.symbol,
+                    taken_at=quote.trade_time,
+                    price=quote.price,
+                    change_pct=change,
+                    volume_lots=quote.volume or 0,
+                    amount_twd=float(quote.amount or 0),
+                    available_at=quote.updated_at,
+                )
+            )
+        return rows
 
     @staticmethod
     def _market_filters(market: str | None, as_of: date | None) -> list:
@@ -1293,9 +1245,9 @@ class PostgresQuantRepository:
         if not dates:
             return []
         row = MarketStockDayRow
-        statement = select(
-            row.symbol, row.trading_date, row.close, row.change, row.volume
-        ).where(row.trading_date.in_(dates), row.market == market)
+        statement = select(row.symbol, row.trading_date, row.close, row.change, row.volume).where(
+            row.trading_date.in_(dates), row.market == market
+        )
         return [
             (r[0], r[1], float(r[2]), float(r[3]), int(r[4]))
             for r in (await self.session.execute(statement)).all()
@@ -1537,6 +1489,4 @@ class PostgresQuantRepository:
 
     @staticmethod
     def _payload_hash(payload: dict) -> str:
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()

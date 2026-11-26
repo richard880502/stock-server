@@ -2,14 +2,13 @@ import asyncio
 import json
 import time
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
 
 from quant_signal.adapters.rest.security import Principal, require_principal
 from quant_signal.application.quote_cache import (
@@ -20,17 +19,13 @@ from quant_signal.application.quote_cache import (
     volume_unit,
 )
 from quant_signal.infrastructure.db.database import session_factory
-from quant_signal.infrastructure.db.models import QuoteMinuteRow
+from quant_signal.infrastructure.db.prices import read_minutes as read_minute_bars
 
 
 async def read_minutes(symbol, before, limit):
-    statement = select(QuoteMinuteRow).where(QuoteMinuteRow.symbol == symbol)
-    if before:
-        statement = statement.where(QuoteMinuteRow.minute < before)
+    """Newest ``limit`` minute bars before ``before`` (from ``minute_bars``), oldest first."""
     async with session_factory() as session:
-        rows = (
-            await session.scalars(statement.order_by(QuoteMinuteRow.minute.desc()).limit(limit))
-        ).all()
+        bars = await read_minute_bars(session, symbol, end=before, limit=limit, newest_first=True)
     return {
         "symbol": symbol,
         "source": "shioaji",
@@ -38,16 +33,17 @@ async def read_minutes(symbol, before, limit):
         "volume_unit": volume_unit(symbol),
         "bars": [
             {
-                "minute": r.minute,
-                "last_trade_time": r.last_time,
-                "open": r.open,
-                "high": r.high,
-                "low": r.low,
-                "close": r.close,
-                "observed_volume_change_lots": max(0, r.last_total_volume - r.first_total_volume),
-                "is_partial": r.is_partial,
+                "minute": bar.minute,
+                # Minute bars no longer keep trade times; the minute's end bounds them.
+                "last_trade_time": bar.minute + timedelta(seconds=59),
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "observed_volume_change_lots": bar.volume,
+                "is_partial": not bar.official,
             }
-            for r in reversed(rows)
+            for bar in reversed(bars)
         ],
     }
 

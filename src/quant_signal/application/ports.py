@@ -29,6 +29,7 @@ from quant_signal.domain.models import (
     SyncJobKind,
     User,
 )
+from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 
 
 class QuantRepository(Protocol):
@@ -181,13 +182,15 @@ class QuantRepository(Protocol):
 
     async def list_market_industries(self) -> list[MarketIndustry]: ...
 
-    async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int: ...
+    async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
+
+    async def list_minute_bars(
+        self, symbol: str, *, since: datetime, until: datetime
+    ) -> list[MinuteBar]: ...
 
     async def latest_intraday_snapshots(
         self, *, day: date, now: datetime
     ) -> list[IntradaySnapshot]: ...
-
-    async def delete_intraday_snapshots_before(self, cutoff: datetime) -> int: ...
 
     async def list_market_closes(
         self, dates: list[date], market: str

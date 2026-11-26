@@ -49,7 +49,7 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await session.execute(text("DELETE FROM users WHERE google_sub LIKE 'zz-%'"))
         await session.execute(text("DELETE FROM market_industries WHERE symbol LIKE 'ZZ%'"))
         await session.execute(
-            text("DELETE FROM market_intraday_snapshots WHERE symbol LIKE 'ZZ%'")
+            text("DELETE FROM quote_latest WHERE symbol LIKE 'ZZ%'")
         )
         await session.commit()
     await engine.dispose()
@@ -386,21 +386,25 @@ async def _seed_market(sessions, names: dict[str, str], day: date) -> None:
 
 
 async def test_industries_and_intraday_snapshots_roundtrip(sessions) -> None:
-    from quant_signal.application.intraday_snapshots import store_intraday_snapshots
-    from quant_signal.domain.models import IntradaySnapshot, MarketIndustry
+    from quant_signal.domain.models import MarketIndustry
+    from quant_signal.infrastructure.db.prices import LatestQuote, store_latest
 
     symbol = _symbol()
     slot = datetime(2026, 11, 2, 2, 30, tzinfo=UTC)  # 10:30 Taipei on a Monday
 
-    def snap(at: datetime, price: float, available: datetime) -> IntradaySnapshot:
-        return IntradaySnapshot(
+    def quote(at: datetime, price: float, stored: datetime) -> LatestQuote:
+        return LatestQuote(
             symbol=symbol,
-            taken_at=at,
             price=price,
-            change_pct=0.01,
-            volume_lots=5,
-            amount_twd=1e6,
-            available_at=available,
+            reference=100.0,
+            open=None,
+            high=None,
+            low=None,
+            volume=5,
+            amount=1_000_000,
+            trade_time=at,
+            source="snapshot",
+            updated_at=stored,
         )
 
     async with sessions() as session:
@@ -418,20 +422,24 @@ async def test_industries_and_intraday_snapshots_roundtrip(sessions) -> None:
         stored = [i for i in await repository.list_market_industries() if i.symbol == symbol]
         assert len(stored) == 1 and stored[0].industry_name == "半導體業"
 
-        await store_intraday_snapshots(
-            [
-                snap(slot, 100, slot),
-                snap(slot + timedelta(minutes=10), 101, slot + timedelta(minutes=10)),
-                snap(slot + timedelta(minutes=20), 102, slot + timedelta(minutes=21)),
-            ],
-            repository,
-        )
-        await store_intraday_snapshots([snap(slot, 99, slot)], repository)  # upsert
-        now = slot + timedelta(minutes=15)  # the 10:50 slot is not yet known
+        await store_latest(session, [quote(slot + timedelta(minutes=10), 101, slot)])
+        # An older snapshot never replaces a newer price.
+        await store_latest(session, [quote(slot, 99, slot)])
+        await session.commit()
+        now = slot + timedelta(minutes=15)
         latest = [
             i
             for i in await repository.latest_intraday_snapshots(day=date(2026, 11, 2), now=now)
             if i.symbol == symbol
         ]
-        assert [(i.taken_at, i.price) for i in latest] == [(slot + timedelta(minutes=10), 101)]
-        assert await repository.delete_intraday_snapshots_before(slot + timedelta(days=1)) >= 3
+        assert [(i.taken_at, i.price, round(i.change_pct, 4)) for i in latest] == [
+            (slot + timedelta(minutes=10), 101, 0.01)
+        ]
+        # Not yet stored at an earlier "now" (point in time).
+        assert not [
+            i
+            for i in await repository.latest_intraday_snapshots(
+                day=date(2026, 11, 2), now=slot - timedelta(minutes=1)
+            )
+            if i.symbol == symbol
+        ]

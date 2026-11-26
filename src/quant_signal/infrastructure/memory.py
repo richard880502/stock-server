@@ -32,6 +32,7 @@ from quant_signal.domain.models import (
     SyncJobKind,
     User,
 )
+from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 
 
 class MemoryQuantRepository:
@@ -55,6 +56,9 @@ class MemoryQuantRepository:
         self.market_stock_days: dict[tuple[str, date, str], MarketStockDay] = {}
         self.market_industries: dict[str, MarketIndustry] = {}
         self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
+        # Test seams for the ingest-owned price layers (``quote_latest``, ``minute_bars``).
+        self.quotes_latest: dict[str, LatestQuote] = {}
+        self.minute_bars: dict[str, list[MinuteBar]] = {}
         self.users: dict[UUID, User] = {}
         self.user_sessions: dict[str, tuple[UUID, datetime]] = {}
         self.usage: dict[tuple[UUID, str, date], int] = {}
@@ -562,7 +566,21 @@ class MemoryQuantRepository:
     async def list_market_industries(self) -> list[MarketIndustry]:
         return list(self.market_industries.values())
 
+    async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]:
+        wanted = {s.upper() for s in symbols}
+        return {s: q for s, q in self.quotes_latest.items() if s in wanted}
+
+    async def list_minute_bars(
+        self, symbol: str, *, since: datetime, until: datetime
+    ) -> list[MinuteBar]:
+        return [
+            bar
+            for bar in self.minute_bars.get(symbol.upper(), [])
+            if since <= bar.minute < until
+        ]
+
     async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int:
+        """Test seam: production rows come from ``quote_latest`` (ingest service)."""
         for item in rows:
             self.intraday_snapshots[(item.symbol, item.taken_at)] = item
         return len(rows)
@@ -583,12 +601,6 @@ class MemoryQuantRepository:
             if current is None or item.taken_at > current.taken_at:
                 latest[item.symbol] = item
         return list(latest.values())
-
-    async def delete_intraday_snapshots_before(self, cutoff: datetime) -> int:
-        stale = [key for key in self.intraday_snapshots if key[1] < cutoff]
-        for key in stale:
-            del self.intraday_snapshots[key]
-        return len(stale)
 
     def _market_rows(
         self, market: str | None, as_of: date | None

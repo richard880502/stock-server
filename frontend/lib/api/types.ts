@@ -330,6 +330,11 @@ export type WatchlistItem = {
   recent_closes?: number[];
   change_20d_pct?: number | null;
   full_analysis: Exclude<FullAnalysisState, "insufficient">;
+  /** Today's latest price when newer than the official close (percent change). */
+  latest_price?: number | null;
+  latest_change_pct?: number | null;
+  latest_at?: string | null;
+  latest_source?: "tick" | "snapshot" | null;
 };
 
 export type Watchlist = { limit: number; count: number; items: WatchlistItem[] };

@@ -11,8 +11,10 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -28,20 +30,55 @@ class Base(DeclarativeBase):
     pass
 
 
-class QuoteMinuteRow(Base):
-    __tablename__ = "quote_minutes"
-    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+class MarketSymbolRow(Base):
+    """Small integer ids for symbols, so minute rows store 2 bytes instead of a string."""
+
+    __tablename__ = "market_symbols"
+    id: Mapped[int] = mapped_column(SmallInteger, Identity(), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False, unique=True)
+
+
+class MinuteBarRow(Base):
+    """1-minute bars, partitioned by month (see migration 0013).
+
+    Prices are integer hundredths (``price * 100``) and ``volume`` is the minute's own
+    volume in the instrument's unit (lots for stocks, contracts for futures).
+    ``official`` rows come from Shioaji's after-the-fact kbars and are never
+    overwritten by live ticks; live rows may be partial (feed gaps, late start).
+    Columns are ordered widest-first so rows pack without padding.
+    """
+
+    __tablename__ = "minute_bars"
     minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    open: Mapped[float] = mapped_column(Float, nullable=False)
-    high: Mapped[float] = mapped_column(Float, nullable=False)
-    low: Mapped[float] = mapped_column(Float, nullable=False)
-    close: Mapped[float] = mapped_column(Float, nullable=False)
-    first_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    first_total_volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    last_total_volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    # Captured trades may start mid-minute or have gaps after a feed interruption.
-    is_partial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    open: Mapped[int] = mapped_column(Integer, nullable=False)
+    high: Mapped[int] = mapped_column(Integer, nullable=False)
+    low: Mapped[int] = mapped_column(Integer, nullable=False)
+    close: Mapped[int] = mapped_column(Integer, nullable=False)
+    volume: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol_id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    official: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+
+class QuoteLatestRow(Base):
+    """The newest known price per symbol today: one row each, overwritten in place.
+
+    Filled by the collector from live ticks (subscribed symbols) and from
+    whole-market snapshots every 10 minutes. ``reference`` is the exchange's
+    reference price for the day (平盤價), which already accounts for ex-rights.
+    """
+
+    __tablename__ = "quote_latest"
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    trade_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    volume: Mapped[int | None] = mapped_column(BigInteger)
+    amount: Mapped[int | None] = mapped_column(BigInteger)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference: Mapped[int | None] = mapped_column(Integer)
+    open: Mapped[int | None] = mapped_column(Integer)
+    high: Mapped[int | None] = mapped_column(Integer)
+    low: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
 
 
 class InstrumentRow(Base):
@@ -450,19 +487,6 @@ class MarketIndustryRow(Base):
     industry_code: Mapped[str] = mapped_column(String(8), nullable=False)
     industry_name: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
-    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class MarketIntradaySnapshotRow(Base):
-    __tablename__ = "market_intraday_snapshots"
-    __table_args__ = (Index("ix_market_intraday_taken_at", "taken_at"),)
-
-    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
-    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    price: Mapped[float] = mapped_column(Float, nullable=False)
-    change_pct: Mapped[float] = mapped_column(Float, nullable=False)
-    volume_lots: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    amount_twd: Mapped[float] = mapped_column(Float, nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

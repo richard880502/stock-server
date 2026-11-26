@@ -1,4 +1,4 @@
-"""Fill gaps in ``quote_minutes`` from Shioaji's official 1-minute bars (kbars).
+"""Fill gaps in ``minute_bars`` from Shioaji's official 1-minute bars (kbars).
 
 Two moments use it, both inside the collector (the only process that talks to
 Shioaji):
@@ -7,12 +7,15 @@ Shioaji):
   the live feed started are filled once (only whole minutes strictly before the
   subscription minute, so the live feed and the backfill never write the same
   minute, and existing rows are never touched).
-* After the close, once per weekday: every symbol anyone watches is replaced with
-  the official bars, so a day is complete even if nobody looked at it live or the
-  collector was disconnected.
+* After the close, once per weekday: the WHOLE market (every stock in the latest
+  official daily snapshot, watched and live-seen symbols first, plus TAIEX futures)
+  is replaced with the official bars, so a day is complete even if nobody looked at
+  it live or the collector was disconnected.
 
 Every kbars call goes through the shared Redis budget (``shioaji_budget``) and all
-history queries run one at a time from a single queue.
+history queries run one at a time from a single queue. Before and during the
+whole-market run the account's daily data usage (``api.usage()``) is checked; the run
+pauses when the remaining traffic drops below the configured reserve.
 """
 
 from __future__ import annotations
@@ -26,12 +29,17 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func, select
 
-from quant_signal.application.quote_cache import PREFIX, SYMBOL, is_futures
+from quant_signal.application.quote_cache import FUTURES_SYMBOLS, PREFIX, SYMBOL, is_futures
 from quant_signal.infrastructure.db.database import session_factory
-from quant_signal.infrastructure.db.models import QuoteMinuteRow, WatchlistItemRow
+from quant_signal.infrastructure.db.models import (
+    MarketStockDayRow,
+    MarketSymbolRow,
+    MinuteBarRow,
+    WatchlistItemRow,
+)
+from quant_signal.infrastructure.db.prices import MinuteBar, read_minutes, store_minutes
 from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted
 
 log = logging.getLogger(__name__)
@@ -45,19 +53,15 @@ KEY = PREFIX + "backfill:"
 DEDUPE_TTL_SECONDS = 2 * 86400
 CLAIM_TTL_SECONDS = 3600  # A crashed after-close run is retried after this at most.
 RETRY_AFTER_BUDGET_SECONDS = 900
-UPDATED_COLUMNS = (
-    "open",
-    "high",
-    "low",
-    "close",
-    "first_time",
-    "last_time",
-    "first_total_volume",
-    "last_total_volume",
-    "is_partial",
-)
+# Re-check the account's remaining traffic every this many symbols.
+USAGE_CHECK_EVERY = 100
 
-Fetch = Callable[[str, datetime, datetime], Awaitable[list[dict]]]
+Fetch = Callable[[str, datetime, datetime], Awaitable[list[MinuteBar]]]
+UsageCheck = Callable[[], Awaitable[bool]]
+
+
+class UsageLow(Exception):
+    """The account's remaining daily traffic is below the reserve; stop history queries."""
 
 
 def taipei_now() -> datetime:
@@ -119,61 +123,63 @@ def intraday_window(symbol: str, subscribed_at: datetime) -> tuple[datetime, dat
     return start, cutoff
 
 
-def alignment(existing: Iterable[dict], official: Iterable[dict]) -> tuple[int, int]:
+def alignment(existing: Iterable[MinuteBar], official: Iterable[MinuteBar]) -> tuple[int, int]:
     """How many overlapping minutes have the same close (live vs official).
 
     A low match rate means the kbars label/timezone reading is off; the caller logs it.
     """
-    official_close = {row["minute"]: row["close"] for row in official}
+    official_close = {bar.minute: bar.close for bar in official}
     compared = matched = 0
-    for row in existing:
-        close = official_close.get(row["minute"])
+    for bar in existing:
+        close = official_close.get(bar.minute)
         if close is None:
             continue
         compared += 1
-        if abs(close - row["close"]) < 1e-6:
+        if abs(close - bar.close) < 1e-6:
             matched += 1
     return compared, matched
 
 
-def official_minutes_statement(rows: list[dict], *, replace: bool) -> Any:
-    """Insert official minutes. ``replace`` overwrites live rows (after the close only)."""
-    statement = insert(QuoteMinuteRow).values(rows)
-    if not replace:
-        return statement.on_conflict_do_nothing(index_elements=["symbol", "minute"])
-    incoming = statement.excluded
-    return statement.on_conflict_do_update(
-        index_elements=["symbol", "minute"],
-        set_={column: getattr(incoming, column) for column in UPDATED_COLUMNS},
-    )
-
-
-async def store_official_minutes(rows: list[dict], *, replace: bool) -> int:
+async def store_official_minutes(rows: list[MinuteBar], *, replace: bool) -> int:
     if not rows:
         return 0
     async with session_factory() as session:
-        for index in range(0, len(rows), 500):
-            await session.execute(
-                official_minutes_statement(rows[index : index + 500], replace=replace)
-            )
+        written = await store_minutes(session, rows, live=False, replace=replace)
         await session.commit()
-    return len(rows)
+    return written
 
 
-async def live_minutes(symbol: str, start: datetime, end: datetime) -> list[dict]:
-    statement = select(QuoteMinuteRow).where(
-        QuoteMinuteRow.symbol == symbol,
-        QuoteMinuteRow.minute >= start,
-        QuoteMinuteRow.minute < end,
-        QuoteMinuteRow.is_partial.is_(True),
-    )
+async def live_minutes(symbol: str, start: datetime, end: datetime) -> list[MinuteBar]:
     async with session_factory() as session:
-        rows = (await session.scalars(statement)).all()
-    return [{"minute": row.minute, "close": row.close} for row in rows]
+        bars = await read_minutes(session, symbol, start, end)
+    return [bar for bar in bars if not bar.official]
 
 
-async def symbols_to_complete(day: date, extra: Iterable[str] = ()) -> list[str]:
-    """Everything worth a full day: watchlists, anything seen live that day, current demand."""
+async def market_universe() -> list[str]:
+    """Every stock in the latest official whole-market day (TWSE + TPEx), sorted."""
+    async with session_factory() as session:
+        latest = await session.scalar(select(func.max(MarketStockDayRow.trading_date)))
+        if latest is None:
+            return []
+        symbols = (
+            await session.scalars(
+                select(MarketStockDayRow.symbol)
+                .where(MarketStockDayRow.trading_date == latest)
+                .distinct()
+            )
+        ).all()
+    return sorted(s for s in {s.strip().upper() for s in symbols} if SYMBOL.fullmatch(s))
+
+
+async def symbols_to_complete(
+    day: date, extra: Iterable[str] = (), *, whole_market: bool = True
+) -> list[str]:
+    """Symbols for a full official day, most wanted first.
+
+    Watchlists, anything seen live that day and current demand come first (so a
+    paused run has done the ones people look at), then TAIEX futures, then the rest
+    of the market.
+    """
     # Wide enough for the futures night session that belongs to ``day``.
     start = datetime.combine(previous_weekday(day), FUTURES_NIGHT_OPEN, TAIPEI)
     end = datetime.combine(day + timedelta(days=1), time(0), TAIPEI)
@@ -181,13 +187,19 @@ async def symbols_to_complete(day: date, extra: Iterable[str] = ()) -> list[str]
         watched = (await session.scalars(select(WatchlistItemRow.symbol).distinct())).all()
         seen = (
             await session.scalars(
-                select(QuoteMinuteRow.symbol)
-                .where(QuoteMinuteRow.minute >= start, QuoteMinuteRow.minute < end)
+                select(MarketSymbolRow.symbol)
+                .join(MinuteBarRow, MinuteBarRow.symbol_id == MarketSymbolRow.id)
+                .where(MinuteBarRow.minute >= start, MinuteBarRow.minute < end)
                 .distinct()
             )
         ).all()
-    symbols = {s.strip().upper() for s in (*watched, *seen, *extra)}
-    return sorted(s for s in symbols if SYMBOL.fullmatch(s))
+    first = sorted({s.strip().upper() for s in (*watched, *seen, *extra)})
+    rest = await market_universe() if whole_market else []
+    ordered: list[str] = []
+    for symbol in (*first, *sorted(FUTURES_SYMBOLS), *rest):
+        if SYMBOL.fullmatch(symbol) and symbol not in ordered:
+            ordered.append(symbol)
+    return ordered
 
 
 async def backfill(
@@ -197,14 +209,19 @@ async def backfill(
     replace: bool,
     pause: float = QUERY_INTERVAL_SECONDS,
     on_done: Callable[[str], Awaitable[None]] | None = None,
+    usage_ok: UsageCheck | None = None,
 ) -> dict[str, int]:
     """Fetch and store official minutes per ``(symbol, start, end)``; rows written each.
 
     Only minutes with ``start <= minute < end`` are written. Raises BudgetExhausted
-    (after logging) when the shared Shioaji budget says stop.
+    when the shared Shioaji budget says stop, and UsageLow when ``usage_ok`` reports
+    the account's remaining daily traffic is below the reserve.
     """
     written: dict[str, int] = {}
     for index, (symbol, start, end) in enumerate(windows):
+        if usage_ok is not None and index % USAGE_CHECK_EVERY == 0 and not await usage_ok():
+            log.info("Shioaji traffic reserve reached; minute backfill paused")
+            raise UsageLow()
         if index and pause:
             await asyncio.sleep(pause)
         try:
@@ -216,7 +233,7 @@ async def backfill(
             # SDK messages can contain account data; keep logs generic.
             log.warning("Minute backfill skipped one symbol")
             continue
-        rows = [row for row in rows if start <= row["minute"] < end]
+        rows = [row for row in rows if start <= row.minute < end]
         if replace and rows:
             compared, matched = alignment(await live_minutes(symbol, start, end), rows)
             if compared >= 10 and matched / compared < 0.8:
@@ -252,9 +269,12 @@ class MinuteBackfiller:
         *,
         now: Callable[[], datetime] = taipei_now,
         pause: float = QUERY_INTERVAL_SECONDS,
+        usage_ok: UsageCheck | None = None,
     ) -> None:
         self.redis = redis
         self.fetch = fetch
+        self.usage_ok = usage_ok
+        self.whole_market = getattr(settings, "quotes_backfill_whole_market", True)
         self.now = now
         self.pause = pause
         self.after_close = parse_clock(settings.quotes_backfill_after_close)
@@ -326,7 +346,9 @@ class MinuteBackfiller:
         done_key = key + ":done"
         try:
             extra = [s for s in job.symbol.split(",") if s]
-            symbols = (await symbols_to_complete(job.day, extra))[: self.max_symbols]
+            symbols = (await symbols_to_complete(job.day, extra, whole_market=self.whole_market))[
+                : self.max_symbols
+            ]
             finished = set(await self.redis.smembers(done_key))
             windows = [
                 (symbol, *official_window(symbol, job.day))
@@ -339,7 +361,12 @@ class MinuteBackfiller:
                 await self.redis.expire(done_key, DEDUPE_TTL_SECONDS)
 
             written = await backfill(
-                self.fetch, windows, replace=True, pause=self.pause, on_done=mark
+                self.fetch,
+                windows,
+                replace=True,
+                pause=self.pause,
+                on_done=mark,
+                usage_ok=self.usage_ok,
             )
             await self.redis.set(key, "done", ex=DEDUPE_TTL_SECONDS)
             log.info(
@@ -347,7 +374,7 @@ class MinuteBackfiller:
                 len(written),
                 sum(written.values()),
             )
-        except BudgetExhausted:
+        except (BudgetExhausted, UsageLow):
             await self._release(key, retry_after=RETRY_AFTER_BUDGET_SECONDS)
         except BaseException:
             await self._release(key)
@@ -404,10 +431,18 @@ def main() -> None:
             symbols = symbols[: settings.quotes_backfill_max_symbols]
             await asyncio.to_thread(feed.start)
             windows = [(s, *official_window(s, args.date)) for s in symbols]
+            reserve = settings.quotes_usage_reserve_mb * 1024 * 1024
+
+            async def usage_ok() -> bool:
+                usage = await asyncio.to_thread(feed.usage)
+                return usage is None or usage["remaining_bytes"] >= reserve
+
             try:
-                written = await backfill(feed.minute_bars, windows, replace=True)
+                written = await backfill(feed.minute_bars, windows, replace=True, usage_ok=usage_ok)
             except BudgetExhausted:
                 raise SystemExit("Shioaji query budget reached; try again later") from None
+            except UsageLow:
+                raise SystemExit("Shioaji daily traffic reserve reached; stopped") from None
             log.info("Backfilled %d symbols, %d minutes", len(written), sum(written.values()))
         finally:
             await asyncio.to_thread(feed.close)

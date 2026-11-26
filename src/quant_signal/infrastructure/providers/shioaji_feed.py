@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted
 
 _TAIPEI = ZoneInfo("Asia/Taipei")
@@ -28,7 +29,12 @@ def _value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
-def parse_kbars(symbol: str, kbars: Any, start: datetime, end: datetime) -> list[dict]:
+def _wall_time(ts: Any) -> datetime:
+    """Shioaji history ``ts``: Taipei wall time encoded as if it were UTC (nanoseconds)."""
+    return datetime.fromtimestamp(int(ts) / 1e9, UTC).replace(tzinfo=_TAIPEI)
+
+
+def parse_kbars(symbol: str, kbars: Any, start: datetime, end: datetime) -> list[MinuteBar]:
     """Turn a Shioaji Kbars object into minute rows (start-of-minute, Asia/Taipei).
 
     Keeps minutes in ``[start, end)``; drops non-positive prices and malformed rows.
@@ -41,8 +47,7 @@ def parse_kbars(symbol: str, kbars: Any, start: datetime, end: datetime) -> list
     rows = []
     for ts, open_, high, low, close, volume in zip(*columns, volumes, strict=False):
         try:
-            # ``ts`` is Taipei wall time encoded as if it were UTC (nanoseconds).
-            wall = datetime.fromtimestamp(int(ts) / 1e9, UTC).replace(tzinfo=_TAIPEI)
+            wall = _wall_time(ts)
             prices = [float(open_), float(high), float(low), float(close)]
             lots = int(volume)
         except (TypeError, ValueError, OverflowError, OSError):
@@ -56,21 +61,60 @@ def parse_kbars(symbol: str, kbars: Any, start: datetime, end: datetime) -> list
         if not start <= minute < end:
             continue
         rows.append(
-            dict(
+            MinuteBar(
                 symbol=symbol,
                 minute=minute,
                 open=prices[0],
                 high=prices[1],
                 low=prices[2],
                 close=prices[3],
-                first_time=minute,
-                last_time=wall - timedelta(microseconds=1),
-                first_total_volume=0,
-                last_total_volume=lots,
-                is_partial=False,
+                volume=lots,
+                official=True,
             )
         )
     return rows
+
+
+def parse_snapshots(
+    snapshots: Any, symbols: dict[str, str], received_at: datetime
+) -> list[LatestQuote]:
+    """Shioaji snapshots -> latest quotes. ``symbols`` maps contract code -> our symbol.
+
+    The reference price (平盤價) is ``close - change_price``; it already reflects
+    ex-rights adjustments made by the exchange for the day.
+    """
+    quotes = []
+    for item in snapshots or []:
+        symbol = symbols.get(str(getattr(item, "code", "")))
+        if symbol is None:
+            continue
+        try:
+            close = float(item.close)
+            change = float(getattr(item, "change_price", 0) or 0)
+            trade_time = _wall_time(item.ts)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        if not math.isfinite(close) or close <= 0 or not math.isfinite(change):
+            continue
+        reference = close - change
+        volume = getattr(item, "total_volume", None)
+        amount = getattr(item, "total_amount", None)
+        quotes.append(
+            LatestQuote(
+                symbol=symbol,
+                price=close,
+                reference=round(reference, 2) if reference > 0 else None,
+                open=_positive_float(getattr(item, "open", None)),
+                high=_positive_float(getattr(item, "high", None)),
+                low=_positive_float(getattr(item, "low", None)),
+                volume=int(volume) if isinstance(volume, int | float) and volume >= 0 else None,
+                amount=int(amount) if isinstance(amount, int | float) and amount >= 0 else None,
+                trade_time=trade_time,
+                source="snapshot",
+                updated_at=received_at,
+            )
+        )
+    return quotes
 
 
 class ShioajiFeed:
@@ -207,6 +251,40 @@ class ShioajiFeed:
         kbars = await self._query("kbars", contract, start=first.isoformat(), end=last.isoformat())
         return parse_kbars(symbol, kbars, start, end)
 
+    async def snapshot_quotes(self, symbols: list[str]) -> list[LatestQuote]:
+        """Latest price for up to 500 symbols in one budgeted query (stocks only)."""
+        if self._api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        if len(symbols) > 500:
+            raise ValueError("Shioaji snapshots take at most 500 contracts per call")
+        contracts, codes = [], {}
+        for symbol in symbols:
+            try:
+                key, contract, _ = self._resolve(symbol)
+            except (ValueError, LookupError, KeyError):
+                continue
+            contracts.append(contract)
+            codes[str(getattr(contract, "code", key))] = symbol.strip().upper()
+        if not contracts:
+            return []
+        result = await self._query("snapshots", contracts)
+        return parse_snapshots(result, codes, datetime.now(UTC))
+
+    def usage(self) -> dict | None:
+        """Today's data usage (``api.usage()`` -> UsageStatus); None when unavailable."""
+        api = self._api
+        if api is None:
+            return None
+        try:
+            status = api.usage()
+        except Exception:
+            return None
+        fields = ("connections", "bytes", "limit_bytes", "remaining_bytes")
+        values = {name: getattr(status, name, None) for name in fields}
+        if not all(isinstance(values[name], int) for name in ("limit_bytes", "remaining_bytes")):
+            return None
+        return values
+
     def unsubscribe(self, symbol: str) -> None:
         symbol = symbol.strip().upper()
         key = _FUTURES[symbol][1] if symbol in _FUTURES else symbol.partition(".")[0]
@@ -244,7 +322,7 @@ class ShioajiFeed:
         entry = self._subscriptions.get(self._tick_codes.get(str(tick.code), ""))
         if entry is None or entry[0] in _FUTURES or _value(exchange) != _value(entry[1].exchange):
             return
-        self._emit(entry[0], tick, "lot")
+        self._emit(entry[0], tick, "lot", entry[1])
 
     def _handle_fop_tick(self, exchange: Any, tick: Any) -> None:
         if self._closing or getattr(tick, "simtrade", True) or _value(exchange) != "TAIFEX":
@@ -252,9 +330,9 @@ class ShioajiFeed:
         entry = self._subscriptions.get(self._tick_codes.get(str(tick.code), ""))
         if entry is None or entry[0] not in _FUTURES:
             return
-        self._emit(entry[0], tick, "contract")
+        self._emit(entry[0], tick, "contract", entry[1])
 
-    def _emit(self, symbol: str, tick: Any, unit: str) -> None:
+    def _emit(self, symbol: str, tick: Any, unit: str, contract: Any = None) -> None:
         try:
             price = float(tick.close)
             change_pct = float(tick.pct_chg) / 100
@@ -282,6 +360,14 @@ class ShioajiFeed:
             for name in ("open", "high", "low")
             if (value := _positive_float(getattr(tick, name, None))) is not None
         }
+        # The exchange's reference price for today (平盤價, set at login), which
+        # already reflects ex-rights / ex-dividend adjustments.
+        reference = _positive_float(getattr(contract, "reference", None))
+        if reference is not None:
+            day_stats["reference"] = reference
+        amount = getattr(tick, "total_amount", None)
+        if isinstance(amount, int | float) and math.isfinite(amount) and amount >= 0:
+            day_stats["total_amount"] = int(amount)
         self._on_tick(
             {
                 **day_stats,

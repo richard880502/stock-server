@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import SecretStr
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from quant_signal.application.quote_cache import (
@@ -21,7 +21,8 @@ from quant_signal.application.quote_cache import (
     VIEWER_ADMIT,
     QuoteHub,
 )
-from quant_signal.infrastructure.db.models import QuoteMinuteRow
+from quant_signal.infrastructure.db.models import MarketSymbolRow, MinuteBarRow, QuoteLatestRow
+from quant_signal.infrastructure.db.prices import MinuteBar, read_latest, read_minutes
 from quant_signal.settings import Settings
 from quant_signal.workers import quotes
 
@@ -76,37 +77,36 @@ async def test_minute_upsert_restart_and_concurrent_callback(monkeypatch):
     monkeypatch.setattr(quotes, "session_factory", factory)
     minute = datetime(2026, 11, 26, 1, 0, tzinfo=UTC)
 
-    def tick(second, price, volume):
+    def tick(second, price, total, size):
         return dict(
             symbol="2330.TW",
             price=price,
-            total_volume=volume,
+            total_volume=total,
+            volume=size,
             trade_time=minute.replace(second=second).isoformat(),
         )
 
     try:
         buffer = quotes.MinuteBuffer()
-        buffer.add(tick(1, 100, 10))
-        buffer.add(tick(2, 105, 15))
+        buffer.add(tick(1, 100, 10, 2))  # the minute starts at a running total of 8
+        buffer.add(tick(2, 105, 15, 5))
         await buffer.flush()
-        # A collector restart in the same minute preserves the original open.
+        # A collector restart in the same minute keeps the open and continues the count.
         restarted = quotes.MinuteBuffer()
-        restarted.add(tick(3, 102, 20))
+        restarted.add(tick(3, 102, 20, 5))
         flushing = asyncio.create_task(restarted.flush())
         await asyncio.sleep(0)
-        restarted.add(tick(4, 103, 21))
+        restarted.add(tick(4, 103, 21, 1))
         await flushing
         assert restarted.rows  # A callback during the await stays dirty for the next write.
         await restarted.flush()
         async with factory() as session:
-            row = await session.scalar(
-                select(QuoteMinuteRow).where(
-                    QuoteMinuteRow.symbol == "2330.TW", QuoteMinuteRow.minute == minute
-                )
-            )
+            (row,) = await read_minutes(session, "2330.TW", minute, minute.replace(minute=1))
             assert (row.open, row.high, row.low, row.close) == (100, 105, 100, 103)
-            assert row.last_total_volume - row.first_total_volume == 11
-            assert row.is_partial
+            assert row.volume == 21 - 8
+            assert not row.official
+            latest = (await read_latest(session, ["2330.TW"]))["2330.TW"]
+            assert latest.price == 103 and latest.volume == 21 and latest.source == "tick"
     finally:
         await engine.dispose()
 
@@ -156,6 +156,12 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
         def close(self):
             pass
 
+        async def snapshot_quotes(self, symbols):
+            return []
+
+        def usage(self):
+            return None
+
     monkeypatch.setattr(shioaji_feed, "ShioajiFeed", Feed)
     stop = asyncio.Event()
     task = None
@@ -176,11 +182,7 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
         await task
         assert subscriptions == ["2330.TW"]
         async with async_sessionmaker(engine)() as session:
-            bar = await session.scalar(
-                select(QuoteMinuteRow).where(
-                    QuoteMinuteRow.symbol == "2330.TW", QuoteMinuteRow.minute == stamp
-                )
-            )
+            (bar,) = await read_minutes(session, "2330.TW", stamp, stamp.replace(minute=3))
             assert (bar.open, bar.high, bar.close) == (100, 105, 102)
     finally:
         stop.set()
@@ -200,27 +202,12 @@ async def test_official_minutes_replace_partial_and_live_flush_skips_them(monkey
     monkeypatch.setattr(quotes, "session_factory", factory)
     monkeypatch.setattr(minute_backfill, "session_factory", factory)
     minute = datetime(2026, 11, 26, 1, 5, tzinfo=UTC)
-    official = dict(
-        symbol="9999.TW",
-        minute=minute,
-        open=50,
-        high=52,
-        low=49,
-        close=51,
-        first_time=minute,
-        last_time=minute.replace(second=59),
-        first_total_volume=0,
-        last_total_volume=7,
-        is_partial=False,
-    )
+    official = MinuteBar("9999.TW", minute, 50, 52, 49, 51, 7, official=True)
 
     async def read():
         async with factory() as session:
-            return await session.scalar(
-                select(QuoteMinuteRow).where(
-                    QuoteMinuteRow.symbol == "9999.TW", QuoteMinuteRow.minute == minute
-                )
-            )
+            (bar,) = await read_minutes(session, "9999.TW", minute, minute.replace(minute=6))
+            return bar
 
     try:
         buffer = quotes.MinuteBuffer()
@@ -230,11 +217,11 @@ async def test_official_minutes_replace_partial_and_live_flush_skips_them(monkey
         await buffer.flush()
         # Intraday (replace=False) never touches an existing live minute.
         await minute_backfill.store_official_minutes([official], replace=False)
-        assert (await read()).is_partial
+        assert not (await read()).official
         # After the close the official minute replaces it.
         await minute_backfill.store_official_minutes([official], replace=True)
         row = await read()
-        assert (row.close, row.last_total_volume, row.is_partial) == (51, 7, False)
+        assert (row.close, row.volume, row.official) == (51, 7, True)
         # A late live tick must not mix running totals into the official minute.
         buffer.add(
             dict(
@@ -246,11 +233,13 @@ async def test_official_minutes_replace_partial_and_live_flush_skips_them(monkey
         )
         await buffer.flush()
         row = await read()
-        assert (row.high, row.close, row.last_total_volume) == (52, 51, 7)
+        assert (row.high, row.close, row.volume) == (52, 51, 7)
     finally:
         async with factory() as session:
-            await session.execute(
-                QuoteMinuteRow.__table__.delete().where(QuoteMinuteRow.symbol == "9999.TW")
+            symbol_id = await session.scalar(
+                select(MarketSymbolRow.id).where(MarketSymbolRow.symbol == "9999.TW")
             )
+            await session.execute(delete(MinuteBarRow).where(MinuteBarRow.symbol_id == symbol_id))
+            await session.execute(delete(QuoteLatestRow).where(QuoteLatestRow.symbol == "9999.TW"))
             await session.commit()
         await engine.dispose()

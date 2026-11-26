@@ -1,16 +1,53 @@
-# Shared Shioaji market data
+# Ingest service: the only writer of market data
 
-The quote collector runs independently from the API, MCP, and backtest workers.
-Only the collector receives SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY.
+Price data follows one architecture: **two writers, three layers, one reader**.
+
+| | What | Where |
+|---|---|---|
+| Writer 1 | Official TWSE / TPEx sync (daily bars, institutional flows, the whole-market day, industry classification) | this service (`quant-signal-ingest`) |
+| Writer 2 | Shioaji collector: live ticks, official minute backfill, whole-market snapshots | this service, when `QUOTES_ENABLED=true` and credentials are set |
+| Layer 1 | Official daily bars: the record | `bars_daily`, `market_stock_daily` |
+| Layer 2 | 1-minute bars: integer hundredths, per-minute volume, `official` flag, monthly partitions | `minute_bars` (+ `market_symbols`) |
+| Layer 3 | Latest price per symbol today, with the exchange reference price (平盤價) | `quote_latest` |
+| Reader | `quant_signal.application.prices` + repository methods: a latest quote is used only when it is from a later trading day than the newest official bar | API, MCP, compute worker |
+
+The API, MCP and the backtest worker never call Shioaji and never write prices.
+Both writers deploy together (same image, same commit). Migrations run in the API
+container; until they have run, this service retries its storage upkeep quietly.
+
+Only this service receives SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY.
 It logs in with subscribe_trade=False and subscribes to regular-lot stock trades.
+
+## What it collects, within Shioaji's limits
+
+* Live ticks for the symbols people are viewing (≤ 200 subscriptions) → minute bars
+  and `quote_latest`, every 5 s.
+* Every `QUOTES_SNAPSHOT_MINUTES` (10) during 09:00–13:30, plus one pass at 13:35:
+  snapshots of the whole listed + OTC market (500 per query, ~4 queries) →
+  `quote_latest`. Sector rotation reads these.
+* A one-contract snapshot when a symbol is first subscribed, so its page shows
+  today's price at once.
+* After `QUOTES_BACKFILL_AFTER_CLOSE` (14:45): official 1-minute kbars for the
+  **whole market** (watched symbols first, then TAIEX futures, then everything in the
+  latest official day) replace the live minutes. ~2,000 queries at ≤ 40 per 10 s
+  ≈ 9 minutes, ~30 MB of traffic.
+* Every history query (kbars, snapshots) goes through the Redis budget
+  (`shioaji_budget`): ≤ 40 per rolling 10 s (Shioaji: 50), ≤ 150 kbars during the
+  session (Shioaji: 270). `api.usage()` (UsageStatus) is read at most once a minute
+  and published at Redis key `quant:quotes:usage`; snapshots and the backfill stop
+  when today's remaining traffic drops below `QUOTES_USAGE_RESERVE_MB` (100).
+
+Storage: about 85 bytes per minute row including its index; the whole market is
+roughly 45 MB per trading day (~11 GB per year). `MINUTE_BARS_RETENTION_MONTHS`
+(0 = keep all) drops whole monthly partitions.
 
 ## Local Compose
 
-Set the two credentials in the deployment environment and QUOTES_ENABLED=true.
-Run from the repository root:
+Without Shioaji credentials the service runs the official sync only. To collect
+quotes, set the two credentials and QUOTES_ENABLED=true. From the repository root:
 
 ```sh
-docker compose --profile quotes up -d --build
+docker compose up -d --build
 ```
 
 The API runs Alembic migrations. Redis has no published port.
@@ -20,8 +57,10 @@ its viewers, so Redis reads scale with API replicas and the union of symbols.
 
 ## Independent Coolify applications
 
-Deploy deploy/coolify/split/quotes.yml on the existing stock-private network.
-Use the same DATABASE_URL as the API. Apply migration 0011 through the API first.
+Deploy deploy/coolify/split/quotes.yml on the existing stock-private network (the
+compose service keeps the name `quotes`, so the existing Coolify app is reused).
+Use the same DATABASE_URL as the API. Apply migrations through the API first.
+The official sync moved here from the worker: the worker only runs backtests now.
 Set QUOTES_ENABLED=true on the API and use
 QUOTES_REDIS_URL=redis://stock-quote-redis:6379/0.
 The collector application receives the two Shioaji credentials. The API receives

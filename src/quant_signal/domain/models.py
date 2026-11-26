@@ -806,6 +806,12 @@ class WatchlistItem(BaseModel):
     recent_closes: list[float] = Field(default_factory=list)
     change_20d_pct: float | None = None
     full_analysis: Literal["ready", "preparing"] = "preparing"
+    # Today's latest price when it is newer than the official close above (live tick
+    # or the 10-minute whole-market snapshot). Percent units, like day_change_pct.
+    latest_price: float | None = None
+    latest_change_pct: float | None = None
+    latest_at: datetime | None = None
+    latest_source: Literal["tick", "snapshot"] | None = None
 
 
 class Watchlist(BaseModel):

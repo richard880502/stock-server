@@ -10,8 +10,6 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
-from sqlalchemy import case, func
-from sqlalchemy.dialects.postgresql import insert
 
 from quant_signal.application.quote_cache import (
     DEMAND,
@@ -22,7 +20,12 @@ from quant_signal.application.quote_cache import (
     volume_unit,
 )
 from quant_signal.infrastructure.db.database import session_factory
-from quant_signal.infrastructure.db.models import QuoteMinuteRow
+from quant_signal.infrastructure.db.prices import (
+    LatestQuote,
+    MinuteBar,
+    store_latest,
+    store_minutes,
+)
 from quant_signal.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -54,35 +57,23 @@ return 1
 """
 
 
-def live_minutes_statement(rows):
-    """Merge live minutes into storage without ever touching official (backfilled) rows."""
-    statement = insert(QuoteMinuteRow).values(rows)
-    incoming = statement.excluded
-    current = QuoteMinuteRow
-    return statement.on_conflict_do_update(
-        index_elements=["symbol", "minute"],
-        set_={
-            "high": func.greatest(current.high, incoming.high),
-            "low": func.least(current.low, incoming.low),
-            "close": case(
-                (incoming.last_time >= current.last_time, incoming.close), else_=current.close
-            ),
-            "last_time": func.greatest(current.last_time, incoming.last_time),
-            "last_total_volume": func.greatest(
-                current.last_total_volume, incoming.last_total_volume
-            ),
-        },
-        # Official minutes store per-minute volume, not running totals; never mix
-        # live ticks into them.
-        where=current.is_partial,
-    )
-
-
 class MinuteBuffer:
+    """Builds live 1-minute bars and the latest quote per symbol from ticks.
+
+    Volume per minute is the change in the day's running total, starting just before
+    the minute's first trade. Out-of-order ticks are dropped, so ``close`` is always
+    the newest trade. Pending rows are written by ``flush()``.
+
+    Each write sends only the volume added since this process last wrote that minute
+    (``sent`` tracks it) and storage adds it on. A collector restarted mid-minute
+    therefore continues the count instead of replacing it with a smaller one.
+    """
+
     def __init__(self):
         self.rows = {}
         self.last = {}
         self.current = {}
+        self.latest: dict[str, LatestQuote] = {}
 
     def add(self, tick):
         stamp = datetime.fromisoformat(tick["trade_time"])
@@ -93,9 +84,9 @@ class MinuteBuffer:
         minute = stamp.replace(second=0, microsecond=0)
         key = (symbol, minute)
         price = tick["price"]
-        volume = tick["total_volume"]
-        # total_volume already includes this trade; start the minute just before it.
-        opening_volume = max(0, volume - max(0, int(tick.get("volume") or 0)))
+        total = tick["total_volume"]
+        # total_volume already includes this trade; the minute starts just before it.
+        base = max(0, total - max(0, int(tick.get("volume") or 0)))
         row = self.rows.get(key)
         if row is None and self.current.get(symbol, {}).get("minute") == minute:
             row = self.current[symbol]
@@ -111,21 +102,31 @@ class MinuteBuffer:
                 high=price,
                 low=price,
                 close=price,
-                first_time=stamp,
-                last_time=stamp,
-                first_total_volume=opening_volume,
-                last_total_volume=volume,
-                is_partial=True,
+                base=base,
+                total=total,
+                sent=base,
             )
         else:
             row.update(
                 high=max(row["high"], price),
                 low=min(row["low"], price),
                 close=price,
-                last_time=stamp,
-                last_total_volume=volume,
+                total=max(row["total"], total),
             )
         self.current[symbol] = self.rows[key]
+        self.latest[symbol] = LatestQuote(
+            symbol=symbol,
+            price=price,
+            reference=tick.get("reference"),
+            open=tick.get("day_open"),
+            high=tick.get("day_high"),
+            low=tick.get("day_low"),
+            volume=total,
+            amount=tick.get("total_amount"),
+            trade_time=stamp,
+            source="tick",
+            updated_at=datetime.now(TAIPEI),
+        )
 
     def candle(self, symbol):
         row = self.current[symbol]
@@ -138,25 +139,48 @@ class MinuteBuffer:
             "high": row["high"],
             "low": row["low"],
             "close": row["close"],
-            "volume": max(0, row["last_total_volume"] - row["first_total_volume"]) * multiplier,
+            "volume": max(0, row["total"] - row["base"]) * multiplier,
             "volume_unit": "contract" if unit == "contract" else "share",
             "is_partial": True,
         }
 
+    @staticmethod
+    def bar(row, *, pending: bool = False) -> MinuteBar:
+        """The minute as seen by this process, or (``pending``) only what is unsent."""
+        volume = row["total"] - (row["sent"] if pending else row["base"])
+        return MinuteBar(
+            symbol=row["symbol"],
+            minute=row["minute"],
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            volume=max(0, volume),
+            official=False,
+        )
+
     async def flush(self):
-        if not self.rows:
+        if not self.rows and not self.latest:
             return
         # Called in the same event loop as add(). Failed writes remain for retry.
-        rows = [row.copy() for row in list(self.rows.values())[:500]]
-        statement = live_minutes_statement(rows)
+        rows = [row.copy() for row in list(self.rows.values())[:2000]]
+        latest = list(self.latest.values())
         async with session_factory() as session:
-            await session.execute(statement)
+            await store_minutes(session, [self.bar(r, pending=True) for r in rows], live=True)
+            await store_latest(session, latest)
             await session.commit()
-        # Do not remove ticks received during the database await.
         for row in rows:
             key = (row["symbol"], row["minute"])
-            if self.rows.get(key) == row:
+            current = self.rows.get(key)
+            if current is None:
+                continue
+            current["sent"] = max(current["sent"], row["total"])
+            # Ticks that arrived during the database await stay pending.
+            if current == {**row, "sent": current["sent"]}:
                 self.rows.pop(key, None)
+        for quote in latest:
+            if self.latest.get(quote.symbol) is quote:
+                self.latest.pop(quote.symbol, None)
 
 
 def last_session_refresh(now):
@@ -173,7 +197,8 @@ def last_session_refresh(now):
 async def collect(redis, settings, owner, stop, health=None):
     from quant_signal.infrastructure.providers.shioaji_budget import ShioajiBudget
     from quant_signal.infrastructure.providers.shioaji_feed import ShioajiFeed
-    from quant_signal.workers.minute_backfill import MinuteBackfiller
+    from quant_signal.workers.market_snapshots import MarketSnapshots, UsageMonitor
+    from quant_signal.workers.minute_backfill import MinuteBackfiller, market_universe
 
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue(maxsize=10000)
@@ -194,12 +219,23 @@ async def collect(redis, settings, owner, stop, health=None):
     bars = MinuteBuffer()
     subscribed = set()
     rejected = {}
-    renewed = flushed = close_checked = 0.0
+    renewed = flushed = close_checked = snapshot_checked = 0.0
     connected = False
     connected_at = datetime.now(TAIPEI)
+    usage = UsageMonitor(feed.usage, redis, settings.quotes_usage_reserve_mb * 1024 * 1024)
+
+    async def publish(event):
+        await redis.eval(
+            PUBLISH, 3, LOCK, PREFIX + event["symbol"], PREFIX + "updates", owner, json.dumps(event)
+        )
+
+    snapshots = MarketSnapshots(
+        redis, settings, feed.snapshot_quotes, market_universe, usage, publish
+    )
+    seeds: set[asyncio.Task] = set()
     backfiller = None
     if settings.quotes_backfill_enabled:
-        backfiller = MinuteBackfiller(redis, settings, feed.minute_bars)
+        backfiller = MinuteBackfiller(redis, settings, feed.minute_bars, usage_ok=usage.ok)
     try:
         # Renew independently while SDK login blocks in a thread.
         async def heartbeat():
@@ -228,6 +264,9 @@ async def collect(redis, settings, owner, stop, health=None):
                 if backfiller and time.monotonic() - close_checked > 60:
                     await backfiller.check_after_close(subscribed)
                     close_checked = time.monotonic()
+                if time.monotonic() - snapshot_checked > 30:
+                    await snapshots.tick()
+                    snapshot_checked = time.monotonic()
                 if time.monotonic() - renewed > 5:
                     desired = set(await redis.zrangebyscore(DEMAND, time.time(), "+inf"))
                     desired = set(sorted(desired)[: settings.quotes_max_symbols])
@@ -245,6 +284,10 @@ async def collect(redis, settings, owner, stop, health=None):
                             continue
                         if backfiller:
                             await backfiller.on_subscribed(symbol, subscribed_at)
+                        # Today's price at once, even if the next trade is far away.
+                        seed = asyncio.create_task(snapshots.seed(symbol))
+                        seeds.add(seed)
+                        seed.add_done_callback(seeds.discard)
                     subscribed.intersection_update(desired)
                     renewed = time.monotonic()
                 try:
@@ -284,10 +327,11 @@ async def collect(redis, settings, owner, stop, health=None):
                         log.warning("Minute storage unavailable; retaining bounded backlog")
                     flushed = time.monotonic()
         finally:
-            tasks = [task for task in (beat, history) if task]
+            tasks = [task for task in (beat, history, *seeds) if task]
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await snapshots.close()
     finally:
         if health:
             health.connected = False

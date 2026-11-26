@@ -38,8 +38,8 @@ def test_minutes_ignore_out_of_order_and_keep_separate_minutes():
     buffer.add(tick(90, 2, 15))
     row = next(iter(buffer.rows.values()))
     assert (row["open"], row["high"], row["low"], row["close"]) == (100, 105, 100, 105)
-    assert row["last_total_volume"] - row["first_total_volume"] == 10
-    assert row["is_partial"]
+    bar = MinuteBuffer.bar(row)
+    assert bar.volume == 10 and not bar.official
     buffer.add({**tick(), "trade_time": "2026-11-26T01:01:00+00:00"})
     assert len(buffer.rows) == 2
 
@@ -49,10 +49,12 @@ def test_minute_volume_counts_the_first_trade_of_the_minute():
     # A thin stock with one 3-lot trade in the minute must not show zero volume.
     buffer.add({**tick(100, 5, 23), "volume": 3})
     row = next(iter(buffer.rows.values()))
-    assert row["last_total_volume"] - row["first_total_volume"] == 3
+    assert MinuteBuffer.bar(row).volume == 3
     assert buffer.candle("2330.TW")["volume"] == 3000
     buffer.add({**tick(101, 9, 25), "volume": 2})
-    assert row["last_total_volume"] - row["first_total_volume"] == 5
+    assert MinuteBuffer.bar(row).volume == 5
+    # The latest quote follows the newest trade.
+    assert buffer.latest["2330.TW"].price == 101 and buffer.latest["2330.TW"].volume == 25
 
 
 def test_live_candle_preserves_ohlc_after_persistence_clears_dirty_rows():

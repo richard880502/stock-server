@@ -7,33 +7,34 @@ from conftest import make_bars
 
 from quant_signal.backtest import BacktestEngine
 from quant_signal.domain.models import BacktestSpec, Bar
-from quant_signal.live_bar import TAIPEI, MinuteQuote, build_provisional_bar
+from quant_signal.infrastructure.db.prices import MinuteBar
+from quant_signal.live_bar import TAIPEI, build_provisional_bar, provisional_factor
 
 DAY = date(2026, 11, 26)
 
 
-def minute(hh, mm, o, h, low, c, first, last):
+def minute(hh, mm, o, h, low, c, volume):
     start = datetime(2026, 11, 26, hh, mm, tzinfo=TAIPEI)
-    return MinuteQuote(start, start + timedelta(seconds=50), o, h, low, c, first, last)
+    return MinuteBar("2330.TW", start, o, h, low, c, volume, official=False)
 
 
 def test_provisional_bar_construction_and_point_in_time():
     minutes = [
-        minute(9, 1, 101, 103, 100, 102, 50, 80),
-        minute(9, 0, 100, 101, 99, 101, 0, 50),  # unsorted on purpose
-        minute(9, 2, 102, 108, 101, 107, 80, 120),  # after as_of: ignored
+        minute(9, 1, 101, 103, 100, 102, 30),
+        minute(9, 0, 100, 101, 99, 101, 50),  # unsorted on purpose
+        minute(9, 2, 102, 108, 101, 107, 40),  # not finished at as_of: ignored
     ]
-    as_of = datetime(2026, 11, 26, 9, 1, 59, tzinfo=TAIPEI)
+    as_of = datetime(2026, 11, 26, 9, 2, 30, tzinfo=TAIPEI)
     bar, stamp = build_provisional_bar("2330.TW", DAY, minutes, as_of=as_of)
     assert (bar.open, bar.high, bar.low, bar.close) == (100, 103, 99, 102)
     assert bar.volume == (50 + 30) * 1000
     assert bar.source == "live_provisional" and bar.available_at == stamp
-    assert stamp == datetime(2026, 11, 26, 9, 1, 50, tzinfo=TAIPEI)
+    assert stamp == datetime(2026, 11, 26, 9, 2, tzinfo=TAIPEI)  # end of the last minute used
 
 
 def test_provisional_bar_none_without_minutes_or_other_day():
     as_of = datetime(2026, 11, 26, 12, 0, tzinfo=TAIPEI)
-    one = [minute(9, 0, 1, 1, 1, 1, 0, 1)]
+    one = [minute(9, 0, 1, 1, 1, 1, 1)]
     assert build_provisional_bar("2330.TW", DAY, [], as_of=as_of) is None
     early = datetime(2026, 11, 26, 8, 0, tzinfo=TAIPEI)
     assert build_provisional_bar("2330.TW", DAY, one, as_of=early) is None
@@ -103,7 +104,7 @@ def test_ex_rights_guard():
     as_of = datetime(2026, 11, 26, 9, 5, tzinfo=TAIPEI)
 
     def bar_at(price):
-        minutes = [minute(9, 0, price, price, price, price, 0, 5)]
+        minutes = [minute(9, 0, price, price, price, price, 5)]
         return build_provisional_bar("2330.TW", DAY, minutes, as_of=as_of)[0]
 
     assert not ex_rights_suspected(bar_at(105), 100)
@@ -116,3 +117,14 @@ def test_engine_surfaces_note_when_provisional_skipped():
     spec = BacktestSpec(symbol="0050.TW", start=bars[80].trading_date, end=bars[-1].trading_date)
     report = BacktestEngine().run(bars, spec, provisional_note="今日可能為除權息日")
     assert not report.provisional_bar and "今日可能為除權息日" in report.warnings
+
+
+def test_provisional_factor_uses_the_exchange_reference_price():
+    # Ordinary day: reference equals yesterday's close, factor unchanged.
+    assert provisional_factor(0.9, 100.0, 100.0) == 0.9
+    # Ex-dividend of 5: reference 95, so 95 today continues 100 yesterday.
+    factor = provisional_factor(1.0, 100.0, 95.0)
+    assert abs(95.0 * factor - 100.0) < 1e-9
+    # No reference known: keep the previous factor (the caller's guard decides).
+    assert provisional_factor(0.9, 100.0, None) == 0.9
+    assert provisional_factor(0.9, 0.0, 95.0) is None

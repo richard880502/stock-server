@@ -12,6 +12,9 @@ services:
       stock-private:
         aliases: [stock-quote-redis]
 
+  # The ingest service (the only writer of market data): official TWSE/TPEx sync
+  # plus the Shioaji collector. The service keeps the name "quotes" so the existing
+  # Coolify app does not need to be re-created.
   quotes:
     build:
       context: .
@@ -34,7 +37,16 @@ services:
       QUOTES_BACKFILL_ENABLED: ${QUOTES_BACKFILL_ENABLED:-true}
       QUOTES_BACKFILL_AFTER_CLOSE: "${QUOTES_BACKFILL_AFTER_CLOSE:-14:45}"
       QUOTES_BACKFILL_INTRADAY_MAX: ${QUOTES_BACKFILL_INTRADAY_MAX:-150}
-      QUOTES_BACKFILL_MAX_SYMBOLS: ${QUOTES_BACKFILL_MAX_SYMBOLS:-300}
+      QUOTES_BACKFILL_WHOLE_MARKET: ${QUOTES_BACKFILL_WHOLE_MARKET:-true}
+      QUOTES_BACKFILL_MAX_SYMBOLS: ${QUOTES_BACKFILL_MAX_SYMBOLS:-2500}
+      QUOTES_USAGE_RESERVE_MB: ${QUOTES_USAGE_RESERVE_MB:-100}
+      QUOTES_SNAPSHOT_MINUTES: ${QUOTES_SNAPSHOT_MINUTES:-10}
+      MINUTE_BARS_RETENTION_MONTHS: ${MINUTE_BARS_RETENTION_MONTHS:-0}
+      # Official exchange sync moved here from the worker: one writer unit.
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      SYNC_DAILY_TIME: ${SYNC_DAILY_TIME:-15:30,21:45}
+      SYNC_MARKET_LOOKBACK_DAYS: ${SYNC_MARKET_LOOKBACK_DAYS:-520}
+      SYNC_LOOKBACK_DAYS: ${SYNC_LOOKBACK_DAYS:-500}
     depends_on:
       quote-redis:
         condition: service_healthy

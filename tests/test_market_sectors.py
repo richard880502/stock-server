@@ -7,11 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from quant_signal.adapters.rest.main import app, get_repository
-from quant_signal.application.intraday_snapshots import (
-    floor_to_slot,
-    prune_intraday_snapshots,
-    store_intraday_snapshots,
-)
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.market_sectors import SectorRotationService, rrg_points
 from quant_signal.domain.models import (
@@ -235,8 +230,7 @@ async def test_intraday_snapshot_replaces_missing_today_row(repository) -> None:
         )
         for symbol in prices
     }
-    await store_intraday_snapshots(
-        [
+    await _store([
             IntradaySnapshot(
                 symbol=symbol,
                 taken_at=taken,
@@ -292,8 +286,7 @@ async def test_without_snapshots_session_hours_report_unavailable(repository) ->
 
 async def test_thin_snapshot_coverage_falls_back_to_close(repository) -> None:
     taken = datetime(2026, 11, 2, 2, 30, tzinfo=UTC)
-    await store_intraday_snapshots(
-        [
+    await _store([
             IntradaySnapshot(
                 symbol="2330.TW",
                 taken_at=taken,
@@ -328,32 +321,6 @@ async def test_empty_table_returns_empty_rotation() -> None:
 
     assert result.sectors == [] and result.data_through is None
 
-
-# ---------------------------------------------------------------- intraday writer
-async def test_store_intraday_snapshots_is_an_idempotent_upsert() -> None:
-    repo = MemoryQuantRepository()
-    slot = floor_to_slot(datetime(2026, 11, 2, 2, 37, 41, tzinfo=UTC))
-    assert slot == datetime(2026, 11, 2, 2, 30, tzinfo=UTC)
-
-    def row(price: float) -> IntradaySnapshot:
-        return IntradaySnapshot(
-            symbol="2330.TW",
-            taken_at=slot,
-            price=price,
-            change_pct=0.01,
-            volume_lots=10,
-            amount_twd=1e6,
-            available_at=slot,
-        )
-
-    assert await store_intraday_snapshots([row(100), row(101)], repo) == 1  # last row wins
-    assert await store_intraday_snapshots([row(102)], repo) == 1
-    assert len(repo.intraday_snapshots) == 1
-    assert repo.intraday_snapshots[("2330.TW", slot)].price == 102
-    assert await store_intraday_snapshots([], repo) == 0
-
-    far_future = slot + timedelta(days=40)
-    assert await prune_intraday_snapshots(repo, keep_days=30, now=far_future) == 1
 
 
 def test_intraday_snapshot_requires_timezone_aware_timestamps() -> None:
@@ -455,3 +422,8 @@ async def test_rest_sector_endpoints(repository) -> None:
     assert stocks.status_code == 200
     assert [e["symbol"] for e in stocks.json()["entries"]][0] in {"2330.TW", "2454.TW"}
     assert bad.status_code == 422
+
+
+async def _store(rows, repo):
+    """Seed intraday rows the way the ingest service's quote_latest would."""
+    return await repo.upsert_intraday_snapshots(list(rows))

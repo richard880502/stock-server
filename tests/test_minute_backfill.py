@@ -13,12 +13,14 @@ from fakes import FakeRedis
 from sqlalchemy.dialects import postgresql
 
 from quant_signal.application.quote_cache import FUTURES_SYMBOLS, parse_symbols, volume_unit
+from quant_signal.infrastructure.db import prices
+from quant_signal.infrastructure.db.prices import MinuteBar
 from quant_signal.infrastructure.providers import shioaji_feed
 from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted, ShioajiBudget
 from quant_signal.infrastructure.providers.shioaji_feed import ShioajiFeed, parse_kbars
 from quant_signal.settings import Settings, get_settings
 from quant_signal.workers import minute_backfill as mb
-from quant_signal.workers.quotes import MinuteBuffer, last_session_refresh, live_minutes_statement
+from quant_signal.workers.quotes import MinuteBuffer, last_session_refresh
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 THURSDAY = date(2026, 11, 26)
@@ -46,19 +48,7 @@ def kbars(*bars):
 
 
 def row(symbol, minute, close=100.0, partial=False):
-    return dict(
-        symbol=symbol,
-        minute=minute,
-        open=close,
-        high=close,
-        low=close,
-        close=close,
-        first_time=minute,
-        last_time=minute + timedelta(seconds=59),
-        first_total_volume=0,
-        last_total_volume=1,
-        is_partial=partial,
-    )
+    return MinuteBar(symbol, minute, close, close, close, close, 1, official=not partial)
 
 
 def sql(statement) -> str:
@@ -79,18 +69,17 @@ def test_documented_kbars_example_maps_to_minute_start_in_taipei():
         end,
     )
     assert len(rows) == 1
-    assert rows[0]["minute"] == taipei(2026, 5, 18, 9, 0)
-    assert rows[0]["minute"].utcoffset() == timedelta(hours=8)
-    assert rows[0]["last_time"] < taipei(2026, 5, 18, 9, 1)
-    assert (rows[0]["first_total_volume"], rows[0]["last_total_volume"]) == (0, 2565)
-    assert rows[0]["is_partial"] is False
+    assert rows[0].minute == taipei(2026, 5, 18, 9, 0)
+    assert rows[0].minute.utcoffset() == timedelta(hours=8)
+    assert rows[0].volume == 2565
+    assert rows[0].official is True
     # TXFR1's first documented bar is 08:46 -> the 08:45 minute of the day session.
     futures = parse_kbars(
         "TXF.TAIFEX",
         kbars((1779093960000000000, 40200, 40369, 40169, 40310, 2051)),
         *mb.official_window("TXF.TAIFEX", day),
     )
-    assert futures[0]["minute"] == taipei(2026, 5, 18, 8, 45)
+    assert futures[0].minute == taipei(2026, 5, 18, 8, 45)
 
 
 def test_kbars_parsing_drops_bad_rows_and_rows_outside_the_window():
@@ -112,7 +101,7 @@ def test_kbars_parsing_drops_bad_rows_and_rows_outside_the_window():
         start,
         end,
     )
-    assert [r["minute"].strftime("%H:%M") for r in rows] == ["09:00", "09:04"]
+    assert [r.minute.strftime("%H:%M") for r in rows] == ["09:00", "09:04"]
     assert parse_kbars("2330.TW", SimpleNamespace(ts=[1]), start, end) == []
 
 
@@ -279,7 +268,7 @@ async def test_minute_bars_go_through_the_budget(monkeypatch):
     rows = await feed.minute_bars("TXF.TAIFEX", *mb.official_window("TXF.TAIFEX", monday))
     # Monday's trading day starts with Friday's night session.
     assert calls[-1] == ("kbars", "TXFR1", "2026-11-27", "2026-11-30")
-    assert [r["minute"] for r in rows] == [taipei(2026, 11, 27, 15, 0)]
+    assert [r.minute for r in rows] == [taipei(2026, 11, 27, 15, 0)]
     redis.fail = True
     with pytest.raises(BudgetExhausted):
         await feed.minute_bars("2330.TW", *mb.official_window("2330.TW", monday))
@@ -329,17 +318,38 @@ def test_official_windows():
 
 
 def test_storage_statements_protect_each_kind_of_row():
-    rows = [row("2330.TW", taipei(2026, 11, 26, 9, 0))]
-    live = sql(live_minutes_statement([{**rows[0], "is_partial": True}]))
-    assert "ON CONFLICT (symbol, minute) DO UPDATE" in live
-    assert live.rstrip().endswith("WHERE quote_minutes.is_partial")
-    keep = sql(mb.official_minutes_statement(rows, replace=False))
-    assert keep.rstrip().endswith("ON CONFLICT (symbol, minute) DO NOTHING")
-    replace = sql(mb.official_minutes_statement(rows, replace=True))
-    assert "ON CONFLICT (symbol, minute) DO UPDATE SET" in replace
-    for column in mb.UPDATED_COLUMNS:
+    encoded = prices._minute_rows([row("2330.TW", taipei(2026, 11, 26, 9, 0))], {"2330.TW": 7})
+    assert encoded == [
+        {
+            "minute": taipei(2026, 11, 26, 9, 0),
+            "open": 10000,
+            "high": 10000,
+            "low": 10000,
+            "close": 10000,
+            "volume": 1,
+            "symbol_id": 7,
+            "official": True,
+        }
+    ]
+    live = sql(prices.live_minutes_statement([{**encoded[0], "official": False}]))
+    assert "ON CONFLICT (symbol_id, minute) DO UPDATE" in live
+    assert live.rstrip().endswith("WHERE minute_bars.official IS false")
+    keep = sql(prices.official_minutes_statement(encoded, replace=False))
+    assert keep.rstrip().endswith("ON CONFLICT (symbol_id, minute) DO NOTHING")
+    replace = sql(prices.official_minutes_statement(encoded, replace=True))
+    assert "ON CONFLICT (symbol_id, minute) DO UPDATE SET" in replace
+    for column in ("open", "high", "low", "close", "volume", "official"):
         assert f"{column} = excluded.{column}" in replace
     assert "WHERE" not in replace.split("DO UPDATE")[1]  # Overwrites partial rows too.
+
+
+def test_prices_are_stored_as_integer_hundredths():
+    assert prices.to_cents(1450.5) == 145050
+    assert prices.to_cents(23456) == 2345600
+    assert prices.to_cents(0.01) == 1
+    assert prices.from_cents(145050) == 1450.5
+    with pytest.raises(ValueError):
+        prices.to_cents(0)
 
 
 async def test_intraday_backfill_never_writes_the_subscription_minute(monkeypatch):
@@ -359,8 +369,8 @@ async def test_intraday_backfill_never_writes_the_subscription_minute(monkeypatc
     written = await mb.backfill(fetch, [("2330.TW", start, cutoff)], replace=False, pause=0)
     rows, replace = stored[0]
     assert replace is False
-    assert [r["minute"].minute for r in rows] == [0, 1, 2]
-    assert all(r["minute"] < cutoff for r in rows)
+    assert [r.minute.minute for r in rows] == [0, 1, 2]
+    assert all(r.minute < cutoff for r in rows)
     assert written == {"2330.TW": 3}
 
 
@@ -368,7 +378,7 @@ async def test_after_close_backfill_logs_misaligned_official_minutes(monkeypatch
     start, end = mb.official_window("2330.TW", THURSDAY)
     minutes = [taipei(2026, 11, 26, 9, m) for m in range(12)]
     official = [row("2330.TW", m, close=100) for m in minutes]
-    live = {"rows": [{"minute": m, "close": 100} for m in minutes]}
+    live = {"rows": [row("2330.TW", m, close=100, partial=True) for m in minutes]}
 
     async def live_minutes(symbol, window_start, window_end):
         return live["rows"]
@@ -384,10 +394,12 @@ async def test_after_close_backfill_logs_misaligned_official_minutes(monkeypatch
     with caplog.at_level(logging.WARNING):
         await mb.backfill(fetch, [("2330.TW", start, end)], replace=True, pause=0)
         assert "disagree" not in caplog.text
-        live["rows"] = [{"minute": m + timedelta(minutes=1), "close": 101} for m in minutes]
+        live["rows"] = [
+            row("2330.TW", m + timedelta(minutes=1), close=101, partial=True) for m in minutes
+        ]
         await mb.backfill(fetch, [("2330.TW", start, end)], replace=True, pause=0)
     assert "Official minutes disagree with live minutes for 2330.TW: 0/11" in caplog.text
-    assert mb.alignment([{"minute": minutes[0], "close": 100}], official) == (1, 1)
+    assert mb.alignment([row("2330.TW", minutes[0], close=100)], official) == (1, 1)
 
 
 # --- scheduling inside the collector ------------------------------------------------------
@@ -451,7 +463,7 @@ async def test_after_close_runs_once_and_retries_only_what_is_left(monkeypatch):
         stored.append(replace)
         return len(rows)
 
-    async def symbols(day, extra=()):
+    async def symbols(day, extra=(), whole_market=True):
         assert day == THURSDAY
         return sorted({"2330.TW", "TXF.TAIFEX", "9999.TW", *extra})
 
@@ -487,7 +499,7 @@ async def test_after_close_releases_the_claim_on_failure(monkeypatch):
     redis = FakeRedis()
     now = {"at": taipei(2026, 11, 26, 15, 0)}
 
-    async def broken(day, extra=()):
+    async def broken(day, extra=(), whole_market=True):
         raise ConnectionError("database down")
 
     monkeypatch.setattr(mb, "symbols_to_complete", broken)
@@ -544,7 +556,9 @@ def test_backfill_settings_are_validated():
     assert settings.quotes_backfill_enabled is True
     assert settings.quotes_backfill_after_close == "14:45"
     assert settings.quotes_backfill_intraday_max == 150
-    assert settings.quotes_backfill_max_symbols == 300
+    assert settings.quotes_backfill_max_symbols == 2500
+    assert settings.quotes_backfill_whole_market is True
+    assert settings.quotes_usage_reserve_mb == 100
     for bad in (dict(quotes_backfill_after_close="25:00"), dict(quotes_backfill_intraday_max=251)):
         with pytest.raises(ValueError):
             Settings(**bad)
@@ -580,8 +594,27 @@ async def test_collector_schedules_backfill_after_subscribing_and_cancels_it(mon
         async def minute_bars(self, symbol, start, end):
             return []
 
+        async def snapshot_quotes(self, symbols):
+            return []
+
+        def usage(self):
+            return None
+
+    class Snapshots:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def tick(self):
+            return False
+
+        async def seed(self, symbol):
+            return False
+
+        async def close(self):
+            pass
+
     class Backfiller:
-        def __init__(self, redis, settings, fetch):
+        def __init__(self, redis, settings, fetch, usage_ok=None):
             pass
 
         async def on_subscribed(self, symbol, at):
@@ -615,6 +648,9 @@ async def test_collector_schedules_backfill_after_subscribing_and_cancels_it(mon
 
     monkeypatch.setattr(shioaji_feed, "ShioajiFeed", Feed)
     monkeypatch.setattr(mb, "MinuteBackfiller", Backfiller)
+    from quant_signal.workers import market_snapshots
+
+    monkeypatch.setattr(market_snapshots, "MarketSnapshots", Snapshots)
     async with asyncio.timeout(5):
         await quotes.collect(Redis(), Settings(), "owner", stop)
     assert events["scheduled"] == ["TXF.TAIFEX"]

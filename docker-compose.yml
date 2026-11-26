@@ -8,11 +8,12 @@ services:
       timeout: 3s
       retries: 20
 
+  # Ingest: the only writer of market data (official sync + Shioaji collector when
+  # QUOTES_ENABLED=true and credentials are set).
   quotes:
     build:
       context: .
       dockerfile: deploy/quotes/Dockerfile
-    profiles: ["quotes"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/livez', timeout=2)"]
@@ -22,7 +23,7 @@ services:
       retries: 3
     environment:
       DATABASE_URL: postgresql+asyncpg://quant:quant@postgres:5432/quant_signal
-      QUOTES_ENABLED: "true"
+      QUOTES_ENABLED: ${QUOTES_ENABLED:-false}
       QUOTES_REDIS_URL: redis://redis:6379/0
       QUOTES_MAX_SYMBOLS: ${QUOTES_MAX_SYMBOLS:-200}
       SHIOAJI_API_KEY: ${SHIOAJI_API_KEY:-}
@@ -31,7 +32,15 @@ services:
       QUOTES_BACKFILL_ENABLED: ${QUOTES_BACKFILL_ENABLED:-true}
       QUOTES_BACKFILL_AFTER_CLOSE: "${QUOTES_BACKFILL_AFTER_CLOSE:-14:45}"
       QUOTES_BACKFILL_INTRADAY_MAX: ${QUOTES_BACKFILL_INTRADAY_MAX:-150}
-      QUOTES_BACKFILL_MAX_SYMBOLS: ${QUOTES_BACKFILL_MAX_SYMBOLS:-300}
+      QUOTES_BACKFILL_WHOLE_MARKET: ${QUOTES_BACKFILL_WHOLE_MARKET:-true}
+      QUOTES_BACKFILL_MAX_SYMBOLS: ${QUOTES_BACKFILL_MAX_SYMBOLS:-2500}
+      QUOTES_USAGE_RESERVE_MB: ${QUOTES_USAGE_RESERVE_MB:-100}
+      QUOTES_SNAPSHOT_MINUTES: ${QUOTES_SNAPSHOT_MINUTES:-10}
+      MINUTE_BARS_RETENTION_MONTHS: ${MINUTE_BARS_RETENTION_MONTHS:-0}
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      SYNC_DAILY_TIME: ${SYNC_DAILY_TIME:-15:30,21:45}
+      SYNC_MARKET_LOOKBACK_DAYS: ${SYNC_MARKET_LOOKBACK_DAYS:-520}
+      SYNC_LOOKBACK_DAYS: ${SYNC_LOOKBACK_DAYS:-500}
     depends_on:
       api:
         condition: service_healthy
