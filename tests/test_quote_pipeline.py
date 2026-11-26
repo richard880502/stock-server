@@ -125,6 +125,9 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
         datetime=datetime(2026, 11, 26, 9, 0),
         simtrade=0,
         intraday_odd=0,
+        open=98.5,
+        high=float("nan"),
+        low=0,
     )
     feed._handle_tick("TSE", SimpleNamespace(**trade))
     feed._handle_tick("OTC", SimpleNamespace(**trade))
@@ -133,6 +136,8 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
     assert len(events) == 1
     assert events[0]["change_pct"] == 0.025
     assert events[0]["trade_time"].endswith("+08:00")
+    assert events[0]["day_open"] == 98.5
+    assert "day_high" not in events[0] and "day_low" not in events[0]
     assert json.loads(json.dumps(events[0]))["price"] == 100
     feed.close()
 

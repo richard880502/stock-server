@@ -150,8 +150,14 @@ class ShioajiFeed:
                 return
         except (AttributeError, TypeError, ValueError, OverflowError):
             return
+        day_stats = {
+            f"day_{name}": value
+            for name in ("open", "high", "low")
+            if (value := _positive_float(getattr(tick, name, None))) is not None
+        }
         self._on_tick(
             {
+                **day_stats,
                 "symbol": entry[0],
                 "price": price,
                 "change_pct": change_pct,
@@ -162,3 +168,12 @@ class ShioajiFeed:
                 "trade_epoch": trade_time.timestamp(),
             }
         )
+
+
+def _positive_float(value: Any) -> float | None:
+    """A finite, strictly positive float, else None (missing or bogus day stats)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None

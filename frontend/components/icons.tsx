@@ -125,6 +125,12 @@ export const PulseIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const TerminalIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16M15 4v16" />
+  </Icon>
+);
 export const FlaskIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M9 3h6M10 3v6L4.5 18.2A1.8 1.8 0 0 0 6 21h12a1.8 1.8 0 0 0 1.5-2.8L14 9V3" />

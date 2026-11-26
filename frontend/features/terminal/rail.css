@@ -1,0 +1,306 @@
+/* 看盤: top strip, watch rail and quote header. Dense, tabular, theme-aware. */
+.terminal-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2rem;
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.strip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: var(--weight-medium);
+}
+.strip-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--text-3);
+}
+.strip-pill[data-state="live"] .strip-dot {
+  background: var(--down);
+  box-shadow: 0 0 0 3px var(--down-soft);
+}
+.strip-pill[data-state="connecting"] .strip-dot,
+.strip-pill[data-state="paused"] .strip-dot {
+  background: var(--warn);
+}
+.strip-pill[data-state="unavailable"] .strip-dot {
+  background: var(--up);
+}
+.strip-session {
+  padding: 0.05rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--flat-soft);
+  min-width: 2.5rem;
+  text-align: center;
+}
+.strip-session[data-state="open"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: var(--weight-strong);
+}
+.strip-regime {
+  color: var(--tone, var(--text-2));
+}
+.strip-regime-en {
+  color: var(--text-3);
+}
+.strip-clock {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text);
+  min-width: 6.5rem;
+  text-align: right;
+}
+.strip-tz {
+  font-family: var(--font-sans);
+  color: var(--text-3);
+}
+
+/* Panel: thin accent bar + small title. */
+.rail-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+.rail-head,
+.quote-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.rail-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-strong);
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+.rail-title::before {
+  content: "";
+  width: 3px;
+  height: 0.9rem;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.rail-count {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.rail-note,
+.rail-empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: var(--text-3);
+}
+.rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rail-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+/* Row: id | price / signal badge, spark | change. */
+.rail-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "id spark price"
+    "sub spark change";
+  align-items: center;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  width: 100%;
+  padding: 0.4rem var(--space-3);
+  border: 0;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-row:hover {
+  background: var(--surface-2);
+}
+.rail-row[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+.rail-row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.rail-row[data-stale] .rail-price {
+  opacity: 0.6;
+}
+.rail-id {
+  grid-area: id;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.rail-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+}
+.rail-name {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-price,
+.rail-change {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rail-price {
+  grid-area: price;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+}
+.rail-change {
+  grid-area: change;
+  font-size: var(--text-xs);
+}
+.rail-sub {
+  grid-area: sub;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.rail-spark {
+  grid-area: spark;
+  line-height: 0;
+}
+.rail-stale {
+  display: inline-block;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-left: 0.25rem;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  vertical-align: middle;
+}
+.rail-badge,
+.rail-badge-empty {
+  display: inline-block;
+  min-height: 1.1rem;
+  padding: 0 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--tone-soft, var(--flat-soft));
+  color: var(--tone, var(--text-2));
+  font-size: 0.6875rem;
+  line-height: 1.1rem;
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rail-badge-empty {
+  background: transparent;
+}
+
+/* Quote header. */
+.quote-name {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  min-width: 0;
+}
+.quote-code {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-strong);
+}
+.quote-label {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quote-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "price change"
+    "stats stats";
+  align-items: end;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-3);
+}
+.quote-body[data-stale] .quote-price {
+  opacity: 0.65;
+}
+.quote-price {
+  grid-area: price;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-strong);
+  line-height: 1;
+}
+.quote-change {
+  grid-area: change;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-md);
+}
+.quote-stats {
+  grid-area: stats;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5.5rem, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0 0;
+}
+.quote-stat dt {
+  font-size: 0.6875rem;
+  color: var(--text-3);
+}
+.quote-stat dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+}
+.quote-note {
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  color: var(--warn);
+}
+.quote-empty {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--text-2);
+}
+.quote-asof {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
