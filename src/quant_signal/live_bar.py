@@ -90,4 +90,4 @@ def ex_rights_suspected(bar: Bar, last_official_close: float) -> bool:
     impossible for an ordinary session, hence implies an ex-date. Limitation: ex-days
     with a reference-price change under 10% (most cash dividends) are NOT detected.
     """
-    return abs(bar.open / last_official_close - 1) > LIMIT_PCT
+    return abs(bar.open / last_official_close - 1) > LIMIT_PCT + 1e-6
