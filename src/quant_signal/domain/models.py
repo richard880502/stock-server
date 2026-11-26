@@ -497,9 +497,15 @@ class BacktestSpec(BaseModel):
     initial_capital: float = Field(default=1_000_000, gt=0)
     entry_score: float = Field(default=70, ge=0, le=100)
     exit_score: float = Field(default=45, ge=0, le=100)
-    fee_bps: float = Field(default=5, ge=0, le=1000)
+    # None for both fee_bps and sell_tax_bps (the default) selects the Taiwan cost model
+    # (domain/tw_trading.py: 0.1425% commission with NT$20 minimum, sell tax 0.3% / ETF
+    # 0.1%). Supplying either one keeps the legacy flat-bps model (missing one = 5 / 0).
+    fee_bps: float | None = Field(default=None, ge=0, le=1000)
     slippage_bps: float = Field(default=5, ge=0, le=1000)
-    sell_tax_bps: float = Field(default=0, ge=0, le=1000)
+    sell_tax_bps: float | None = Field(default=None, ge=0, le=1000)
+    commission_discount: float = Field(default=1.0, gt=0, le=1)
+    # Append a provisional bar for today from quote_minutes when no official bar exists.
+    include_live_today: bool = False
     use_chip_filter: bool = False
     chip_entry_score: float = Field(default=55, ge=0, le=100)
     chip_exit_score: float = Field(default=40, ge=0, le=100)
@@ -546,6 +552,9 @@ class BacktestReport(BaseModel):
     excess_return: float | None = None
     transactions: list[BacktestTrade] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    cost_model: Literal["tw", "custom"] = "custom"
+    provisional_bar: bool = False
+    as_of_time: datetime | None = None
 
 
 class BacktestJob(BaseModel):

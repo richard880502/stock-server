@@ -192,6 +192,10 @@ export type BacktestJob = {
     buy_hold_return?: number | null;
     excess_return?: number | null;
     warnings?: string[];
+    cost_model?: "tw" | "custom";
+    /** True when the last bar is today's intraday provisional bar. */
+    provisional_bar?: boolean;
+    as_of_time?: string | null;
     transactions?: {
       trading_date: string;
       side: string;
@@ -358,9 +362,11 @@ export type BacktestRequest = {
   end: string;
   entry_score: number;
   exit_score: number;
-  fee_bps: number;
+  /** null (with sell_tax_bps null) = Taiwan cost model: commission w/ NT$20 min + sell tax. */
+  fee_bps: number | null;
   slippage_bps: number;
-  sell_tax_bps: number;
+  sell_tax_bps: number | null;
+  include_live_today?: boolean;
   initial_capital: number;
   use_chip_filter: boolean;
   chip_entry_score: number;

@@ -56,6 +56,7 @@ from quant_signal.infrastructure.db.models import (
     UserSessionRow,
     WatchlistItemRow,
 )
+from quant_signal.live_bar import MinuteQuote
 
 
 class PostgresQuantRepository:
@@ -178,6 +179,35 @@ class PostgresQuantRepository:
             institutional_series=institutions,
             branch_series=branches,
         )
+
+    async def list_quote_minutes(
+        self, symbol: str, *, since: datetime, until: datetime
+    ) -> list[MinuteQuote]:
+        """Collector minute rows for one symbol, last trade within [since, until]."""
+        from quant_signal.infrastructure.db.models import QuoteMinuteRow
+
+        rows = await self.session.scalars(
+            select(QuoteMinuteRow)
+            .where(
+                QuoteMinuteRow.symbol == symbol.upper(),
+                QuoteMinuteRow.minute >= since,
+                QuoteMinuteRow.last_time <= until,
+            )
+            .order_by(QuoteMinuteRow.minute)
+        )
+        return [
+            MinuteQuote(
+                minute=r.minute,
+                last_time=r.last_time,
+                open=r.open,
+                high=r.high,
+                low=r.low,
+                close=r.close,
+                first_total_volume=r.first_total_volume,
+                last_total_volume=r.last_total_volume,
+            )
+            for r in rows
+        ]
 
     async def list_bars(
         self,
