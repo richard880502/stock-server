@@ -36,6 +36,7 @@ class BacktestEngine:
         *,
         benchmark_bars: list[Bar] | None = None,
         provisional_as_of: datetime | None = None,
+        provisional_note: str | None = None,
         market_observations: list[MarketObservation] | None = None,
         institutional_flows: list[InstitutionalFlow] | None = None,
         branch_flows: list[BrokerBranchFlow] | None = None,
@@ -209,6 +210,8 @@ class BacktestEngine:
             max_drawdown = min(max_drawdown, value / running_peak - 1)
 
         warnings: list[str] = []
+        if provisional_note:
+            warnings.append(provisional_note)
         has_provisional = any(b.source == PROVISIONAL_SOURCE for b in period_bars)
         if has_provisional:
             stamp = (

@@ -8,7 +8,12 @@ from datetime import datetime, time
 from quant_signal.backtest import BacktestEngine
 from quant_signal.domain.models import Bar
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
-from quant_signal.live_bar import TAIPEI, build_provisional_bar
+from quant_signal.live_bar import (
+    EX_RIGHTS_NOTE,
+    TAIPEI,
+    build_provisional_bar,
+    ex_rights_suspected,
+)
 from quant_signal.settings import get_settings
 from quant_signal.workers import sync as sync_worker
 
@@ -33,9 +38,15 @@ async def live_today_bar(repository, spec, bars: list[Bar], as_of: datetime):
         return None
     official = [b for b in bars if b.source != "synthetic_demo"] or bars
     factor = official[-1].adjustment_factor if official else 1.0
-    return build_provisional_bar(
+    built = build_provisional_bar(
         spec.symbol, today, minutes, as_of=as_of, adjustment_factor=factor
     )
+    if built is None:
+        return None
+    if not official or ex_rights_suspected(built[0], official[-1].close):
+        # Fail safe: unknown reference price or possible ex-date -> no provisional bar.
+        return None, EX_RIGHTS_NOTE
+    return built
 
 
 async def process_once() -> bool:
@@ -48,7 +59,10 @@ async def process_once() -> bool:
             bars = await repository.list_bars(job.spec.symbol, end=job.spec.end)
             provisional_at = None
             live = await live_today_bar(repository, job.spec, bars, job.created_at)
-            if live is not None:
+            provisional_note = None
+            if live is not None and live[0] is None:
+                provisional_note = live[1]
+            elif live is not None:
                 bars = [*bars, live[0]]
                 provisional_at = live[1]
             benchmark_bars = (
@@ -85,6 +99,7 @@ async def process_once() -> bool:
                 job.spec,
                 benchmark_bars=benchmark_bars,
                 provisional_as_of=provisional_at,
+                provisional_note=provisional_note,
                 market_observations=market_observations,
                 institutional_flows=institutional_flows,
                 branch_flows=branch_flows,

@@ -74,3 +74,20 @@ def build_provisional_bar(
         source=PROVISIONAL_SOURCE,
     )
     return bar, last.last_time
+
+
+LIMIT_PCT = 0.10
+EX_RIGHTS_NOTE = "今日可能為除權息日（盤中價與昨收偏離超過漲跌幅限制），暫不加入盤中暫定 K 棒。"
+
+
+def ex_rights_suspected(bar: Bar, last_official_close: float) -> bool:
+    """Cheap fail-safe guard against mixing raw intraday prices with adjusted history.
+
+    Corporate actions are NOT stored anywhere before the official bar exists (they are
+    fetched from TWSE only during sync and folded into ``adjustment_factor``), so an
+    ex-date cannot be looked up. Minute prices are raw, so on an ex-right/ex-dividend
+    day they gap versus the previous raw close. A gap beyond the +-10% daily limit is
+    impossible for an ordinary session, hence implies an ex-date. Limitation: ex-days
+    with a reference-price change under 10% (most cash dividends) are NOT detected.
+    """
+    return abs(bar.open / last_official_close - 1) > LIMIT_PCT

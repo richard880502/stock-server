@@ -95,3 +95,24 @@ def test_default_cost_model_before_after():
     print("old", old.total_return, "new", new.total_return, "etf", etf.total_return)
     print("old costs", [t.cost for t in old.transactions])
     print("new costs", [t.cost for t in new.transactions])
+
+
+def test_ex_rights_guard():
+    from quant_signal.live_bar import ex_rights_suspected
+
+    as_of = datetime(2026, 11, 26, 9, 5, tzinfo=TAIPEI)
+
+    def bar_at(price):
+        minutes = [minute(9, 0, price, price, price, price, 0, 5)]
+        return build_provisional_bar("2330.TW", DAY, minutes, as_of=as_of)[0]
+
+    assert not ex_rights_suspected(bar_at(105), 100)
+    assert not ex_rights_suspected(bar_at(110), 100)  # limit-up is legal
+    assert ex_rights_suspected(bar_at(80), 100)  # -20% gap: impossible without ex-date
+
+
+def test_engine_surfaces_note_when_provisional_skipped():
+    bars = make_bars(symbol="0050.TW", count=200)
+    spec = BacktestSpec(symbol="0050.TW", start=bars[80].trading_date, end=bars[-1].trading_date)
+    report = BacktestEngine().run(bars, spec, provisional_note="今日可能為除權息日")
+    assert not report.provisional_bar and "今日可能為除權息日" in report.warnings
