@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from quant_signal.application.llm_analysis import _anthropic_client, create_llm_client
-from quant_signal.application.news_job import run_news_slot
+from quant_signal.application.news_job import latest_due_slot, run_news_slot
 from quant_signal.application.news_sync import NewsSentimentSyncService
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
 from quant_signal.infrastructure.providers.news import RssFeedProvider, SearxNgNewsProvider
@@ -22,8 +24,19 @@ logger = logging.getLogger(__name__)
 POLL_SECONDS = 60
 
 
-def build_news_service(settings: Settings, repository) -> NewsSentimentSyncService:
-    """Sync service wired from settings; no LLM client when the LLM is disabled."""
+@asynccontextmanager
+async def repository_scope() -> AsyncIterator[PostgresQuantRepository]:
+    """One short database session; closed (and rolled back if unfinished) on exit."""
+    async with session_factory() as session:
+        yield PostgresQuantRepository(session)
+
+
+def build_news_service(settings: Settings, repository=None) -> NewsSentimentSyncService:
+    """Sync service wired from settings; no LLM client when the LLM is disabled.
+
+    With no ``repository`` every database phase opens its own session. Use it as
+    ``async with build_news_service(...) as service`` so HTTP clients close once.
+    """
     if settings.llm_errors():
         llm_client = None
     elif settings.llm_provider == "anthropic" and settings.news_anthropic_model:
@@ -40,6 +53,7 @@ def build_news_service(settings: Settings, repository) -> NewsSentimentSyncServi
     return NewsSentimentSyncService(
         repository,
         llm_client,
+        repository_factory=None if repository is not None else repository_scope,
         searxng_provider=searxng,
         feed_provider=RssFeedProvider(urls) if urls else None,
     )
@@ -47,11 +61,13 @@ def build_news_service(settings: Settings, repository) -> NewsSentimentSyncServi
 
 async def tick(attempts: dict[tuple[str, str], int]) -> None:
     settings = get_settings()
-    async with session_factory() as session:
-        repository = PostgresQuantRepository(session)
+    if latest_due_slot(settings.news_sync_time, datetime.now(UTC)) is None:
+        return  # nothing due yet today: do not even build HTTP clients
+    # One scope per run: HTTP clients live for the whole tick and are closed at its end.
+    async with build_news_service(settings) as service:
         await run_news_slot(
-            repository,
-            build_news_service(settings, repository),
+            repository_scope,
+            service,
             news_time=settings.news_sync_time,
             max_symbols=settings.news_sync_max_symbols,
             now=datetime.now(UTC),

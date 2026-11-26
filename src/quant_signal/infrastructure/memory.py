@@ -31,6 +31,7 @@ from quant_signal.domain.models import (
     SyncJob,
     SyncJobKind,
     User,
+    hide_late_label,
     taipei_day_end,
 )
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
@@ -421,6 +422,8 @@ class MemoryQuantRepository:
                 for item in result
                 if item.published_at < cutoff and (item.available_at or item.retrieved_at) < cutoff
             ]
+        if end:
+            result = [hide_late_label(item, taipei_day_end(end)) for item in result]
         return sorted(result, key=lambda item: item.published_at, reverse=True)
 
     async def upsert_news_items(self, items: list[NewsItem]) -> int:
@@ -439,12 +442,17 @@ class MemoryQuantRepository:
                 None,
             )
             if previous is not None:
-                item = item.model_copy(
-                    update={
-                        "available_at": previous.available_at,
-                        "retrieved_at": previous.retrieved_at,
-                    }
-                )
+                update = {
+                    "available_at": previous.available_at,
+                    "retrieved_at": previous.retrieved_at,
+                }
+                if item.sentiment_label is None:
+                    update.update(
+                        sentiment_label=previous.sentiment_label,
+                        sentiment_score=previous.sentiment_score,
+                        classified_at=previous.classified_at,
+                    )
+                item = item.model_copy(update=update)
             existing = [row for row in existing if row is not previous]
             self.news_items[item.symbol.upper()] = [*existing, item]
         return len(items)

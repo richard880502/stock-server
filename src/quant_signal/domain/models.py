@@ -425,6 +425,8 @@ class NewsItem(BaseModel):
     sentiment_label: Literal["bullish", "neutral", "bearish"] | None = None
     retrieved_at: datetime
     available_at: datetime | None = None
+    # When the label was written; as-of reads before it see the item as unclassified.
+    classified_at: datetime | None = None
     revision: int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
@@ -438,6 +440,13 @@ class NewsItem(BaseModel):
         """Stable 8-hex id for citing this item as ``news:<short_id>``."""
         digest = hashlib.sha1(f"{self.source}|{self.url}".encode()).hexdigest()
         return digest[:8]
+
+
+def hide_late_label(item: NewsItem, cutoff: datetime) -> NewsItem:
+    """As-of view of an item: a label written at or after ``cutoff`` was not yet known."""
+    if item.classified_at is not None and item.classified_at >= cutoff:
+        return item.model_copy(update={"sentiment_label": None, "sentiment_score": None})
+    return item
 
 
 class NewsHeadlineRanking(BaseModel):

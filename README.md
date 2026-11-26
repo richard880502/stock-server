@@ -411,13 +411,32 @@ invisible to an 11/21 analysis. Repeat fetches never rewrite `available_at`.
 (punctuation, whitespace and a trailing " - media name" removed), so syndicated
 copies count once.
 
-**Classification.** One batched LLM call per symbol per run (at most 20 headlines):
-the model returns `{"results": [{"index", "label", "score"}]}`; anything missing,
-unknown or sign-inconsistent becomes neutral 0. With the LLM off, items are stored
-unclassified (no score, no label) and classified by a later run once it is on;
-already classified items are never classified again. Classification uses `NEWS_ANTHROPIC_MODEL` (default `claude-haiku-5-5`) whenever
-`LLM_PROVIDER=anthropic`, so the analyst/debate models (e.g. Opus) are not spent on
-headlines; set it to another model, or empty to reuse `ANTHROPIC_MODEL`.
+**Classification.** One batched LLM call per symbol per run (at most 20 headlines).
+Each headline gets a random short `id` for that batch (never its position), and the
+model returns `{"results": [{"id", "label", "score"}]}`. An entry that is missing,
+unknown, duplicated or sign-inconsistent stays **unclassified** (no score, no label)
+instead of becoming a fake neutral, and is retried by a later run while the item is
+under 7 days old; unclassified rows never count in the aggregate. Each label records
+`classified_at`; an as-of read before it sees the item as unclassified. Already
+classified items are never classified again. Classification uses
+`NEWS_ANTHROPIC_MODEL` (default `claude-haiku-5-5`) whenever `LLM_PROVIDER=anthropic`,
+so the analyst/debate models (e.g. Opus) are not spent on headlines; set it to another
+model, or empty to reuse `ANTHROPIC_MODEL`.
+
+**Deployment.** The classification runs in the *ingest* service, so that service needs
+`LLM_ENABLED=true`, `LLM_PROVIDER` and (for Claude) `ANTHROPIC_API_KEY` in its
+environment (the compose files pass them through). Without them items are stored
+unclassified and are only classified later, within the 7-day window, once the LLM is
+configured.
+
+**Hardening.** Feed and search responses are capped at 2 MB and 200 items; XML with a
+DOCTYPE/ENTITY declaration is refused; only `http(s)` URLs are stored; zero-width and
+bidi control characters are removed from headlines; requests send a normal
+User-Agent. Headline-hash dedupe only looks at the last 7 days (a recurring headline
+is not dropped forever); stories published more than 30 days ago are not ingested.
+HTTP clients live for one whole run (not per symbol), every database phase uses its own
+short session, and a symbol whose sources all failed counts as failed (retried up to
+three times per slot) and is not recorded as done.
 
 **In the debate.** The aggregate `news_sentiment` (score, label, count; no raw
 headlines; only items from the 14 days before `as_of`, so stale headlines do not

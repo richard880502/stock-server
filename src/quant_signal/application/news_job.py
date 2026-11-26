@@ -14,9 +14,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from quant_signal.application.news_sync import NewsSentimentSyncService
+from quant_signal.application.news_sync import NewsSentimentSyncService, fixed_repository
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import FetchCoverage
 
@@ -68,7 +69,7 @@ async def news_scope(repository: QuantRepository, *, max_symbols: int) -> list[s
 
 
 async def run_news_slot(
-    repository: QuantRepository,
+    repository: Any,
     service: NewsSentimentSyncService,
     *,
     news_time: str,
@@ -78,29 +79,48 @@ async def run_news_slot(
     delay_seconds: float = 1.0,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> NewsRunReport:
-    """Run the latest due slot once for every symbol not already done for it."""
+    """Run the latest due slot once for every symbol not already done for it.
+
+    ``repository`` is a repository or a factory of short-lived repository scopes (one
+    database session per phase; none is open while waiting on the network). A symbol
+    whose fetch failed is counted as failed and *not* recorded in ``fetch_coverage``,
+    so it is retried (up to ``MAX_ATTEMPTS_PER_SLOT`` times) rather than looking done.
+    """
     report = NewsRunReport(slot=latest_due_slot(news_time, now))
     if report.slot is None:
         return report
     slot = report.slot
+    open_repo = repository if callable(repository) else fixed_repository(repository)
     attempts = attempts if attempts is not None else {}
-    scope = await news_scope(repository, max_symbols=max_symbols)
-    done = {
-        symbol
-        for symbol in scope
-        if slot in await repository.list_fetch_coverage(NEWS_SOURCE, SYMBOL_DATASET, symbol, [slot])
-    }
-    report.already_done = len(done)
-    todo = [symbol for symbol in scope if symbol not in done]
+    # Only the current slot's counters matter; drop the rest so the dict stays small.
+    for key in [key for key in attempts if key[1] != slot]:
+        del attempts[key]
 
-    eligible: list[str] = []
-    for symbol in todo:
-        if await repository.instrument_exists(symbol):
-            eligible.append(symbol)
-        else:
-            report.skipped_no_instrument += 1
+    async with open_repo() as repo:
+        scope = await news_scope(repo, max_symbols=max_symbols)
+        done = {
+            symbol
+            for symbol in scope
+            if slot in await repo.list_fetch_coverage(NEWS_SOURCE, SYMBOL_DATASET, symbol, [slot])
+        }
+        report.already_done = len(done)
+        eligible: list[str] = []
+        for symbol in scope:
+            if symbol in done:
+                continue
+            if await repo.instrument_exists(symbol):
+                eligible.append(symbol)
+            else:
+                report.skipped_no_instrument += 1
+    if report.skipped_no_instrument and ("*skipped", slot) not in attempts:
+        attempts[("*skipped", slot)] = 1  # note it once per slot, not on every poll
+        logger.info(
+            "news slot %s: %s symbols skipped, no instruments row yet",
+            slot,
+            report.skipped_no_instrument,
+        )
     if eligible:
-        await _run_feeds(repository, service, eligible, slot, now, report, attempts)
+        await _run_feeds(open_repo, service, eligible, slot, now, report, attempts)
 
     first = True
     for symbol in eligible:
@@ -112,6 +132,20 @@ async def run_news_slot(
         first = False
         try:
             rows = await service.sync_symbol(symbol)
+            async with open_repo() as repo:
+                await repo.record_fetch_coverage(
+                    [
+                        FetchCoverage(
+                            source=NEWS_SOURCE,
+                            dataset=SYMBOL_DATASET,
+                            symbol=symbol,
+                            period=slot,
+                            status="ok",
+                            row_count=rows,
+                            fetched_at=now,
+                        )
+                    ]
+                )
         except Exception:
             report.failed += 1
             logger.exception("news sync failed for %s", symbol)
@@ -119,36 +153,21 @@ async def run_news_slot(
         report.synced += 1
         report.rows += rows
         report.symbols.append(symbol)
-        await repository.record_fetch_coverage(
-            [
-                FetchCoverage(
-                    source=NEWS_SOURCE,
-                    dataset=SYMBOL_DATASET,
-                    symbol=symbol,
-                    period=slot,
-                    status="ok",
-                    row_count=rows,
-                    fetched_at=now,
-                )
-            ]
-        )
-    if report.synced or report.failed or report.skipped_no_instrument:
+    if report.synced or report.failed:
         logger.info(
-            "news slot %s: %s synced (%s rows, %s from feeds), %s failed, "
-            "%s skipped without instrument, %s already done",
+            "news slot %s: %s synced (%s rows, %s from feeds), %s failed, %s already done",
             slot,
             report.synced,
             report.rows,
             report.feed_rows,
             report.failed,
-            report.skipped_no_instrument,
             report.already_done,
         )
     return report
 
 
 async def _run_feeds(
-    repository: QuantRepository,
+    open_repo: Any,
     service: NewsSentimentSyncService,
     symbols: list[str],
     slot: str,
@@ -158,8 +177,9 @@ async def _run_feeds(
 ) -> None:
     if service.feed_provider is None or not service.feed_provider.urls:
         return
-    if slot in await repository.list_fetch_coverage(NEWS_SOURCE, FEEDS_DATASET, "*", [slot]):
-        return
+    async with open_repo() as repo:
+        if slot in await repo.list_fetch_coverage(NEWS_SOURCE, FEEDS_DATASET, "*", [slot]):
+            return
     key = ("*feeds", slot)
     if attempts.get(key, 0) >= MAX_ATTEMPTS_PER_SLOT:
         return
@@ -170,16 +190,17 @@ async def _run_feeds(
         logger.exception("news feed sync failed")
         return
     report.feed_rows = sum(written.values())
-    await repository.record_fetch_coverage(
-        [
-            FetchCoverage(
-                source=NEWS_SOURCE,
-                dataset=FEEDS_DATASET,
-                symbol="*",
-                period=slot,
-                status="ok",
-                row_count=report.feed_rows,
-                fetched_at=now,
-            )
-        ]
-    )
+    async with open_repo() as repo:
+        await repo.record_fetch_coverage(
+            [
+                FetchCoverage(
+                    source=NEWS_SOURCE,
+                    dataset=FEEDS_DATASET,
+                    symbol="*",
+                    period=slot,
+                    status="ok",
+                    row_count=report.feed_rows,
+                    fetched_at=now,
+                )
+            ]
+        )

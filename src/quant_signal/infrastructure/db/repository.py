@@ -37,6 +37,7 @@ from quant_signal.domain.models import (
     SyncJob,
     SyncJobKind,
     User,
+    hide_late_label,
     taipei_day_end,
 )
 from quant_signal.infrastructure.db.models import (
@@ -66,6 +67,9 @@ from quant_signal.infrastructure.db.prices import (
     read_latest,
     read_minutes,
 )
+
+KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
+LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
 class PostgresQuantRepository:
@@ -779,7 +783,7 @@ class PostgresQuantRepository:
                 NewsItemRow.published_at < cutoff, NewsItemRow.available_at < cutoff
             )
         rows = (await self.session.execute(statement)).all()
-        return [
+        items = [
             NewsItem(
                 symbol=row_symbol,
                 headline=row.headline,
@@ -790,10 +794,12 @@ class PostgresQuantRepository:
                 sentiment_label=row.sentiment_label,
                 retrieved_at=row.retrieved_at,
                 available_at=row.available_at,
+                classified_at=row.classified_at,
                 revision=row.revision,
             )
             for row, row_symbol in rows
         ]
+        return [hide_late_label(item, taipei_day_end(end)) for item in items] if end else items
 
     async def upsert_news_items(self, items: list[NewsItem]) -> int:
         """Insert news for a symbol that already has an ``instruments`` row.
@@ -817,15 +823,25 @@ class PostgresQuantRepository:
         inserted = 0
         for item in items:
             values = item.model_dump(mode="python", exclude={"symbol"})
+            insert_statement = insert(NewsItemRow).values(instrument_id=instrument_id, **values)
+            stmt_excluded = insert_statement.excluded
             statement = (
-                insert(NewsItemRow)
-                .values(instrument_id=instrument_id, **values)
+                insert_statement
                 .on_conflict_do_update(
                     constraint="uq_news_item_version",
                     set_={
-                        key: value
-                        for key, value in values.items()
-                        if key not in {"available_at", "retrieved_at"}
+                        **{
+                            key: value
+                            for key, value in values.items()
+                            if key not in KEEP_FIRST_SEEN and key not in LABEL_FIELDS
+                        },
+                        # A refetch without a label must not erase an existing one.
+                        **{
+                            key: func.coalesce(
+                                getattr(stmt_excluded, key), getattr(NewsItemRow, key)
+                            )
+                            for key in LABEL_FIELDS
+                        },
                     },
                 )
             )

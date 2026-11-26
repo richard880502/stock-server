@@ -76,9 +76,8 @@ async def _run(args: argparse.Namespace) -> None:
             settings = get_settings()
             if settings.llm_errors():
                 print("LLM is not configured: headlines are stored unclassified")
-            inserted = await build_news_service(settings, repository).sync_symbol(
-                args.symbol, limit_per_source=args.limit
-            )
+            async with build_news_service(settings, repository) as service:
+                inserted = await service.sync_symbol(args.symbol, limit_per_source=args.limit)
             print(
                 json.dumps(
                     {"symbol": args.symbol.strip().upper(), "inserted": inserted},

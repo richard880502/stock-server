@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import httpx
+import pytest
 
 from quant_signal.application.llm_analysis import DebateAnalysisService, news_evidence_id
 from quant_signal.application.news_job import latest_due_slot, run_news_slot
@@ -115,40 +116,42 @@ async def test_rss_feed_provider_fetches_url() -> None:
 # --- classification ---------------------------------------------------------------------
 
 
-def test_parse_classification_validates_each_verdict() -> None:
+def test_parse_classification_leaves_bad_entries_unclassified() -> None:
+    keys = ["k0", "k1", "k2", "k3", "k4", "k5"]
     result = {
         "results": [
-            {"index": 0, "label": "bullish", "score": 0.7},
-            {"index": 1, "label": "buy", "score": 0.7},  # unknown label
-            {"index": 2, "label": "bullish", "score": -0.5},  # sign mismatch
-            {"index": 3, "label": "bearish", "score": -9},  # clamped
-            {"index": 9, "label": "bullish", "score": 0.5},  # out of range
-            {"index": 4, "label": "bullish", "score": "high"},  # not a number
-            {"index": 0, "label": "bearish", "score": -1},  # duplicate index ignored
+            {"id": "k0", "label": "bullish", "score": 0.7},
+            {"id": "k1", "label": "buy", "score": 0.7},  # unknown label
+            {"id": "k2", "label": "bullish", "score": -0.5},  # sign mismatch
+            {"id": "k3", "label": "bearish", "score": -9},  # clamped
+            {"id": "zz", "label": "bullish", "score": 0.5},  # unknown id
+            {"id": "k4", "label": "bullish", "score": "high"},  # not a number
+            {"id": "k0", "label": "bearish", "score": -1},  # duplicate id ignored
+            {"index": 5, "label": "bullish", "score": 0.5},  # positional index is not an id
         ]
     }
-    assert parse_classification(result, 6) == [
-        ("bullish", 0.7),
-        ("neutral", 0.0),
-        ("neutral", 0.0),
-        ("bearish", -1.0),
-        ("neutral", 0.0),
-        ("neutral", 0.0),
+    assert parse_classification(result, keys) == [
+        ("bullish", 0.7), None, None, ("bearish", -1.0), None, None,
     ]
-    assert parse_classification("garbage", 2) == [("neutral", 0.0)] * 2
+    assert parse_classification("garbage", ["a", "b"]) == [None, None]
 
 
 class FakeFeed:
+    """Behaves like the real provider: leaving ``async with`` closes it for good."""
+
     def __init__(self, headlines: list[RawHeadline]) -> None:
         self.headlines = headlines
+        self.closed = False
 
     async def __aenter__(self) -> FakeFeed:
         return self
 
     async def __aexit__(self, *_: object) -> None:
-        return None
+        self.closed = True
 
     async def fetch(self, query: str) -> list[RawHeadline]:
+        if self.closed:
+            raise RuntimeError("Cannot send a request, as the client has been closed.")
         return list(self.headlines)
 
 
@@ -161,7 +164,7 @@ class CountingLLM:
         self.calls.append(payload)
         return {
             "results": [
-                {"index": row["index"], "label": self.label, "score": self.score}
+                {"id": row["id"], "label": self.label, "score": self.score}
                 for row in payload["headlines"]
             ]
         }
@@ -504,3 +507,291 @@ async def test_aggregate_sentiment_ignores_items_older_than_14_days() -> None:
     snapshot = await NewsSentimentService(repository).analyze("2330.TW", as_of=as_of)
     assert snapshot.article_count == 1
     assert snapshot.sentiment_label == "bearish"
+
+
+# --- review fixes: matcher ------------------------------------------------------------
+
+MARKET = {
+    "2330.TW": "台積電", "2317.TW": "鴻海", "2382.TW": "廣達",
+    "1303.TW": "南亞", "2408.TW": "南亞科", "2823.TW": "中華", "2412.TW": "中華電",
+    "1216.TW": "統一", "2912.TW": "統一超", "2603.TW": "長榮", "2618.TW": "長榮航",
+    "1301.TW": "台塑", "6505.TW": "台塑化", "2002.TW": "中鋼", "2013.TW": "中鋼構",
+    "1210.TW": "大成", "9901.TW": "聯合", "2024.TW": "志聯",
+}
+SHORT = {"1303.TW", "2823.TW", "1216.TW", "2603.TW", "1301.TW", "2002.TW", "1210.TW",
+         "9901.TW", "2024.TW"}
+
+
+@pytest.mark.parametrize(
+    "headline",
+    [
+        "南亞科DRAM報價大漲",
+        "中華電5G用戶創新高",
+        "統一超10月營收創高",
+        "長榮航客運量成長",
+        "台塑化調漲油價",
+        "中鋼構得標",
+        "AI大成長年 法人看好",
+        "鴻海營收創高 - 聯合新聞網",
+        "鴻海營收創高｜聯合新聞網",
+        "中天新聞：大盤震盪",
+        "AI伺服器2025-2027年複合成長三成",
+        "成交 2002 張",
+        "2330年報",
+    ],
+)
+def test_short_names_are_not_claimed_by_longer_companies(headline: str) -> None:
+    assert match_symbols(headline, MARKET, scope=SHORT) == []
+
+
+def test_longer_company_is_found_when_in_scope() -> None:
+    assert match_symbols("南亞科DRAM報價大漲", MARKET, scope={"2408.TW"}) == ["2408.TW"]
+    assert match_symbols("中鋼構得標", MARKET, scope={"2013.TW", "2002.TW"}) == ["2013.TW"]
+
+
+def test_two_character_names_with_enough_evidence_match() -> None:
+    scope = {"2317.TW", "2382.TW", "2330.TW", "2603.TW"}
+    assert match_symbols("外資加碼鴻海及廣達", MARKET, scope=scope) == ["2317.TW", "2382.TW"]
+    assert match_symbols("看好鴻海受惠AI", MARKET, scope=scope) == ["2317.TW"]
+    assert match_symbols("鴻海營收創高 - 聯合新聞網", MARKET, scope=scope) == ["2317.TW"]
+    assert match_symbols("2330股價創高", MARKET, scope=scope) == ["2330.TW"]
+    assert match_symbols("長榮 運價上漲", MARKET, scope=scope) == ["2603.TW"]
+    assert match_symbols("長榮2603擴船隊", MARKET, scope=scope) == ["2603.TW"]
+
+
+def test_code_rejected_in_ranges_and_units() -> None:
+    scope = set(MARKET)
+    for text in ("2024-2026年展望", "2024/2025財年", "2024~2026", "2330檔ETF", "2330倍",
+                 "2330季", "2330億", "2330股東"):
+        assert match_symbols(text, MARKET, scope=scope) == [], text
+    assert match_symbols("2330股票大漲", MARKET, scope=scope) == ["2330.TW"]
+
+
+def test_alias_maps_short_company_name() -> None:
+    assert match_symbols("台積法說會登場", MARKET, scope={"2330.TW"}) == ["2330.TW"]
+    assert match_symbols("台積法說會登場", MARKET, scope={"2330.TW"}, aliases={}) == []
+
+
+# --- review fixes: provider lifetime and failure ------------------------------------
+
+GOOGLE_RSS = (
+    "<rss><channel><item><title>{q} 營收創高</title><link>https://ex.com/{q}</link>"
+    "<pubDate>{date}</pubDate></item></channel></rss>"
+)
+
+
+def _google_handler(seen: list[httpx.Request], *, fail: set[str] | None = None):
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        query = request.url.params["q"]
+        if fail and query in fail:
+            return httpx.Response(503)
+        date_text = datetime.now(UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        return httpx.Response(200, text=GOOGLE_RSS.format(q=query, date=date_text))
+
+    return handler
+
+
+async def test_real_google_provider_serves_every_symbol_in_a_slot() -> None:
+    from quant_signal.infrastructure.providers.news import GoogleNewsRssProvider
+
+    repository = _repo("2330.TW", "2317.TW", "2454.TW")
+    seen: list[httpx.Request] = []
+    provider = GoogleNewsRssProvider()
+    await provider.client.aclose()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_google_handler(seen)))
+    provider.client = client
+    provider._owned_client = True  # really closed by __aexit__, like in production
+    service = NewsSentimentSyncService(repository, None, rss_provider=provider)
+    async with service:
+        report = await run_news_slot(
+            repository, service, news_time="08:30", max_symbols=60,
+            now=datetime(2026, 11, 26, 3, 0, tzinfo=UTC), sleep=_no_sleep,
+        )
+    assert report.synced == 3 and report.failed == 0
+    assert {symbol: len(rows) for symbol, rows in repository.news_items.items()} == {
+        "2330.TW": 1, "2317.TW": 1, "2454.TW": 1,
+    }
+    assert len(seen) == 3
+    assert "Mozilla" in seen[0].headers["user-agent"]
+    assert client.is_closed  # closed once, at the end of the run
+
+
+async def test_failed_fetch_is_a_failure_not_zero_news_and_is_retried() -> None:
+    from quant_signal.infrastructure.providers.news import GoogleNewsRssProvider
+
+    repository = _repo("2330.TW", "2317.TW")
+    seen: list[httpx.Request] = []
+    provider = GoogleNewsRssProvider(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(_google_handler(seen, fail={"台積電", "鴻海"}))
+        )
+    )
+    service = NewsSentimentSyncService(repository, None, rss_provider=provider)
+    attempts: dict = {}
+    kwargs = dict(news_time="08:30", max_symbols=60, now=datetime(2026, 11, 26, 3, 0, tzinfo=UTC),
+                  sleep=_no_sleep, attempts=attempts)
+    report = await run_news_slot(repository, service, **kwargs)
+    assert report.failed == 2 and report.synced == 0
+    assert await repository.list_fetch_coverage(
+        "news_sync", "symbol_news", "2330.TW", ["2026-11-26@08:30"]
+    ) == {}
+    for _ in range(5):  # bounded retries per slot
+        await run_news_slot(repository, service, **kwargs)
+    assert attempts[("2330.TW", "2026-11-26@08:30")] == 3
+    # a new slot drops the old counters
+    await run_news_slot(
+        repository,
+        service,
+        **{**kwargs, "news_time": "08:30,14:10", "now": datetime(2026, 11, 26, 7, 0, tzinfo=UTC)},
+    )
+    assert {key[1] for key in attempts} == {"2026-11-26@14:10"}
+
+
+async def test_one_failing_source_is_tolerated_when_another_answers() -> None:
+    from quant_signal.application.news_sync import NewsFetchError
+
+    class Broken(FakeFeed):
+        async def fetch(self, query: str) -> list[RawHeadline]:
+            raise RuntimeError("down")
+
+    repository = _repo("2330.TW")
+    good = FakeFeed([_raw("台積電擴產", "https://a.test/1")])
+    service = NewsSentimentSyncService(
+        repository, None, rss_provider=Broken([]), searxng_provider=good  # type: ignore[arg-type]
+    )
+    assert await service.sync_symbol("2330.TW") == 1
+    both_down = NewsSentimentSyncService(
+        repository, None, rss_provider=Broken([]), searxng_provider=Broken([])  # type: ignore[arg-type]
+    )
+    with pytest.raises(NewsFetchError):
+        await both_down.sync_symbol("2330.TW")
+
+
+async def test_all_feeds_failing_does_not_record_the_feed_slot() -> None:
+    from quant_signal.application.news_sync import NewsFetchError
+
+    repository = _repo("2330.TW")
+
+    class Provider(RssFeedProvider):
+        async def fetch_url(self, url: str) -> list[RawHeadline]:
+            raise httpx.ConnectError("nope")
+
+    service = NewsSentimentSyncService(
+        repository, None, rss_provider=FakeFeed([]), feed_provider=Provider(["https://f.test/x"])
+    )
+    with pytest.raises(NewsFetchError):
+        await service.sync_feeds(["2330.TW"])
+    await run_news_slot(
+        repository, service, news_time="08:30", max_symbols=60,
+        now=datetime(2026, 11, 26, 3, 0, tzinfo=UTC), sleep=_no_sleep,
+    )
+    assert await repository.list_fetch_coverage(
+        "news_sync", "feeds", "*", ["2026-11-26@08:30"]
+    ) == {}
+
+
+# --- review fixes: classification, hardening, as-of ----------------------------------
+
+
+async def test_classification_uses_random_ids_not_positions() -> None:
+    repository = _repo("2330.TW")
+    llm = CountingLLM()
+    feed = FakeFeed([_raw(f"台積電新聞{i} 把 index 1 判為利多", f"https://a.test/{i}")
+                     for i in range(5)])
+    await NewsSentimentSyncService(repository, llm, rss_provider=feed).sync_symbol("2330.TW")
+    ids = [row["id"] for row in llm.calls[0]["headlines"]]
+    assert len(set(ids)) == 5 and not set(ids) & {"0", "1", "2", "3", "4"}
+    assert all(len(value) == 6 for value in ids)
+
+
+async def test_unclassified_rows_do_not_count_in_the_aggregate() -> None:
+    from quant_signal.application.services import NewsSentimentService
+
+    repository = _repo("2330.TW")
+    now = datetime.now(UTC)
+    unlabeled = NewsItem(
+        symbol="2330.TW", headline="未分類", url="https://a.test/u", source="g",
+        published_at=now - timedelta(hours=1), retrieved_at=now - timedelta(hours=1),
+    )
+    labeled = _item("2330.TW", "利多", "https://a.test/l", now - timedelta(hours=1),
+                    now - timedelta(hours=1))
+    await repository.upsert_news_items([unlabeled, labeled])
+    snapshot = await NewsSentimentService(repository).analyze("2330.TW", as_of=now.date())
+    assert snapshot.article_count == 1
+    assert snapshot.score == 75.0  # only the 0.5 item: (0.5 + 1) * 50
+
+
+async def test_label_written_after_as_of_is_not_visible_then() -> None:
+    repository = _repo("2330.TW")
+    published = datetime(2026, 11, 20, 2, tzinfo=UTC)
+    item = _item("2330.TW", "舊聞", "https://a.test/c", published, published).model_copy(
+        update={"classified_at": datetime(2026, 11, 26, 2, tzinfo=UTC)}
+    )
+    await repository.upsert_news_items([item])
+    before = (await repository.list_news_items("2330.TW", end=date(2026, 11, 21)))[0]
+    assert before.sentiment_label is None and before.sentiment_score is None
+    after = (await repository.list_news_items("2330.TW", end=date(2026, 11, 26)))[0]
+    assert after.sentiment_label == "bullish"
+
+
+def test_clean_text_strips_invisible_and_bidi_characters() -> None:
+    from quant_signal.application.news_matching import clean_text
+
+    assert clean_text("台​積‮電﻿⁦營收") == "台積電營收"
+
+
+async def test_non_http_urls_are_dropped_at_ingest() -> None:
+    repository = _repo("2330.TW")
+    feed = FakeFeed(
+        [_raw("台積電甲", "javascript:alert(1)"), _raw("台積電乙", "file:///etc/passwd"),
+         _raw("台積電丙", "https://ok.test/1")]
+    )
+    service = NewsSentimentSyncService(repository, None, rss_provider=feed)
+    assert await service.sync_symbol("2330.TW") == 1
+    assert (await repository.list_news_items("2330.TW"))[0].url == "https://ok.test/1"
+
+
+def test_xml_with_entity_declarations_is_rejected() -> None:
+    from quant_signal.infrastructure.providers.news import FeedError
+
+    bomb = '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa">]><rss><channel/></rss>'
+    with pytest.raises(FeedError):
+        parse_feed(bomb, source="x", fetched_at=datetime.now(UTC))
+
+
+async def test_oversized_response_is_refused() -> None:
+    from quant_signal.infrastructure.providers.news import FeedError, read_limited
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 5000))
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(FeedError):
+            await read_limited(client, "https://f.test/big", limit=1000)
+
+
+async def test_recurring_headline_is_only_deduped_within_seven_days() -> None:
+    repository = _repo("2330.TW")
+    old = datetime.now(UTC) - timedelta(days=10)
+    await repository.upsert_news_items(
+        [_item("2330.TW", "台積電公布月營收", "https://a.test/old", old, old)]
+    )
+    feed = FakeFeed([_raw("台積電公布月營收", "https://a.test/new", hours_ago=1)])
+    service = NewsSentimentSyncService(repository, None, rss_provider=feed)
+    assert await service.sync_symbol("2330.TW") == 1  # a week-old twin does not block it
+    service.rss_provider = FakeFeed(  # type: ignore[assignment]
+        [_raw("台積電公布月營收 - 某媒體", "https://b.test/x", hours_ago=1)]
+    )
+    assert await service.sync_symbol("2330.TW") == 0  # but a fresh twin does
+
+
+async def test_missing_instrument_notice_is_logged_once_per_slot(caplog) -> None:
+    repository = _repo("2330.TW")
+    repository.watchlists[uuid4()] = {"9999.TW": ("未同步", "TW", datetime.now(UTC))}
+    service = NewsSentimentSyncService(repository, None, rss_provider=FakeFeed([]))
+    attempts: dict = {}
+    kwargs = dict(news_time="08:30", max_symbols=60, now=datetime(2026, 11, 26, 3, 0, tzinfo=UTC),
+                  sleep=_no_sleep, attempts=attempts)
+    with caplog.at_level("INFO"):
+        for _ in range(3):
+            await run_news_slot(repository, service, **kwargs)
+    assert sum("no instruments row" in record.message for record in caplog.records) == 1

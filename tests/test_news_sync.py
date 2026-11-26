@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from quant_signal.application.news_sync import NewsSentimentSyncService
 from quant_signal.domain.models import Instrument
@@ -35,9 +35,9 @@ class FakeClassifierClient:
         results = []
         for row in payload["headlines"]:
             if "創新高" in row["headline"]:
-                results.append({"index": row["index"], "label": "bullish", "score": 0.8})
+                results.append({"id": row["id"], "label": "bullish", "score": 0.8})
             else:
-                results.append({"index": row["index"], "label": "bearish", "score": -0.6})
+                results.append({"id": row["id"], "label": "bearish", "score": -0.6})
         return {"results": results}
 
 
@@ -46,7 +46,7 @@ async def test_news_sentiment_sync_classifies_and_persists_new_headlines() -> No
     repository.instruments["2330.TW"] = Instrument(
         symbol="2330.TW", name="台積電", market="TW"
     )
-    published_at = datetime(2026, 7, 30, tzinfo=UTC)
+    published_at = datetime.now(UTC) - timedelta(hours=2)
     headlines = [
         RawHeadline(
             headline="台積電股價創新高",
