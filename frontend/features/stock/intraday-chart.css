@@ -1,0 +1,56 @@
+.intraday-chart {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.intraday-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.intraday-heading h3 {
+  margin: 0;
+}
+.intraday-controls,
+.intraday-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.intraday-controls button,
+.intraday-tools button {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+.intraday-controls button[aria-pressed="true"],
+.intraday-tools button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.intraday-controls button:disabled,
+.intraday-tools button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.intraday-note,
+.intraday-legend {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+}
+.intraday-canvas {
+  width: 100%;
+  height: 340px;
+  margin-top: 0.5rem;
+}
+.intraday-error {
+  color: var(--down);
+  font-size: var(--text-sm);
+}

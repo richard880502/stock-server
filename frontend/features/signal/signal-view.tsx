@@ -90,7 +90,7 @@ function SignalDetail() {
         refreshing={refreshing}
       />
       <div className={refreshing ? "is-refreshing" : undefined}>
-        <PriceChartCard symbol={signal.symbol} name={name} asOf={signal.as_of} />
+        <PriceChartCard symbol={signal.symbol} name={name} asOf={signal.as_of} liveAsOf={!refreshing && signal.symbol === query.symbol ? query.asOf : undefined} />
       </div>
       <div className={`evidence${refreshing ? " is-refreshing" : ""}`}>
         <div className="section-title">

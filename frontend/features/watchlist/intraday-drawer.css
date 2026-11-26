@@ -1,0 +1,12 @@
+.intraday-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; padding: 0; width: min(760px, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh; border: 0; background: var(--surface); color: var(--text); box-shadow: var(--shadow-3); }
+.intraday-drawer::backdrop { background: rgb(0 0 0 / .6); }
+.intraday-drawer-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); }
+.intraday-drawer-header h2 { margin: 0; font-size: 1.2rem; }
+.intraday-drawer-content { display: grid; align-content: start; gap: .75rem; overflow-y: auto; max-height: calc(100dvh - 5rem); padding: 1.25rem 1.5rem; }
+.intraday-drawer-content select { width: 100%; }
+.intraday-drawer :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.watch-live-status { color: var(--text-3); font-size: .85rem; margin: .25rem 0 .75rem; }
+.watch-live-cell { white-space: nowrap; }
+.watch-live-cell small { display: block; color: var(--text-3); font-size: .75rem; }
+.watch-live-cell button { margin-top: .3rem; }
+@media (max-width: 600px) { .intraday-drawer { width: 100%; } .intraday-drawer-header, .intraday-drawer-content { padding-left: 1rem; padding-right: 1rem; } }
