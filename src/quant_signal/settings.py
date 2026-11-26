@@ -14,6 +14,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # A blank variable means "not set" (same as ${VAR:-default} in the compose
+        # files). Coolify keeps passing variables a compose file stopped referencing,
+        # with an empty value; without this a blank SYNC_ENABLED crashes the worker.
+        env_ignore_empty=True,
     )
 
     database_url: str = "postgresql+asyncpg://quant:quant@127.0.0.1:15432/quant_signal"
