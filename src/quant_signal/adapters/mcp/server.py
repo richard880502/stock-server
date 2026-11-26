@@ -19,6 +19,7 @@ from quant_signal.application.llm_analysis import (
     create_llm_client,
 )
 from quant_signal.application.market_rankings import MarketRankingService
+from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
 from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
@@ -308,6 +309,29 @@ async def analyze_news_sentiment(
             strategy_version=strategy_version,
         )
         return snapshot.model_dump(mode="json")
+
+
+@mcp.tool()
+async def get_stock_events(
+    symbol: str, as_of: str | None = None, days: int = 30
+) -> dict[str, Any]:
+    """Official announcements (重大訊息, 除權息) with rule-based category/polarity, active
+    disposition/attention flags and monthly-revenue metrics for one stock."""
+    async with session_factory() as session:
+        result = await StockEventsService(PostgresQuantRepository(session)).get(
+            symbol.strip().upper(), as_of=_resolve_as_of(as_of), days=max(1, min(days, 365))
+        )
+        return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def get_market_risk_flags(as_of: str | None = None) -> dict[str, Any]:
+    """All disposition (處置股) and attention (注意股) stocks active on a date."""
+    async with session_factory() as session:
+        result = await MarketRiskFlagService(PostgresQuantRepository(session)).get(
+            as_of=_resolve_as_of(as_of)
+        )
+        return result.model_dump(mode="json")
 
 
 @mcp.tool()

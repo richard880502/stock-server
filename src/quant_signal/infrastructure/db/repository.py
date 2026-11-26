@@ -61,6 +61,7 @@ from quant_signal.infrastructure.db.models import (
     UserSessionRow,
     WatchlistItemRow,
 )
+from quant_signal.infrastructure.db.official_repository import OfficialDataRepositoryMixin
 from quant_signal.infrastructure.db.prices import (
     LatestQuote,
     MinuteBar,
@@ -72,7 +73,7 @@ KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
 LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
-class PostgresQuantRepository:
+class PostgresQuantRepository(OfficialDataRepositoryMixin):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 

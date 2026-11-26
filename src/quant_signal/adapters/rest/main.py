@@ -37,6 +37,7 @@ from quant_signal.application.llm_analysis import (
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.market_sectors import SectorRotationService, SortKey
+from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
     BacktestJobService,
@@ -84,12 +85,14 @@ from quant_signal.domain.models import (
     MarketEnvironmentSnapshot,
     MarketFlowSeries,
     MarketRanking,
+    MarketRiskFlags,
     NewsSentimentSnapshot,
     PriceSeries,
     RankingMetric,
     SectorRotation,
     SectorStocks,
     SignalSnapshot,
+    StockEvents,
     StockOverview,
     Watchlist,
 )
@@ -594,6 +597,30 @@ def create_app() -> FastAPI:
             return await StockOverviewService(repository).get(symbol)
         except StockNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/stocks/{symbol}/events", response_model=StockEvents)
+    async def stock_events(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+        days: Annotated[int, Query(ge=1, le=365)] = 30,
+    ) -> StockEvents:
+        """Official announcements and ex-rights, active disposition/attention flags and
+        the latest monthly-revenue metrics, point-in-time as of ``as_of``."""
+        try:
+            return await StockEventsService(repository).get(
+                symbol, as_of=as_of or date.today(), days=days
+            )
+        except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/market/risk-flags", response_model=MarketRiskFlags)
+    async def market_risk_flags(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> MarketRiskFlags:
+        """Every disposition (處置) and attention (注意) stock active on ``as_of``."""
+        return await MarketRiskFlagService(repository).get(as_of=as_of or date.today())
 
     @router.get("/bars/{symbol}", response_model=PriceSeries)
     async def price_series(

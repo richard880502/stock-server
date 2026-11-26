@@ -35,9 +35,10 @@ from quant_signal.domain.models import (
     taipei_day_end,
 )
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
+from quant_signal.infrastructure.memory_official import MemoryOfficialDataMixin
 
 
-class MemoryQuantRepository:
+class MemoryQuantRepository(MemoryOfficialDataMixin):
     """Test and demo repository with the same contract as PostgreSQL."""
 
     def __init__(self) -> None:

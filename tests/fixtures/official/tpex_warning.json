@@ -1,0 +1,34 @@
+[
+ {
+  "Date": "1151125",
+  "SecuritiesCompanyCode": "3259",
+  "CompanyName": "鑫創",
+  "TradingInformation": "最近六個營業日(含當日)累積之最後成交價跌幅達47.88%(第一款)",
+  "ClosePrice": "5.64",
+  "PriceEarningRatio": "N/A"
+ },
+ {
+  "Date": "1151125",
+  "SecuritiesCompanyCode": "3672",
+  "CompanyName": "康聯訊",
+  "TradingInformation": "最近六個營業日(含當日)累積之最後成交價跌幅達27.48%，當日之成交量較最近六十個營業日日平均成交量放大9.61倍(第三款)元大證券公司當日受託買進該有價證券之成交量占當日該有價證券總成交量之比率為85.71%，康和證券公司當日受託賣出該有價證券之成交量占當日該有價證券總成交量之比率為76.33%(第五款)",
+  "ClosePrice": "8.51",
+  "PriceEarningRatio": "N/A"
+ },
+ {
+  "Date": "1151125",
+  "SecuritiesCompanyCode": "4577",
+  "CompanyName": "達航科技",
+  "TradingInformation": "最近六個營業日(含當日)累積之最後成交價跌幅達38.24%(第一款)",
+  "ClosePrice": "74.50",
+  "PriceEarningRatio": "219.12"
+ },
+ {
+  "Date": "1151125",
+  "SecuritiesCompanyCode": "61828",
+  "CompanyName": "合晶八",
+  "TradingInformation": "最近六個營業日(含當日)累積之最後成交價跌幅達26.89%且最近六個營業日(含當日)起迄兩個營業日之最後成交價價差達新臺幣61元(第一款)",
+  "ClosePrice": "188.00",
+  "PriceEarningRatio": "N/A"
+ }
+]

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     news_anthropic_model: str | None = "claude-haiku-5-5"
     # How far back the whole-market snapshot is filled on first run.
     sync_market_lookback_days: int = Field(default=520, ge=30)
+    # Official TWSE/TPEx events, risk flags and monthly revenue (run by the sync worker).
+    official_events_enabled: bool = True
+    official_events_material_minutes: int = Field(default=30, ge=5, le=240)
+    official_events_retry_minutes: float = Field(default=10.0, gt=0)
     kronos_url: str | None = None
     kronos_api_key: SecretStr = SecretStr("")
     log_level: str = "INFO"
