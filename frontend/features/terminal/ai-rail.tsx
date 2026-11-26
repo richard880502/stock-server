@@ -90,7 +90,7 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
     <aside className="terminal-ai ai-rail" aria-label="AI 交易建議">
       <header className="ai-head">
         <h2>AI 交易建議</h2>
-        <span className="ai-model mono">{configured ? (llmStatus?.model ?? "LLM") : "量化訊號"}</span>
+        <span className="ai-model mono" title={configured ? (llmStatus?.model ?? undefined) : undefined}>{configured ? (llmStatus?.model ?? "LLM") : "量化訊號"}</span>
       </header>
 
       <SignalSection

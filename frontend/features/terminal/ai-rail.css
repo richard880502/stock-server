@@ -30,10 +30,13 @@
 }
 .ai-head h2 {
   margin: 0;
+  flex: none;
+  white-space: nowrap;
   font-size: var(--text-base);
   font-weight: var(--weight-semibold, 600);
 }
 .ai-model {
+  min-width: 0;
   color: var(--text-3);
   font-size: var(--text-xs);
   overflow: hidden;
