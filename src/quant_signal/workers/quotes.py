@@ -46,6 +46,7 @@ class MinuteBuffer:
     def __init__(self):
         self.rows = {}
         self.last = {}
+        self.current = {}
 
     def add(self, tick):
         stamp = datetime.fromisoformat(tick["trade_time"])
@@ -58,6 +59,9 @@ class MinuteBuffer:
         price = tick["price"]
         volume = tick["total_volume"]
         row = self.rows.get(key)
+        if row is None and self.current.get(symbol, {}).get("minute") == minute:
+            row = self.current[symbol]
+            self.rows[key] = row
         if row is None:
             if len(self.rows) >= 10000:
                 self.rows.pop(next(iter(self.rows)))
@@ -83,6 +87,19 @@ class MinuteBuffer:
                 last_time=stamp,
                 last_total_volume=volume,
             )
+        self.current[symbol] = self.rows[key]
+
+    def candle(self, symbol):
+        row = self.current[symbol]
+        return {
+            "time": int(row["minute"].timestamp()),
+            "open": row["open"],
+            "high": row["high"],
+            "low": row["low"],
+            "close": row["close"],
+            "volume": max(0, row["last_total_volume"] - row["first_total_volume"]) * 1000,
+            "is_partial": True,
+        }
 
     async def flush(self):
         if not self.rows:
@@ -116,7 +133,7 @@ class MinuteBuffer:
                 self.rows.pop(key, None)
 
 
-async def collect(redis, settings, owner, stop):
+async def collect(redis, settings, owner, stop, health=None):
     from quant_signal.infrastructure.providers.shioaji_feed import ShioajiFeed
 
     loop = asyncio.get_running_loop()
@@ -138,6 +155,7 @@ async def collect(redis, settings, owner, stop):
     subscribed = set()
     rejected = {}
     renewed = flushed = 0.0
+    connected = False
     try:
         # Renew independently while SDK login blocks in a thread.
         async def heartbeat():
@@ -145,12 +163,15 @@ async def collect(redis, settings, owner, stop):
                 if not await redis.eval(RENEW, 1, LOCK, owner):
                     disconnected.set()
                     return
-                await redis.set(HEALTH, "connecting" if not subscribed else "live", ex=15)
+                await redis.set(HEALTH, "live" if connected else "connecting", ex=15)
                 await asyncio.sleep(5)
 
         beat = asyncio.create_task(heartbeat())
         try:
             await asyncio.to_thread(feed.start)
+            connected = True
+            if health:
+                health.connected = True
             while not stop.is_set() and not disconnected.is_set():
                 if time.monotonic() - renewed > 5:
                     desired = set(await redis.zrangebyscore(DEMAND, time.time(), "+inf"))
@@ -178,11 +199,13 @@ async def collect(redis, settings, owner, stop):
                         batch.append(queue.get_nowait())
                     latest = {}
                     for event in batch:
+                        bars.add(event)
                         previous = latest.get(event["symbol"])
                         if previous is None or event["trade_epoch"] >= previous["trade_epoch"]:
                             latest[event["symbol"]] = event
                     pipeline = redis.pipeline(transaction=False)
                     for event in latest.values():
+                        event["candle"] = bars.candle(event["symbol"])
                         pipeline.eval(
                             PUBLISH,
                             3,
@@ -195,14 +218,6 @@ async def collect(redis, settings, owner, stop):
                     outcomes = await pipeline.execute()
                     if 0 in outcomes:
                         break
-                    accepted = {
-                        symbol
-                        for symbol, outcome in zip(latest, outcomes, strict=True)
-                        if outcome == 1
-                    }
-                    for event in batch:
-                        if event["symbol"] in accepted:
-                            bars.add(event)
                 if time.monotonic() - flushed > 5:
                     try:
                         await bars.flush()
@@ -213,6 +228,8 @@ async def collect(redis, settings, owner, stop):
             beat.cancel()
             await asyncio.gather(beat, return_exceptions=True)
     finally:
+        if health:
+            health.connected = False
         await asyncio.to_thread(feed.close)
         if await redis.get(LOCK) == owner:
             await redis.set(HEALTH, "unavailable", ex=15)
@@ -220,6 +237,8 @@ async def collect(redis, settings, owner, stop):
 
 
 async def run():
+    from quant_signal.workers.quote_health import QuoteHealth, serve
+
     settings = get_settings()
     if not settings.quotes_enabled:
         raise RuntimeError("Set QUOTES_ENABLED=true on the collector")
@@ -235,16 +254,30 @@ async def run():
         socket_timeout=3,
     )
     stop = asyncio.Event()
+    health = QuoteHealth()
+    health_server = asyncio.create_task(serve(health, redis))
+
+    async def pulse():
+        while not stop.is_set():
+            health.alive = time.monotonic()
+            await asyncio.sleep(5)
+
+    pulse_task = asyncio.create_task(pulse())
     for sig in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(sig, stop.set)
     try:
         while not stop.is_set():
+            if health_server.done():
+                await health_server
+                raise RuntimeError("Quote health server stopped")
             owner = str(uuid4())
             try:
                 if await redis.set(LOCK, owner, nx=True, ex=30):
+                    health.leader = True
                     try:
-                        await collect(redis, settings, owner, stop)
+                        await collect(redis, settings, owner, stop, health)
                     finally:
+                        health.leader = False
                         await redis.eval(RELEASE, 1, LOCK, owner)
             except Exception:
                 # SDK exceptions can contain account data. Keep public logs generic.
@@ -254,6 +287,10 @@ async def run():
             except TimeoutError:
                 pass
     finally:
+        health.connected = False
+        for task in (health_server, pulse_task):
+            task.cancel()
+        await asyncio.gather(health_server, pulse_task, return_exceptions=True)
         await redis.aclose()
 
 
