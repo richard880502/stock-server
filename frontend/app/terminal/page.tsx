@@ -1,7 +1,6 @@
-import { TerminalView } from "@/features/terminal/terminal-view";
+import { redirect } from "next/navigation";
 
-export const metadata = { title: "看盤 — Quant Signal" };
-
+// 看盤 moved into the 自選股 page as a view.
 export default function TerminalPage() {
-  return <TerminalView />;
+  redirect("/watchlist?view=terminal");
 }
