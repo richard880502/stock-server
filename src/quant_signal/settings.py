@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     quotes_backfill_enabled: bool = True
     # Taipei time after which the day's minutes are replaced with official kbars.
     quotes_backfill_after_close: str = Field(
-        default="14:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+        default="13:55", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
     )
     # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
     quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)

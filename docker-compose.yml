@@ -1,7 +1,9 @@
 services:
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - quote_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -30,7 +32,7 @@ services:
       SHIOAJI_SECRET_KEY: ${SHIOAJI_SECRET_KEY:-}
       SHIOAJI_SIMULATION: ${SHIOAJI_SIMULATION:-false}
       QUOTES_BACKFILL_ENABLED: ${QUOTES_BACKFILL_ENABLED:-true}
-      QUOTES_BACKFILL_AFTER_CLOSE: "${QUOTES_BACKFILL_AFTER_CLOSE:-14:45}"
+      QUOTES_BACKFILL_AFTER_CLOSE: "${QUOTES_BACKFILL_AFTER_CLOSE:-13:55}"
       QUOTES_BACKFILL_INTRADAY_MAX: ${QUOTES_BACKFILL_INTRADAY_MAX:-150}
       QUOTES_BACKFILL_WHOLE_MARKET: ${QUOTES_BACKFILL_WHOLE_MARKET:-true}
       QUOTES_BACKFILL_MAX_SYMBOLS: ${QUOTES_BACKFILL_MAX_SYMBOLS:-2500}
@@ -179,3 +181,4 @@ services:
 
 volumes:
   quant_signal_pgdata:
+  quote_redis_data:

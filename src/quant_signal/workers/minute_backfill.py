@@ -7,7 +7,8 @@ Shioaji):
   the live feed started are filled once (only whole minutes strictly before the
   subscription minute, so the live feed and the backfill never write the same
   minute, and existing rows are never touched).
-* After the close, once per weekday: the WHOLE market (every stock in the latest
+* After the close, once per weekday (and resumed the next off-session window if it was
+  interrupted): the WHOLE market (every stock in the latest
   official daily snapshot, watched and live-seen symbols first, plus TAIEX futures)
   is replaced with the official bars, so a day is complete even if nobody looked at
   it live or the collector was disconnected.
@@ -16,6 +17,13 @@ Every kbars call goes through the shared Redis budget (``shioaji_budget``) and a
 history queries run one at a time from a single queue. Before and during the
 whole-market run the account's daily data usage (``api.usage()``) is checked; the run
 pauses when the remaining traffic drops below the configured reserve.
+
+The whole-market run only spends queries OFF-session (``session_day(now) is None``:
+13:50-15:00 and 05:00-08:00 on weekdays, weekends after Saturday 05:00). Anything sent
+inside the session would count toward Shioaji's 270-per-day kbars cap that intraday
+catch-ups need. When the session starts mid-run it stops, keeps its progress (the
+``:done`` set) and the unfinished day is resumed in the next off-session window,
+which is why the previous weekday is checked as well.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from quant_signal.infrastructure.db.models import (
     WatchlistItemRow,
 )
 from quant_signal.infrastructure.db.prices import MinuteBar, read_minutes, store_minutes
-from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted
+from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted, session_day
 
 log = logging.getLogger(__name__)
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -51,10 +59,15 @@ FUTURES_NIGHT_OPEN = time(15, 0)
 QUERY_INTERVAL_SECONDS = 0.3
 KEY = PREFIX + "backfill:"
 DEDUPE_TTL_SECONDS = 2 * 86400
+# Finished close keys and their done sets: long enough that Monday never redoes Friday.
+DONE_TTL_SECONDS = 5 * 86400
 CLAIM_TTL_SECONDS = 3600  # A crashed after-close run is retried after this at most.
 RETRY_AFTER_BUDGET_SECONDS = 900
 # Re-check the account's remaining traffic every this many symbols.
 USAGE_CHECK_EVERY = 100
+# A day whose first this-many symbols all return no rows is a market holiday.
+HOLIDAY_PROBE_SYMBOLS = 25
+PROGRESS_EVERY = 200
 
 Fetch = Callable[[str, datetime, datetime], Awaitable[list[MinuteBar]]]
 UsageCheck = Callable[[], Awaitable[bool]]
@@ -64,6 +77,14 @@ class UsageLow(Exception):
     """The account's remaining daily traffic is below the reserve; stop history queries."""
 
 
+class SessionStarted(Exception):
+    """A session-limited period began; the whole-market run must stop spending queries."""
+
+
+class DayClosed(Exception):
+    """The market was closed that day (the first symbols all returned nothing)."""
+
+
 def taipei_now() -> datetime:
     return datetime.now(TAIPEI)
 
@@ -71,6 +92,11 @@ def taipei_now() -> datetime:
 def parse_clock(value: str) -> time:
     hour, minute = value.strip().split(":")
     return time(int(hour), int(minute))
+
+
+def off_session(now: datetime) -> bool:
+    """True when kbars queries do not count toward Shioaji's session-limited cap."""
+    return session_day(now) is None
 
 
 def post_close_due(now: datetime, at: time) -> bool:
@@ -210,15 +236,23 @@ async def backfill(
     pause: float = QUERY_INTERVAL_SECONDS,
     on_done: Callable[[str], Awaitable[None]] | None = None,
     usage_ok: UsageCheck | None = None,
+    may_query: Callable[[], bool] | None = None,
+    holiday_probe: int = 0,
 ) -> dict[str, int]:
     """Fetch and store official minutes per ``(symbol, start, end)``; rows written each.
 
     Only minutes with ``start <= minute < end`` are written. Raises BudgetExhausted
     when the shared Shioaji budget says stop, and UsageLow when ``usage_ok`` reports
-    the account's remaining daily traffic is below the reserve.
+    the account's remaining daily traffic is below the reserve. ``may_query`` is
+    checked before every symbol; when it says no, SessionStarted is raised and nothing
+    is sent. With ``holiday_probe`` > 0, DayClosed is raised when that many symbols
+    in a row (from the start) all returned no rows.
     """
     written: dict[str, int] = {}
+    probed = 0
     for index, (symbol, start, end) in enumerate(windows):
+        if may_query is not None and not may_query():
+            raise SessionStarted()
         if usage_ok is not None and index % USAGE_CHECK_EVERY == 0 and not await usage_ok():
             log.info("Shioaji traffic reserve reached; minute backfill paused")
             raise UsageLow()
@@ -234,6 +268,13 @@ async def backfill(
             log.warning("Minute backfill skipped one symbol")
             continue
         rows = [row for row in rows if start <= row.minute < end]
+        if holiday_probe and probed is not None:
+            if rows:
+                probed = None
+            else:
+                probed += 1
+                if probed >= holiday_probe:
+                    raise DayClosed()
         if replace and rows:
             compared, matched = alignment(await live_minutes(symbol, start, end), rows)
             if compared >= 10 and matched / compared < 0.8:
@@ -270,8 +311,10 @@ class MinuteBackfiller:
         now: Callable[[], datetime] = taipei_now,
         pause: float = QUERY_INTERVAL_SECONDS,
         usage_ok: UsageCheck | None = None,
+        off_session: Callable[[datetime], bool] = off_session,
     ) -> None:
         self.redis = redis
+        self.off_session = off_session
         self.fetch = fetch
         self.usage_ok = usage_ok
         self.whole_market = getattr(settings, "quotes_backfill_whole_market", True)
@@ -305,21 +348,32 @@ class MinuteBackfiller:
             return False
 
     async def check_after_close(self, extra: Iterable[str] = ()) -> bool:
-        """Claim and queue today's after-close completion when due. Never raises."""
+        """Claim and queue unfinished after-close days when off-session. Never raises.
+
+        Today's job when due, plus the previous weekday's if it never finished (cut off
+        by the 15:00 night session, or a restart). Nothing older is ever retried.
+        Returns True when at least one day was queued.
+        """
         now = self.now()
-        if not post_close_due(now, self.after_close):
+        if not self.off_session(now):
             return False
-        day = now.astimezone(TAIPEI).date()
-        try:
-            if not await self.redis.set(
-                self.close_key(day), "running", nx=True, ex=CLAIM_TTL_SECONDS
-            ):
-                return False
-        except Exception:
-            log.warning("After-close minute backfill not scheduled")
-            return False
-        self.queue.put_nowait(_Job("close", day=day, symbol=",".join(sorted(set(extra)))))
-        return True
+        today = now.astimezone(TAIPEI).date()
+        days = [previous_weekday(today)]
+        if post_close_due(now, self.after_close):
+            days.append(today)
+        queued = False
+        for day in days:
+            try:
+                if not await self.redis.set(
+                    self.close_key(day), "running", nx=True, ex=CLAIM_TTL_SECONDS
+                ):
+                    continue
+            except Exception:
+                log.warning("After-close minute backfill not scheduled")
+                return queued
+            self.queue.put_nowait(_Job("close", day=day, symbol=",".join(sorted(set(extra)))))
+            queued = True
+        return queued
 
     async def run(self) -> None:
         """Consume the queue forever (cancel to stop); one history query at a time."""
@@ -355,10 +409,22 @@ class MinuteBackfiller:
                 for symbol in symbols
                 if symbol not in finished
             ]
+            fresh = not finished
+            handled = 0
 
             async def mark(symbol: str) -> None:
+                nonlocal handled
                 await self.redis.sadd(done_key, symbol)
-                await self.redis.expire(done_key, DEDUPE_TTL_SECONDS)
+                await self.redis.expire(done_key, DONE_TTL_SECONDS)
+                finished.add(symbol)
+                handled += 1
+                if handled % PROGRESS_EVERY == 0:
+                    log.info(
+                        "After-close minute backfill %s: %d/%d symbols",
+                        job.day.isoformat(),
+                        len(finished),
+                        len(symbols),
+                    )
 
             written = await backfill(
                 self.fetch,
@@ -367,13 +433,22 @@ class MinuteBackfiller:
                 pause=self.pause,
                 on_done=mark,
                 usage_ok=self.usage_ok,
+                may_query=lambda: self.off_session(self.now()),
+                # Only a day that has not produced anything yet can be a holiday.
+                holiday_probe=HOLIDAY_PROBE_SYMBOLS if fresh else 0,
             )
-            await self.redis.set(key, "done", ex=DEDUPE_TTL_SECONDS)
+            await self.redis.set(key, "done", ex=DONE_TTL_SECONDS)
             log.info(
                 "After-close minute backfill: %d symbols, %d minutes",
                 len(written),
                 sum(written.values()),
             )
+        except DayClosed:
+            await self.redis.set(key, "done", ex=DONE_TTL_SECONDS)
+            log.info("No market data on %s; treated as a closed day", job.day.isoformat())
+        except SessionStarted:
+            log.info("Session started; after-close minute backfill waits for the next window")
+            await self._release(key, retry_after=RETRY_AFTER_BUDGET_SECONDS)
         except (BudgetExhausted, UsageLow):
             await self._release(key, retry_after=RETRY_AFTER_BUDGET_SECONDS)
         except BaseException:
@@ -395,7 +470,8 @@ def main() -> None:
 
     Opens its own Shioaji connection (each account allows up to 5) and draws from the
     same Redis query budget as the collector, so it can never push the account over
-    Shioaji's limits. Run it outside the session when possible.
+    Shioaji's limits. A whole-market run is refused in-session; single --symbol runs are
+    allowed and count against the session cap.
     """
     from redis.asyncio import Redis
 
@@ -427,6 +503,12 @@ def main() -> None:
             requested = [s.strip().upper() for s in args.symbol]
             if any(not SYMBOL.fullmatch(s) for s in requested):
                 raise SystemExit("Symbols must look like 2330.TW, 6488.TWO or TXF.TAIFEX")
+            if not requested and not off_session(taipei_now()):
+                raise SystemExit(
+                    "A whole-market backfill would use the session-limited kbars allowance; "
+                    "run it off-session (13:50-15:00 or 05:00-08:00 on weekdays, or on a "
+                    "weekend), or pass --symbol for single symbols"
+                )
             symbols = requested or await symbols_to_complete(args.date)
             symbols = symbols[: settings.quotes_backfill_max_symbols]
             await asyncio.to_thread(feed.start)

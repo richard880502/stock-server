@@ -406,7 +406,7 @@ async def test_after_close_backfill_logs_misaligned_official_minutes(monkeypatch
 
 
 def backfiller(redis, fetch, now):
-    settings = Settings(quotes_backfill_after_close="14:45", quotes_backfill_max_symbols=2)
+    settings = Settings(quotes_backfill_after_close="13:55", quotes_backfill_max_symbols=2)
     return mb.MinuteBackfiller(redis, settings, fetch, now=lambda: now["at"], pause=0)
 
 
@@ -448,7 +448,8 @@ async def test_intraday_backfill_skips_quietly_when_the_budget_is_used_up(monkey
 
 async def test_after_close_runs_once_and_retries_only_what_is_left(monkeypatch):
     redis = FakeRedis()
-    now = {"at": taipei(2026, 11, 26, 14, 40)}
+    now = {"at": taipei(2026, 11, 26, 13, 54)}
+    redis.values[mb.MinuteBackfiller.close_key(date(2026, 11, 25))] = "done"
     fetched, stored = [], []
     budget = {"left": 1}
 
@@ -474,8 +475,8 @@ async def test_after_close_runs_once_and_retries_only_what_is_left(monkeypatch):
     monkeypatch.setattr(mb, "symbols_to_complete", symbols)
     monkeypatch.setattr(mb, "live_minutes", live)
     worker = backfiller(redis, fetch, now)
-    assert await worker.check_after_close() is False  # Not yet 14:45.
-    now["at"] = taipei(2026, 11, 26, 14, 46)
+    assert await worker.check_after_close() is False  # Not yet 13:55.
+    now["at"] = taipei(2026, 11, 26, 13, 56)
     assert await worker.check_after_close({"2330.TW"}) is True
     assert await worker.check_after_close() is False  # Claimed for today.
     key = worker.close_key(THURSDAY)
@@ -491,13 +492,16 @@ async def test_after_close_runs_once_and_retries_only_what_is_left(monkeypatch):
     # Capped at QUOTES_BACKFILL_MAX_SYMBOLS=2 and the finished symbol is not refetched.
     assert fetched == ["2330.TW", "9999.TW"]
     assert redis.values[key] == "done"
+    assert redis.ttl[key] == mb.DONE_TTL_SECONDS == 5 * 86400
+    assert redis.ttl[key + ":done"] == mb.DONE_TTL_SECONDS
     # Once the day is official, a new subscription needs no intraday catch-up.
     assert await worker.on_subscribed("2330.TW", taipei(2026, 11, 26, 15, 0)) is False
 
 
 async def test_after_close_releases_the_claim_on_failure(monkeypatch):
     redis = FakeRedis()
-    now = {"at": taipei(2026, 11, 26, 15, 0)}
+    now = {"at": taipei(2026, 11, 26, 14, 0)}
+    redis.values[mb.MinuteBackfiller.close_key(date(2026, 11, 25))] = "done"
 
     async def broken(day, extra=(), whole_market=True):
         raise ConnectionError("database down")
@@ -510,6 +514,7 @@ async def test_after_close_releases_the_claim_on_failure(monkeypatch):
     assert worker.close_key(THURSDAY) not in redis.values
     assert await worker.check_after_close() is True  # Retried on the next check.
     now["at"] = taipei(2026, 11, 28, 15, 0)
+    redis.values[mb.MinuteBackfiller.close_key(date(2026, 11, 27))] = "done"
     assert (
         await mb.MinuteBackfiller(
             redis, Settings(), None, now=lambda: now["at"]
@@ -554,7 +559,7 @@ async def test_worker_runs_jobs_one_at_a_time_and_survives_failures(monkeypatch)
 def test_backfill_settings_are_validated():
     settings = Settings()
     assert settings.quotes_backfill_enabled is True
-    assert settings.quotes_backfill_after_close == "14:45"
+    assert settings.quotes_backfill_after_close == "13:55"
     assert settings.quotes_backfill_intraday_max == 150
     assert settings.quotes_backfill_max_symbols == 2500
     assert settings.quotes_backfill_whole_market is True
