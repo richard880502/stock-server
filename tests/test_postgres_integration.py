@@ -443,3 +443,104 @@ async def test_industries_and_intraday_snapshots_roundtrip(sessions) -> None:
             )
             if i.symbol == symbol
         ]
+
+
+# --- news pipeline against real SQL ----------------------------------------------------
+
+
+async def test_news_upsert_and_point_in_time_reads_on_postgres(sessions) -> None:
+    from quant_signal.domain.models import NewsItem, taipei_day_end  # noqa: F401
+
+    symbol = _symbol()
+    published = datetime(2026, 11, 20, 2, tzinfo=UTC)
+    fetched = datetime(2026, 11, 26, 2, tzinfo=UTC)
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        # never auto-creates an instrument
+        orphan = NewsItem(
+            symbol=symbol, headline="孤兒", url="https://a.test/o", source="g",
+            published_at=published, retrieved_at=fetched,
+        )
+        assert await repo.upsert_news_items([orphan]) == 0
+        assert not await repo.instrument_exists(symbol)
+
+        await session.execute(
+            text("INSERT INTO instruments (id, symbol, name, market) VALUES (:i, :s, 'ZZ', 'TW')"),
+            {"i": uuid4(), "s": symbol},
+        )
+        await session.commit()
+        assert await repo.instrument_exists(symbol)
+
+        unlabeled = NewsItem(
+            symbol=symbol, headline="標題", url="https://a.test/1", source="g",
+            published_at=published, retrieved_at=fetched, available_at=fetched,
+        )
+        assert await repo.upsert_news_items([unlabeled]) == 1
+
+        # re-upsert with a label: classified_at is stored, first-seen times stay
+        later = fetched + timedelta(days=2)  # 11/28 02:00 UTC = 11/28 10:00 Taipei
+        labeled = unlabeled.model_copy(
+            update={
+                "sentiment_label": "bullish", "sentiment_score": 0.6, "classified_at": later,
+                "retrieved_at": later, "available_at": later,
+            }
+        )
+        await repo.upsert_news_items([labeled])
+        row = (await repo.list_news_items(symbol))[0]
+        assert row.sentiment_label == "bullish" and row.classified_at == later
+        assert row.available_at == fetched and row.retrieved_at == fetched
+
+        # re-upsert without a label keeps the existing label
+        await repo.upsert_news_items([unlabeled.model_copy(update={"retrieved_at": later})])
+        row = (await repo.list_news_items(symbol))[0]
+        assert row.sentiment_label == "bullish" and row.sentiment_score == 0.6
+        assert row.classified_at == later and row.available_at == fetched
+
+        # as-of reads: published 11/20 but fetched 11/26 is invisible on 11/21 and 11/25
+        assert await repo.list_news_items(symbol, end=date(2026, 11, 21)) == []
+        assert await repo.list_news_items(symbol, end=date(2026, 11, 25)) == []
+        # visible once fetched, but the label (written 11/28) shows only from 11/28 on
+        for as_of in (date(2026, 11, 26), date(2026, 11, 27)):
+            seen = (await repo.list_news_items(symbol, end=as_of))[0]
+            assert seen.sentiment_label is None and seen.sentiment_score is None
+        assert (await repo.list_news_items(symbol, end=date(2026, 11, 28)))[0].sentiment_label == (
+            "bullish"
+        )
+        assert len(await repo.list_news_items(symbol, start=date(2026, 11, 19))) == 1
+        assert await repo.list_news_items(symbol, start=date(2026, 11, 21)) == []
+
+
+async def test_daily_bars_still_read_after_the_news_columns(sessions) -> None:
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert await repo.list_bars("ZZNOBARS.TW") == []  # selects every bars_daily column
+
+
+async def test_every_orm_column_exists_in_the_migrated_database() -> None:
+    from sqlalchemy import inspect
+
+    from quant_signal.infrastructure.db.models import Base
+
+    def drift(connection) -> list[str]:
+        inspector = inspect(connection)
+        db_tables = set(inspector.get_table_names())
+        missing: list[str] = []
+        for table in Base.metadata.sorted_tables:
+            if table.name not in db_tables:
+                missing.append(f"{table.name} (whole table)")
+                continue
+            db_columns = {column["name"] for column in inspector.get_columns(table.name)}
+            missing += [
+                f"{table.name}.{column.name}"
+                for column in table.columns
+                if column.name not in db_columns
+            ]
+        return missing
+
+    engine = create_async_engine(DATABASE_URL)  # type: ignore[arg-type]
+    try:
+        async with engine.connect() as connection:
+            missing = await connection.run_sync(drift)
+    finally:
+        await engine.dispose()
+    assert missing == [], f"ORM columns missing from the database: {missing}"

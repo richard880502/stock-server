@@ -129,8 +129,6 @@ class DailyBarRow(Base):
     adjustment_factor: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # When the sentiment label was written (NULL: unclassified, or labelled at retrieval).
-    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -413,6 +411,8 @@ class NewsItemRow(Base):
     )
     # When this system first held the item; as-of reads filter on it, not published_at.
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # When the sentiment label was written (NULL: unclassified, or labelled at retrieval).
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
