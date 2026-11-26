@@ -92,6 +92,7 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
     contract = SimpleNamespace(exchange="TSE")
     callbacks = SimpleNamespace(
         set_on_tick_stk_v1_callback=lambda callback: None,
+        set_on_tick_fop_v1_callback=lambda callback: None,
         set_event_callback=lambda callback: None,
         subscribe=lambda *args, **kwargs: None,
         unsubscribe=lambda *args, **kwargs: None,

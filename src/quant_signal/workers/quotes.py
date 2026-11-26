@@ -5,19 +5,31 @@ import json
 import logging
 import signal
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
 from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert
 
-from quant_signal.application.quote_cache import DEMAND, HEALTH, LOCK, PREFIX
+from quant_signal.application.quote_cache import (
+    DEMAND,
+    HEALTH,
+    LOCK,
+    PREFIX,
+    is_futures,
+    volume_unit,
+)
 from quant_signal.infrastructure.db.database import session_factory
 from quant_signal.infrastructure.db.models import QuoteMinuteRow
 from quant_signal.settings import get_settings
 
 log = logging.getLogger(__name__)
+TAIPEI = ZoneInfo("Asia/Taipei")
+# Log in again before each futures session so the continuous near-month contract
+# (TXFR1) follows the monthly roll: contracts are downloaded at login.
+SESSION_REFRESH = ((8, 30), (14, 55))
 RENEW = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
  return redis.call('EXPIRE', KEYS[1], 30)
@@ -40,6 +52,30 @@ redis.call('SET', KEYS[2], ARGV[2], 'EX', 86400)
 redis.call('PUBLISH', KEYS[3], ARGV[2])
 return 1
 """
+
+
+def live_minutes_statement(rows):
+    """Merge live minutes into storage without ever touching official (backfilled) rows."""
+    statement = insert(QuoteMinuteRow).values(rows)
+    incoming = statement.excluded
+    current = QuoteMinuteRow
+    return statement.on_conflict_do_update(
+        index_elements=["symbol", "minute"],
+        set_={
+            "high": func.greatest(current.high, incoming.high),
+            "low": func.least(current.low, incoming.low),
+            "close": case(
+                (incoming.last_time >= current.last_time, incoming.close), else_=current.close
+            ),
+            "last_time": func.greatest(current.last_time, incoming.last_time),
+            "last_total_volume": func.greatest(
+                current.last_total_volume, incoming.last_total_volume
+            ),
+        },
+        # Official minutes store per-minute volume, not running totals; never mix
+        # live ticks into them.
+        where=current.is_partial,
+    )
 
 
 class MinuteBuffer:
@@ -93,13 +129,17 @@ class MinuteBuffer:
 
     def candle(self, symbol):
         row = self.current[symbol]
+        unit = volume_unit(symbol)
+        # Stocks: lots -> shares. Futures: contracts stay contracts.
+        multiplier = 1 if unit == "contract" else 1000
         return {
             "time": int(row["minute"].timestamp()),
             "open": row["open"],
             "high": row["high"],
             "low": row["low"],
             "close": row["close"],
-            "volume": max(0, row["last_total_volume"] - row["first_total_volume"]) * 1000,
+            "volume": max(0, row["last_total_volume"] - row["first_total_volume"]) * multiplier,
+            "volume_unit": "contract" if unit == "contract" else "share",
             "is_partial": True,
         }
 
@@ -108,26 +148,7 @@ class MinuteBuffer:
             return
         # Called in the same event loop as add(). Failed writes remain for retry.
         rows = [row.copy() for row in list(self.rows.values())[:500]]
-        statement = insert(QuoteMinuteRow).values(rows)
-        incoming = statement.excluded
-        current = QuoteMinuteRow
-        statement = statement.on_conflict_do_update(
-            index_elements=["symbol", "minute"],
-            set_={
-                "high": func.greatest(current.high, incoming.high),
-                "low": func.least(current.low, incoming.low),
-                "close": case(
-                    (incoming.last_time >= current.last_time, incoming.close), else_=current.close
-                ),
-                "last_time": func.greatest(current.last_time, incoming.last_time),
-                "last_total_volume": func.greatest(
-                    current.last_total_volume, incoming.last_total_volume
-                ),
-            },
-            # Official (backfilled) minutes store per-minute volume, not running totals;
-            # never mix live ticks into them.
-            where=current.is_partial,
-        )
+        statement = live_minutes_statement(rows)
         async with session_factory() as session:
             await session.execute(statement)
             await session.commit()
@@ -138,8 +159,21 @@ class MinuteBuffer:
                 self.rows.pop(key, None)
 
 
+def last_session_refresh(now):
+    """The most recent scheduled re-login time at or before ``now`` (Taipei)."""
+    local = now.astimezone(TAIPEI)
+    candidates = [
+        datetime.combine(day, datetime.min.time(), TAIPEI).replace(hour=hour, minute=minute)
+        for day in (local.date() - timedelta(days=1), local.date())
+        for hour, minute in SESSION_REFRESH
+    ]
+    return max(moment for moment in candidates if moment <= local)
+
+
 async def collect(redis, settings, owner, stop, health=None):
+    from quant_signal.infrastructure.providers.shioaji_budget import ShioajiBudget
     from quant_signal.infrastructure.providers.shioaji_feed import ShioajiFeed
+    from quant_signal.workers.minute_backfill import MinuteBackfiller
 
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue(maxsize=10000)
@@ -155,12 +189,17 @@ async def collect(redis, settings, owner, stop, health=None):
         settings,
         lambda tick: loop.call_soon_threadsafe(enqueue, tick),
         lambda *args: loop.call_soon_threadsafe(disconnected.set),
+        budget=ShioajiBudget.from_settings(redis, settings),
     )
     bars = MinuteBuffer()
     subscribed = set()
     rejected = {}
-    renewed = flushed = 0.0
+    renewed = flushed = close_checked = 0.0
     connected = False
+    connected_at = datetime.now(TAIPEI)
+    backfiller = None
+    if settings.quotes_backfill_enabled:
+        backfiller = MinuteBackfiller(redis, settings, feed.minute_bars)
     try:
         # Renew independently while SDK login blocks in a thread.
         async def heartbeat():
@@ -172,12 +211,23 @@ async def collect(redis, settings, owner, stop, health=None):
                 await asyncio.sleep(5)
 
         beat = asyncio.create_task(heartbeat())
+        # One sequential consumer: history queries never run concurrently.
+        history = asyncio.create_task(backfiller.run()) if backfiller else None
         try:
             await asyncio.to_thread(feed.start)
             connected = True
+            connected_at = datetime.now(TAIPEI)
             if health:
                 health.connected = True
             while not stop.is_set() and not disconnected.is_set():
+                if any(is_futures(s) for s in subscribed) and connected_at < last_session_refresh(
+                    datetime.now(TAIPEI)
+                ):
+                    log.info("Refreshing the Shioaji session before the futures session")
+                    break
+                if backfiller and time.monotonic() - close_checked > 60:
+                    await backfiller.check_after_close(subscribed)
+                    close_checked = time.monotonic()
                 if time.monotonic() - renewed > 5:
                     desired = set(await redis.zrangebyscore(DEMAND, time.time(), "+inf"))
                     desired = set(sorted(desired)[: settings.quotes_max_symbols])
@@ -187,10 +237,14 @@ async def collect(redis, settings, owner, stop, health=None):
                         if rejected.get(symbol, 0) > time.monotonic():
                             continue
                         try:
+                            subscribed_at = datetime.now(TAIPEI)
                             await asyncio.to_thread(feed.subscribe, symbol)
                             subscribed.add(symbol)
                         except (ValueError, LookupError):
                             rejected[symbol] = time.monotonic() + 60
+                            continue
+                        if backfiller:
+                            await backfiller.on_subscribed(symbol, subscribed_at)
                     subscribed.intersection_update(desired)
                     renewed = time.monotonic()
                 try:
@@ -230,8 +284,10 @@ async def collect(redis, settings, owner, stop, health=None):
                         log.warning("Minute storage unavailable; retaining bounded backlog")
                     flushed = time.monotonic()
         finally:
-            beat.cancel()
-            await asyncio.gather(beat, return_exceptions=True)
+            tasks = [task for task in (beat, history) if task]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         if health:
             health.connected = False

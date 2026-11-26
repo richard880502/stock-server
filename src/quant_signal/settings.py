@@ -101,6 +101,15 @@ class Settings(BaseSettings):
     shioaji_api_key: SecretStr = SecretStr("")
     shioaji_secret_key: SecretStr = SecretStr("")
     shioaji_simulation: bool = False
+    # Official 1-minute bars (Shioaji kbars) fill the minutes the live feed missed.
+    quotes_backfill_enabled: bool = True
+    # Taipei time after which every watched symbol is replaced with official minutes.
+    quotes_backfill_after_close: str = Field(
+        default="14:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+    )
+    # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
+    quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
+    quotes_backfill_max_symbols: int = Field(default=300, ge=1, le=2000)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
