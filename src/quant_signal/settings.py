@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     quota_backtest_per_day: int = Field(default=50, ge=0)
     watchlist_max_items: int = Field(default=25, ge=1, le=500)
     dashboard_api_key: SecretStr = SecretStr("")
+    quotes_enabled: bool = False
+    quotes_redis_url: SecretStr = SecretStr("redis://127.0.0.1:6379/0")
+    quotes_max_symbols: int = Field(default=200, ge=1, le=200)
+    quotes_max_connections_per_user: int = Field(default=5, ge=1, le=50)
+    shioaji_api_key: SecretStr = SecretStr("")
+    shioaji_secret_key: SecretStr = SecretStr("")
+    shioaji_simulation: bool = False
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

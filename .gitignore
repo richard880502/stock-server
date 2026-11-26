@@ -8,4 +8,5 @@ dist/
 build/
 htmlcov/
 .coverage
+shioaji.log
 

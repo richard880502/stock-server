@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=2.2,<3",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",
+    "redis>=5,<7",
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.35,<1",
 ]
@@ -30,10 +31,14 @@ dev = [
     "ruff>=0.12,<1",
 ]
 
+[project.optional-dependencies]
+quotes = ["shioaji==1.3.3", "sentry-sdk>=2,<3"]
+
 [project.scripts]
 quant-signal-api = "quant_signal.adapters.rest.main:run"
 quant-signal-mcp = "quant_signal.adapters.mcp.server:main"
 quant-signal-worker = "quant_signal.workers.backtests:main"
+quant-signal-quotes = "quant_signal.workers.quotes:main"
 quant-signal-seed-demo = "quant_signal.seed_demo:main"
 quant-signal-sync-data = "quant_signal.sync_data:main"
 quant-signal-import-branches = "quant_signal.import_branches:main"

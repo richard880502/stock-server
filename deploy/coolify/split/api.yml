@@ -12,6 +12,10 @@ services:
       MCP_TRANSPORT: streamable-http
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000,http://127.0.0.1:13000}
       API_AUTH_ENABLED: ${API_AUTH_ENABLED:-true}
+      QUOTES_ENABLED: ${QUOTES_ENABLED:-false}
+      QUOTES_REDIS_URL: ${QUOTES_REDIS_URL:-redis://stock-quote-redis:6379/0}
+      QUOTES_MAX_SYMBOLS: ${QUOTES_MAX_SYMBOLS:-200}
+      QUOTES_MAX_CONNECTIONS_PER_USER: ${QUOTES_MAX_CONNECTIONS_PER_USER:-5}
       LLM_ENABLED: ${LLM_ENABLED:-false}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LLM_MODEL: ${LLM_MODEL:-qwen3:8b}

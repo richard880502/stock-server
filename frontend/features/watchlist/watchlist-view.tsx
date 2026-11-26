@@ -17,6 +17,7 @@ import type { Sort, SortKey } from "./sort";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatPrice, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
+import { LiveQuotes } from "./live-quotes";
 import { Lots, PctChange } from "@/features/stock/flow-format";
 
 const marketLabel = { TW: "上市", TWO: "上櫃" } as const;
@@ -280,6 +281,7 @@ export function WatchlistView() {
             {removeError}
           </p>
         )}
+        <LiveQuotes items={items} />
         <Card className="watch-board" aria-label="自選股清單">
           <label className="watch-sort-select">
             <span>排序</span>

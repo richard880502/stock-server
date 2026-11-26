@@ -1,0 +1,35 @@
+services:
+  quote-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      stock-private:
+        aliases: [stock-quote-redis]
+
+  quotes:
+    build:
+      context: .
+      dockerfile: deploy/quotes/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?required}
+      QUOTES_ENABLED: "true"
+      QUOTES_REDIS_URL: redis://stock-quote-redis:6379/0
+      QUOTES_MAX_SYMBOLS: ${QUOTES_MAX_SYMBOLS:-200}
+      SHIOAJI_API_KEY: ${SHIOAJI_API_KEY:?required}
+      SHIOAJI_SECRET_KEY: ${SHIOAJI_SECRET_KEY:?required}
+      SHIOAJI_SIMULATION: ${SHIOAJI_SIMULATION:-false}
+    depends_on:
+      quote-redis:
+        condition: service_healthy
+    networks: [stock-private]
+
+networks:
+  stock-private:
+    external: true

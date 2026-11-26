@@ -1,4 +1,34 @@
 services:
+  quote-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  quotes:
+    build:
+      context: .
+      dockerfile: deploy/quotes/Dockerfile
+    profiles: ["quotes"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?required}
+      QUOTES_ENABLED: "true"
+      QUOTES_REDIS_URL: redis://quote-redis:6379/0
+      QUOTES_MAX_SYMBOLS: ${QUOTES_MAX_SYMBOLS:-200}
+      SHIOAJI_API_KEY: ${SHIOAJI_API_KEY:-}
+      SHIOAJI_SECRET_KEY: ${SHIOAJI_SECRET_KEY:-}
+      SHIOAJI_SIMULATION: ${SHIOAJI_SIMULATION:-false}
+    depends_on:
+      api:
+        condition: service_healthy
+      quote-redis:
+        condition: service_healthy
+
   postgres:
     image: postgres:17-alpine
     environment:
@@ -26,6 +56,9 @@ services:
       MCP_TRANSPORT: streamable-http
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:13000,http://127.0.0.1:13000}
       API_AUTH_ENABLED: ${API_AUTH_ENABLED:-true}
+      QUOTES_ENABLED: ${QUOTES_ENABLED:-false}
+      QUOTES_REDIS_URL: redis://quote-redis:6379/0
+      QUOTES_MAX_SYMBOLS: ${QUOTES_MAX_SYMBOLS:-200}
       LLM_ENABLED: ${LLM_ENABLED:-false}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LLM_MODEL: ${LLM_MODEL:-qwen3:8b}

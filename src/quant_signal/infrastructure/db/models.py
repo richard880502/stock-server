@@ -28,6 +28,22 @@ class Base(DeclarativeBase):
     pass
 
 
+class QuoteMinuteRow(Base):
+    __tablename__ = "quote_minutes"
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    first_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    first_total_volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    last_total_volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Captured trades may start mid-minute or have gaps after a feed interruption.
+    is_partial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class InstrumentRow(Base):
     __tablename__ = "instruments"
 
