@@ -102,7 +102,25 @@ export function BacktestResult() {
             />
           </div>
 
-          {result.warnings?.map((warning) => (
+          {result.provisional_bar && (
+            <p className="callout">
+              <InfoIcon size={16} />
+              <span>
+                含今日盤中暫定 K 棒（截至{" "}
+                {result.as_of_time
+                  ? new Date(result.as_of_time).toLocaleTimeString("zh-TW", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                      timeZone: "Asia/Taipei",
+                    })
+                  : "—"}
+                ）；收盤後會由官方日線取代。
+              </span>
+            </p>
+          )}
+
+          {result.warnings?.filter((w) => !w.startsWith("含今日盤中暫定")).map((warning) => (
             <p className="callout" key={warning}>
               <InfoIcon size={16} />
               <span>{warning}</span>

@@ -320,7 +320,7 @@ async def start_backtest(
     strategy_version: str = "regime_v1",
     entry_score: float = 70,
     exit_score: float = 45,
-    fee_bps: float = 5,
+    fee_bps: float | None = None,
     slippage_bps: float = 5,
     use_chip_filter: bool = False,
     chip_entry_score: float = 55,

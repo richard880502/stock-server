@@ -40,11 +40,11 @@
 
 | 工具 | 參數 | 回傳 |
 |---|---|---|
-| `start_backtest` | `symbol`, `start`, `end`, `benchmark?`, `market="TW"`, `strategy_version="regime_v1"`, `entry_score=70`, `exit_score=45`, `fee_bps=5`, `slippage_bps=5`, `use_chip_filter=False`, `chip_entry_score=55`, `chip_exit_score=40` | job（含 `id`、`status`、`spec`）。次一開盤成交的多/空手（long/cash）回測。消耗回測配額 |
+| `start_backtest` | `symbol`, `start`, `end`, `benchmark?`, `market="TW"`, `strategy_version="regime_v1"`, `entry_score=70`, `exit_score=45`, `fee_bps=None`（台股規則）, `slippage_bps=5`, `use_chip_filter=False`, `chip_entry_score=55`, `chip_exit_score=40` | job（含 `id`、`status`、`spec`）。次一開盤成交的多/空手（long/cash）回測。消耗回測配額 |
 | `get_backtest_status` | `job_id: str` | job 狀態（queued/running/completed/failed）；完成時含 `summary`（報告，不含 equity_curve 與 spec） |
 | `get_backtest_report` | `job_id: str` | 完成時回傳完整 `BacktestReport`；未完成回 `{job_id, status, error}` |
 
-注意：`start_backtest` 未暴露 `sell_tax_bps` 與 `initial_capital`（使用預設值 0 與 1,000,000）。
+注意：`start_backtest` 未暴露 `sell_tax_bps` 與 `initial_capital`（使用台股規則：賣出稅股票 0.3% / ETF 0.1%，與 1,000,000）。
 驗證規則：`start < end`、`exit_score < entry_score`、`chip_exit_score < chip_entry_score`，否則報錯。
 
 ## 證據包與內建 LLM
