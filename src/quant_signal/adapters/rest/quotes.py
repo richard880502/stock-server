@@ -12,7 +12,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from quant_signal.adapters.rest.security import Principal, require_principal
-from quant_signal.application.quote_cache import PREFIX, VIEWER_ADMIT, QuoteHub, parse_symbols
+from quant_signal.application.quote_cache import (
+    PREFIX,
+    VIEWER_ADMIT,
+    QuoteHub,
+    parse_symbols,
+    volume_unit,
+)
 from quant_signal.infrastructure.db.database import session_factory
 from quant_signal.infrastructure.db.models import QuoteMinuteRow
 
@@ -28,6 +34,8 @@ async def read_minutes(symbol, before, limit):
     return {
         "symbol": symbol,
         "source": "shioaji",
+        # Unit of observed_volume_change_lots: "lot" (張) or "contract" (口, futures).
+        "volume_unit": volume_unit(symbol),
         "bars": [
             {
                 "minute": r.minute,

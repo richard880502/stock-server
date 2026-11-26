@@ -125,8 +125,11 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
     stamp = datetime(2026, 11, 26, 1, 2, tzinfo=UTC)
 
     class Feed:
-        def __init__(self, settings, callback, disconnected):
+        def __init__(self, settings, callback, disconnected, budget=None):
             self.callback = callback
+
+        async def minute_bars(self, symbol, start, end):
+            return []
 
         def start(self):
             pass
@@ -185,4 +188,69 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
             await task
         await redis.delete(LOCK, DEMAND, HEALTH, PREFIX + "2330.TW")
         await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.skipif(not os.getenv("QUOTES_TEST_DATABASE_URL"), reason="isolated Postgres required")
+async def test_official_minutes_replace_partial_and_live_flush_skips_them(monkeypatch):
+    from quant_signal.workers import minute_backfill
+
+    engine = create_async_engine(os.environ["QUOTES_TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(quotes, "session_factory", factory)
+    monkeypatch.setattr(minute_backfill, "session_factory", factory)
+    minute = datetime(2026, 11, 26, 1, 5, tzinfo=UTC)
+    official = dict(
+        symbol="9999.TW",
+        minute=minute,
+        open=50,
+        high=52,
+        low=49,
+        close=51,
+        first_time=minute,
+        last_time=minute.replace(second=59),
+        first_total_volume=0,
+        last_total_volume=7,
+        is_partial=False,
+    )
+
+    async def read():
+        async with factory() as session:
+            return await session.scalar(
+                select(QuoteMinuteRow).where(
+                    QuoteMinuteRow.symbol == "9999.TW", QuoteMinuteRow.minute == minute
+                )
+            )
+
+    try:
+        buffer = quotes.MinuteBuffer()
+        buffer.add(
+            dict(symbol="9999.TW", price=60, total_volume=100, trade_time=minute.isoformat())
+        )
+        await buffer.flush()
+        # Intraday (replace=False) never touches an existing live minute.
+        await minute_backfill.store_official_minutes([official], replace=False)
+        assert (await read()).is_partial
+        # After the close the official minute replaces it.
+        await minute_backfill.store_official_minutes([official], replace=True)
+        row = await read()
+        assert (row.close, row.last_total_volume, row.is_partial) == (51, 7, False)
+        # A late live tick must not mix running totals into the official minute.
+        buffer.add(
+            dict(
+                symbol="9999.TW",
+                price=99,
+                total_volume=500,
+                trade_time=minute.replace(second=30).isoformat(),
+            )
+        )
+        await buffer.flush()
+        row = await read()
+        assert (row.high, row.close, row.last_total_volume) == (52, 51, 7)
+    finally:
+        async with factory() as session:
+            await session.execute(
+                QuoteMinuteRow.__table__.delete().where(QuoteMinuteRow.symbol == "9999.TW")
+            )
+            await session.commit()
         await engine.dispose()

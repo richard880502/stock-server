@@ -61,6 +61,75 @@ The SDK is pinned to 1.3.3 with its compatible Pydantic version in uv.lock.
   mid-minute and reconnects can miss trades. They are never used as complete
   official daily bars. Only demanded stocks are recorded.
 
+## TAIEX futures (台指期)
+
+The symbol TXF.TAIFEX is the near-month TAIEX futures contract. The collector
+subscribes to Shioaji's continuous contract TXFR1 (FOP tick v1). Its ticks carry
+the real contract code (for example TXFL6) and are published under TXF.TAIFEX.
+Futures events have "unit": "contract" (口); stock events have "unit": "lot" (張).
+The live candle volume is in contracts for futures and shares for stocks
+("volume_unit"). Futures minutes follow the TAIFEX sessions: day 08:45-13:45 and
+night 15:00-05:00. The night session counts toward the next trading day.
+The collector logs in to Shioaji again at 08:30 and 14:55 Taipei while futures
+are subscribed. Contracts are downloaded at login, so TXFR1 follows the monthly roll.
+
+## Official minute backfill and the Shioaji query budget
+
+Only the collector (and the manual CLI below) talks to Shioaji. The API, MCP and
+users read PostgreSQL and Redis only. Shioaji limits history queries (snapshots,
+ticks, kbars, credit, short) to 50 calls per 10 seconds, shared across these calls.
+During the session the limits are 10 ticks and 270 kbars calls. Going over them
+suspends the account for a minute, and repeated abuse can ban the IP or ID. Every
+kbars, ticks or snapshots call in this codebase therefore goes through one budget
+stored in Redis (quant:quotes:budget:*). The budget is shared by collector
+restarts and the CLI:
+
+- 40 calls per rolling 10 seconds (10 spare for clock skew and other clients).
+- During the session, up to QUOTES_BACKFILL_INTRADAY_MAX kbars calls (default 150,
+  max 250) and 8 ticks calls per trading day. "Session" is read broadly: weekdays
+  08:00-14:30 plus the futures night session 15:00-05:00. The night session counts
+  toward the day it started on.
+- The budget fails closed. Without Redis, or once the budget is used up, the query
+  is skipped and logged. It is never sent.
+
+The backfill writes Shioaji kbars into quote_minutes with is_partial=false. Volume
+is per minute (lots or contracts): first_total_volume=0 and
+last_total_volume=volume. Live flushes never modify official minutes.
+
+- Intraday: the first time a symbol is subscribed in a session, the minutes before
+  the subscription minute are filled once. Existing rows are never touched, and
+  the subscription minute and later minutes are left to the live feed. Each symbol
+  is deduplicated per session through a Redis key with a two-day TTL. The task is
+  skipped quietly once the intraday budget is used up.
+- After the close: once per weekday at or after QUOTES_BACKFILL_AFTER_CLOSE
+  (Taipei, default 14:45), the collector replaces up to QUOTES_BACKFILL_MAX_SYMBOLS
+  symbols (default 300) with official minutes. These are the watchlist symbols,
+  symbols seen live that day, and current subscriptions. A Redis key claims the
+  day. On failure the claim is released so the run retries. If the budget runs out,
+  the run retries after 15 minutes and skips symbols that were already completed.
+  On holidays kbars returns nothing, so the run has no effect. Keep this time
+  between 14:30 and 15:00. Earlier or later times draw on the session allowance.
+- All history queries run one at a time from a single background queue.
+- Each replaced day is compared with the live minutes. If fewer than 80% of
+  closes match, the run logs "Official minutes disagree with live minutes". That
+  points to a kbars label or time zone problem.
+
+Collector settings (defaults shown):
+
+```text
+QUOTES_BACKFILL_ENABLED=true
+QUOTES_BACKFILL_AFTER_CLOSE=14:45
+QUOTES_BACKFILL_INTRADAY_MAX=150
+QUOTES_BACKFILL_MAX_SYMBOLS=300
+```
+
+Run a manual catch-up inside the collector container. It opens a second Shioaji
+connection (each account may have 5) and draws on the same budget:
+
+```sh
+quant-signal-backfill-minutes --date 2026-11-26 --symbol 2330.TW --symbol TXF.TAIFEX
+```
+
 ## Read APIs
 
 Both endpoints use the application's existing authentication:
@@ -71,7 +140,9 @@ Both endpoints use the application's existing authentication:
 - GET /api/v1/quotes/minutes?symbol=2330.TW&limit=120 returns captured minutes
   oldest first. The optional before parameter is a time-zone-aware ISO timestamp.
   observed_volume_change_lots is the change between the first and last observed
-  cumulative volume, rather than a guaranteed full-minute volume.
+  cumulative volume, rather than a guaranteed full-minute volume. Official rows
+  (is_partial=false) hold the full-minute volume. volume_unit is "lot", or
+  "contract" for TXF.TAIFEX.
 
 Keep API_AUTH_ENABLED=true for a multi-user deployment. Verify that your market
 data entitlement covers displaying data to the intended audience before enabling
