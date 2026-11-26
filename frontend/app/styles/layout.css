@@ -141,6 +141,11 @@
   display: none;
 }
 
+/* Six tabs fit a phone's bottom bar only with short labels. */
+.view-tab-short {
+  display: none;
+}
+
 @media (max-width: 719px) {
   .brand-text small {
     display: none;
@@ -155,7 +160,7 @@
     inset: auto 0 0 0;
     z-index: var(--z-header);
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -173,6 +178,14 @@
 
   .view-tab svg {
     display: block;
+  }
+
+  .view-tab-label {
+    display: none;
+  }
+
+  .view-tab-short {
+    display: inline;
   }
 
   .view-tab[aria-current="page"] {
