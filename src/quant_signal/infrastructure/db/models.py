@@ -391,6 +391,7 @@ class NewsItemRow(Base):
             "instrument_id",
             "published_at",
         ),
+        Index("ix_news_item_instrument_available", "instrument_id", "available_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -408,6 +409,10 @@ class NewsItemRow(Base):
     retrieved_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # When this system first held the item; as-of reads filter on it, not published_at.
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # When the sentiment label was written (NULL: unclassified, or labelled at retrieval).
+    classified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 

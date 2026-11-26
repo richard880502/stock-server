@@ -27,6 +27,15 @@ from quant_signal.settings import Settings
 from quant_signal.workers import quotes
 
 
+async def _purge_minutes(engine, *symbols: str) -> None:
+    """Remove the rows these tests write so every test starts clean and can be re-run."""
+    async with async_sessionmaker(engine)() as session:
+        ids = select(MarketSymbolRow.id).where(MarketSymbolRow.symbol.in_(symbols))
+        await session.execute(delete(MinuteBarRow).where(MinuteBarRow.symbol_id.in_(ids)))
+        await session.execute(delete(QuoteLatestRow).where(QuoteLatestRow.symbol.in_(symbols)))
+        await session.commit()
+
+
 @pytest.mark.skipif(not os.getenv("QUOTES_TEST_REDIS_URL"), reason="isolated Redis required")
 async def test_shared_demand_capacity_fencing_and_hub_cleanup():
     redis = Redis.from_url(os.environ["QUOTES_TEST_REDIS_URL"], decode_responses=True)
@@ -76,6 +85,7 @@ async def test_minute_upsert_restart_and_concurrent_callback(monkeypatch):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(quotes, "session_factory", factory)
     minute = datetime(2026, 11, 26, 1, 0, tzinfo=UTC)
+    await _purge_minutes(engine, "2330.TW")
 
     def tick(second, price, total, size):
         return dict(
@@ -108,6 +118,7 @@ async def test_minute_upsert_restart_and_concurrent_callback(monkeypatch):
             latest = (await read_latest(session, ["2330.TW"]))["2330.TW"]
             assert latest.price == 103 and latest.volume == 21 and latest.source == "tick"
     finally:
+        await _purge_minutes(engine, "2330.TW")
         await engine.dispose()
 
 
@@ -165,6 +176,7 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
     monkeypatch.setattr(shioaji_feed, "ShioajiFeed", Feed)
     stop = asyncio.Event()
     task = None
+    await _purge_minutes(engine, "2330.TW")
     try:
         await redis.set(LOCK, "test-owner", ex=30)
         await redis.zadd(DEMAND, {"2330.TW": time.time() + 60})
@@ -190,6 +202,7 @@ async def test_collector_end_to_end_with_fake_upstream(monkeypatch):
             await task
         await redis.delete(LOCK, DEMAND, HEALTH, PREFIX + "2330.TW")
         await redis.aclose()
+        await _purge_minutes(engine, "2330.TW")
         await engine.dispose()
 
 
@@ -203,6 +216,7 @@ async def test_official_minutes_replace_partial_and_live_flush_skips_them(monkey
     monkeypatch.setattr(minute_backfill, "session_factory", factory)
     minute = datetime(2026, 11, 26, 1, 5, tzinfo=UTC)
     official = MinuteBar("9999.TW", minute, 50, 52, 49, 51, 7, official=True)
+    await _purge_minutes(engine, "9999.TW")
 
     async def read():
         async with factory() as session:

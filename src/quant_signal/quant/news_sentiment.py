@@ -65,5 +65,5 @@ class NewsSentimentEngine:
             article_count=len(scored),
             sentiment_label=label,
             top_headlines=top_headlines,
-            data_available_at=max(item.retrieved_at for item in items),
+            data_available_at=max(item.available_at or item.retrieved_at for item in items),
         )

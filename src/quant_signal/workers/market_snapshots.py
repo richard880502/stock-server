@@ -116,6 +116,15 @@ class UsageMonitor:
                 log.warning("Shioaji usage not shared")
         return self.last
 
+    async def fresh(self) -> bool | None:
+        """Force a new reading. None when it failed (unknown), else whether traffic remains."""
+        previous, self.last = self.last, None
+        usage = await self.refresh(force=True)
+        if usage is None:
+            self.last = previous
+            return None
+        return usage["remaining_bytes"] >= self._reserve
+
     async def ok(self) -> bool:
         """True unless today's remaining traffic is known to be below the reserve."""
         usage = await self.refresh()

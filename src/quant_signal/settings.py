@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     sync_daily_time: str = Field(
         default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
     )
+    # News (消息面) job in the ingest service: Taipei times, like sync_daily_time.
+    news_sync_enabled: bool = True
+    news_sync_time: str = Field(
+        default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
+    )
+    news_sync_max_symbols: int = Field(default=60, ge=0)
+    # Seconds between per-company queries to Google News (be polite).
+    news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
+    # Comma-separated RSS/Atom feed URLs read whole and matched to symbols by code/name.
+    news_feed_urls: str = ""
+    # Claude model used only to classify headlines (cheap on purpose; the analyst and
+    # debate models are unchanged). Empty falls back to ANTHROPIC_MODEL.
+    news_anthropic_model: str | None = "claude-haiku-5-5"
     # How far back the whole-market snapshot is filled on first run.
     sync_market_lookback_days: int = Field(default=520, ge=30)
     # Official TWSE/TPEx events, risk flags and monthly revenue (run by the sync worker).
@@ -109,7 +122,7 @@ class Settings(BaseSettings):
     quotes_backfill_enabled: bool = True
     # Taipei time after which the day's minutes are replaced with official kbars.
     quotes_backfill_after_close: str = Field(
-        default="14:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+        default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
     )
     # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
     quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
