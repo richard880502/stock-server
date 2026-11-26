@@ -9,6 +9,7 @@ import { DEFAULT_MA, parseMa, parseRange, toggleMa } from "./chart-prefs";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { today } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/live-quotes";
+import { useSession } from "@/lib/api/session";
 import { IntradayChart } from "./intraday-chart";
 
 const RANGE_KEY = "quant_signal_chart_range";
@@ -62,7 +63,9 @@ export function PriceChartCard({
 }) {
   const currentDate = useSyncExternalStore(subscribeToday, today, () => "");
   const [selection, setSelection] = useState<{ symbol: string; date: string } | null>(null);
-  const canShowLive = !!liveAsOf && liveAsOf === currentDate && markers === undefined;
+  const { config } = useSession();
+  const canShowLive =
+    config?.quotes === true && !!liveAsOf && liveAsOf === currentDate && markers === undefined;
   const liveMode = canShowLive && selection?.symbol === symbol && selection.date === liveAsOf;
   const { candles, live, loading, error } = useCandles(symbol, asOf, feed);
   const storedRange = useSyncExternalStore(subscribePrefs, () => readStorage(RANGE_KEY), () => null);

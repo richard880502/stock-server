@@ -44,6 +44,17 @@ def test_minutes_ignore_out_of_order_and_keep_separate_minutes():
     assert len(buffer.rows) == 2
 
 
+def test_minute_volume_counts_the_first_trade_of_the_minute():
+    buffer = MinuteBuffer()
+    # A thin stock with one 3-lot trade in the minute must not show zero volume.
+    buffer.add({**tick(100, 5, 23), "volume": 3})
+    row = next(iter(buffer.rows.values()))
+    assert row["last_total_volume"] - row["first_total_volume"] == 3
+    assert buffer.candle("2330.TW")["volume"] == 3000
+    buffer.add({**tick(101, 9, 25), "volume": 2})
+    assert row["last_total_volume"] - row["first_total_volume"] == 5
+
+
 def test_live_candle_preserves_ohlc_after_persistence_clears_dirty_rows():
     buffer = MinuteBuffer()
     buffer.add(tick(100, 1, 10))

@@ -187,7 +187,11 @@ def _begin(client) -> dict:
 
 
 def test_config_reports_what_is_available(client) -> None:
-    assert client.get("/api/v1/auth/config").json() == {"google": True, "password": False}
+    assert client.get("/api/v1/auth/config").json() == {
+        "google": True,
+        "password": False,
+        "quotes": False,
+    }
 
 
 def test_password_login_needs_both_a_password_and_an_api_key(client, monkeypatch) -> None:

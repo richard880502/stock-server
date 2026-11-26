@@ -219,6 +219,8 @@ def create_app() -> FastAPI:
             # Password login hands out the dashboard API key, so it only works when both
             # are configured; offering it without a key would "succeed" with nothing.
             "password": password_login_ready(settings),
+            # Lets the UI hide live-quote controls instead of offering stale minute data.
+            "quotes": settings.quotes_enabled,
         }
 
     @application.get("/api/v1/auth/google/login")

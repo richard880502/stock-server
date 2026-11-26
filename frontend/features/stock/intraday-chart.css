@@ -50,7 +50,8 @@
   height: 340px;
   margin-top: 0.5rem;
 }
+/* Not --down: in the Taiwan convention that green means "price fell", not "error". */
 .intraday-error {
-  color: var(--down);
+  color: var(--warn);
   font-size: var(--text-sm);
 }

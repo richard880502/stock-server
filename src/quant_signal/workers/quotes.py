@@ -58,6 +58,8 @@ class MinuteBuffer:
         key = (symbol, minute)
         price = tick["price"]
         volume = tick["total_volume"]
+        # total_volume already includes this trade; start the minute just before it.
+        opening_volume = max(0, volume - max(0, int(tick.get("volume") or 0)))
         row = self.rows.get(key)
         if row is None and self.current.get(symbol, {}).get("minute") == minute:
             row = self.current[symbol]
@@ -75,7 +77,7 @@ class MinuteBuffer:
                 close=price,
                 first_time=stamp,
                 last_time=stamp,
-                first_total_volume=volume,
+                first_total_volume=opening_volume,
                 last_total_volume=volume,
                 is_partial=True,
             )

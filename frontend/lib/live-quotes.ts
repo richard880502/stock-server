@@ -36,8 +36,11 @@ export function useLiveQuotes(symbols: string[]): State {
     const allowed = new Set(key.split(","));
     const connect = async () => {
       controller = new AbortController();
-      setState((previous) => ({ status: "connecting", quotes: new Map([...previous.quotes].filter(([symbol]) => allowed.has(symbol))) }));
+      // A planned server rotation reconnects while still live; don't flash "connecting".
+      setState((previous) => ({ status: previous.status === "live" ? "live" : "connecting", quotes: new Map([...previous.quotes].filter(([symbol]) => allowed.has(symbol))) }));
       let terminal = false;
+      let rotated = false;
+      let received = false;
       try {
         const response = await fetch(apiUrl(`/api/v1/quotes/stream?${new URLSearchParams({ symbols: key })}`), withAuthHeaders({ signal: controller.signal, headers: { Accept: "text/event-stream" } }));
         if (!response.ok || !response.body) throw errorFromResponse(response, await response.json().catch(() => null));
@@ -50,13 +53,20 @@ export function useLiveQuotes(symbols: string[]): State {
             if (payload.status !== "disabled") for (const quote of payload.quotes) {
               if (quote && allowed.has(quote.symbol) && typeof quote.price === "number" && Number.isFinite(quote.price)) quotes.set(quote.symbol, quote);
             }
+            received = true;
             setState({ status: payload.status, quotes, message: payload.message });
             if (payload.status === "live") delay = 1000;
             if (payload.status === "disabled") terminal = true;
           } catch { /* Ignore malformed events and wait for the next snapshot. */ }
         });
+        // The server closes the stream every few minutes to recheck authentication.
+        rotated = received;
       } catch (error) {
         if (!cancelled && !controller.signal.aborted) setState((previous) => ({ ...previous, status: "unavailable", message: error instanceof Error ? error.message : "連線中斷" }));
+      }
+      if (!cancelled && !terminal && rotated) {
+        retryTimer = setTimeout(connect, 250);
+        return;
       }
       if (!cancelled && !terminal) {
         setState((previous) => ({ ...previous, status: "unavailable", message: previous.message || "連線中斷，將自動重試。" }));

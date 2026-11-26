@@ -44,6 +44,10 @@ const taipeiTime = new Intl.DateTimeFormat("zh-TW", {
 function formatTime(time: number) {
   return taipeiTime.format(new Date(time * 1000));
 }
+const priceFormat = new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 2 });
+function formatPrice(price: number) {
+  return priceFormat.format(price);
+}
 function token(host: HTMLElement, name: string) {
   const probe = document.createElement("span");
   probe.style.color = `var(${name})`;
@@ -77,6 +81,7 @@ function IntradayChartBody({
   const toolRef = useRef<Tool>("cursor");
   const startRef = useRef<Point | null>(null);
   const fitted = useRef(false);
+  const userMoved = useRef(false);
   const [history, setHistory] = useState<Bar[]>([]);
   const [liveBars, setLiveBars] = useState<Bar[]>([]);
   const [period, setPeriod] = useState(1);
@@ -86,6 +91,8 @@ function IntradayChartBody({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
+  // Refetch history when the feed (re)connects, not on every status flicker.
+  const isLive = status === "live";
   useEffect(() => {
     const node = host.current;
     if (!node) return;
@@ -130,6 +137,17 @@ function IntradayChartBody({
       1,
     );
     instance.panes()[1]?.setStretchFactor(0.25);
+    // Keep the whole session in view while the container settles (drawer slide-in,
+    // phone rotation) until the viewer pans or zooms on their own.
+    const markMoved = () => {
+      userMoved.current = true;
+    };
+    node.addEventListener("pointerdown", markMoved);
+    node.addEventListener("wheel", markMoved, { passive: true });
+    const resize = new ResizeObserver(() => {
+      if (fitted.current && !userMoved.current) instance.timeScale().fitContent();
+    });
+    resize.observe(node);
     chart.current = instance;
     candle.current = candles;
     volume.current = volumes;
@@ -160,6 +178,9 @@ function IntradayChartBody({
       }
     });
     return () => {
+      resize.disconnect();
+      node.removeEventListener("pointerdown", markMoved);
+      node.removeEventListener("wheel", markMoved);
       instance.remove();
       chart.current = null;
       candle.current = null;
@@ -218,7 +239,7 @@ function IntradayChartBody({
       active = false;
       controller.abort();
     };
-  }, [symbol, refresh, status]);
+  }, [symbol, refresh, isLive]);
   useEffect(() => {
     const timer = window.setInterval(
       () => setRefresh((value) => value + 1),
@@ -235,12 +256,32 @@ function IntradayChartBody({
     };
     // Capture each stream update so completed minutes remain visible between history polls.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLiveBars((previous) => mergeBars(previous, [current]).slice(-600));
+    setLiveBars((previous) => {
+      // Each stream snapshot repeats the candle; skip unchanged ones so the chart
+      // is not redrawn every second.
+      const last = previous[previous.length - 1];
+      if (
+        last &&
+        last.time === current.time &&
+        last.close === current.close &&
+        last.high === current.high &&
+        last.low === current.low &&
+        last.volume === current.volume
+      )
+        return previous;
+      return mergeBars(previous, [current]).slice(-600);
+    });
   }, [latest, quote?.trade_time]);
   const data = useMemo(
     () => aggregateBars(mergeBars(history, liveBars), period),
     [history, liveBars, period],
   );
+  // Re-fit when the bar count changes meaning; keep the user's zoom on live updates.
+  // (The body is keyed by symbol, so a new symbol starts unfitted anyway.)
+  useEffect(() => {
+    fitted.current = false;
+    userMoved.current = false;
+  }, [period]);
   useEffect(() => {
     const node = host.current;
     if (!candle.current || !volume.current || !node) return;
@@ -256,11 +297,13 @@ function IntradayChartBody({
         color: bar.close >= bar.open ? up : down,
       })),
     );
-    if (data.length && !fitted.current) {
+    // Wait for the history: a live tick often lands first, and fitting a single
+    // bar would leave the whole morning off-screen once the history arrives.
+    if (data.length && !fitted.current && !loading) {
       chart.current?.timeScale().fitContent();
       fitted.current = true;
     }
-  }, [data]);
+  }, [data, loading]);
   useEffect(() => {
     const instance = chart.current,
       series = candle.current,
@@ -336,8 +379,8 @@ function IntradayChartBody({
       </p>
       {last && (
         <p className="intraday-legend">
-          {formatTime(last.time)}　開 {last.open}　高 {last.high}　低 {last.low}
-          　收 {last.close}　量 {(last.volume / 1000).toLocaleString("zh-TW")}{" "}
+          {formatTime(last.time)}　開 {formatPrice(last.open)}　高 {formatPrice(last.high)}　低{" "}
+          {formatPrice(last.low)}　收 {formatPrice(last.close)}　量 {(last.volume / 1000).toLocaleString("zh-TW")}{" "}
           張
         </p>
       )}
