@@ -45,7 +45,7 @@ export function AnalysisStatus({
               <span style={{ width: `${progress}%` }} />
             </div>
             <p className="sync-meta num">
-              第 {wait.attempt} / {wait.maxAttempts} 次嘗試 · {wait.secondsLeft} 秒後自動重試
+              每 {wait.intervalSeconds} 秒自動檢查一次（第 {wait.attempt} / {wait.maxAttempts} 次）· 下次檢查 {wait.secondsLeft} 秒後
             </p>
           </div>
         </div>
