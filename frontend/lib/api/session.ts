@@ -6,7 +6,8 @@ import { useSyncExternalStore } from "react";
 import { clearApiKey, getApiKey } from "./auth";
 import { apiUrl, onUnauthorized } from "./client";
 
-export type AuthConfig = { google: boolean; password: boolean };
+/** `quotes` is absent on older APIs; treat that as "live quotes off". */
+export type AuthConfig = { google: boolean; password: boolean; quotes?: boolean };
 export type SessionUser = { id: string; email: string; name: string | null; picture: string | null };
 
 export type SessionState = {

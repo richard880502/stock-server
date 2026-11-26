@@ -7,6 +7,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -14,6 +15,33 @@ from quant_signal.adapters.rest.security import Principal, require_principal
 from quant_signal.application.quote_cache import PREFIX, VIEWER_ADMIT, QuoteHub, parse_symbols
 from quant_signal.infrastructure.db.database import session_factory
 from quant_signal.infrastructure.db.models import QuoteMinuteRow
+
+
+async def read_minutes(symbol, before, limit):
+    statement = select(QuoteMinuteRow).where(QuoteMinuteRow.symbol == symbol)
+    if before:
+        statement = statement.where(QuoteMinuteRow.minute < before)
+    async with session_factory() as session:
+        rows = (
+            await session.scalars(statement.order_by(QuoteMinuteRow.minute.desc()).limit(limit))
+        ).all()
+    return {
+        "symbol": symbol,
+        "source": "shioaji",
+        "bars": [
+            {
+                "minute": r.minute,
+                "last_trade_time": r.last_time,
+                "open": r.open,
+                "high": r.high,
+                "low": r.low,
+                "close": r.close,
+                "observed_volume_change_lots": max(0, r.last_total_volume - r.first_total_volume),
+                "is_partial": r.is_partial,
+            }
+            for r in reversed(rows)
+        ],
+    }
 
 
 def install_quotes(app, settings):
@@ -43,31 +71,41 @@ def install_quotes(app, settings):
                 raise ValueError("請提供單一股票代號與包含時區的時間")
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        statement = select(QuoteMinuteRow).where(QuoteMinuteRow.symbol == selected[0])
-        if before:
-            statement = statement.where(QuoteMinuteRow.minute < before)
-        async with session_factory() as session:
-            rows = (
-                await session.scalars(statement.order_by(QuoteMinuteRow.minute.desc()).limit(limit))
-            ).all()
-        return {
-            "symbol": selected[0],
-            "source": "shioaji",
-            "bars": [
-                {
-                    "minute": r.minute,
-                    "open": r.open,
-                    "high": r.high,
-                    "low": r.low,
-                    "close": r.close,
-                    "observed_volume_change_lots": max(
-                        0, r.last_total_volume - r.first_total_volume
-                    ),
-                    "is_partial": r.is_partial,
-                }
-                for r in reversed(rows)
-            ],
-        }
+        if not settings.quotes_enabled:
+            return await read_minutes(selected[0], before, limit)
+        cache_key = PREFIX + f"minutes:{selected[0]}:{before}:{limit}"
+        lock_key = cache_key + ":loading"
+        token = str(uuid4())
+        owned = False
+        try:
+            cached = await hub.redis.get(cache_key)
+            if cached:
+                return json.loads(cached)
+            owned = bool(await hub.redis.set(lock_key, token, nx=True, ex=15))
+            if not owned:
+                for _ in range(20):
+                    await asyncio.sleep(0.05)
+                    cached = await hub.redis.get(cache_key)
+                    if cached:
+                        return json.loads(cached)
+                raise HTTPException(503, "分鐘資料更新中，請稍後再試")
+            result = await read_minutes(selected[0], before, limit)
+            await hub.redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=5)
+            return result
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(503, "分鐘資料暫時無法取得") from exc
+        finally:
+            if owned:
+                with suppress(Exception):
+                    await hub.redis.eval(
+                        "if redis.call('GET',KEYS[1])==ARGV[1] then "
+                        "return redis.call('DEL',KEYS[1]) end return 0",
+                        1,
+                        lock_key,
+                        token,
+                    )
 
     @router.get("/stream")
     async def stream(

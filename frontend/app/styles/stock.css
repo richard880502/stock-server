@@ -205,6 +205,7 @@
 .watch-board {
   container-type: inline-size;
   min-width: 0;
+  overflow-x: auto;
 }
 
 .watch-table {
@@ -417,4 +418,18 @@ th[aria-sort="descending"] .sort-mark { color: var(--accent); }
 .watch-add-note:empty,
 .watch-add .inline-error:empty {
   display: none;
+}
+
+@container (max-width: 46rem) {
+  .watch-row {
+    grid-template-areas:
+      "stock stock remove"
+      "close change status"
+      "live live live"
+      "spark spark spark"
+      "flow1 flow5 flow5"
+      "strategy strategy strategy";
+  }
+  .watch-row .watch-live-cell { grid-area: live; white-space: normal; }
+  .watch-row .watch-live-cell::before { content: attr(data-label); display: block; font-size: var(--text-xs); color: var(--text-3); }
 }

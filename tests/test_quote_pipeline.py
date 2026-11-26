@@ -44,6 +44,29 @@ def test_minutes_ignore_out_of_order_and_keep_separate_minutes():
     assert len(buffer.rows) == 2
 
 
+def test_minute_volume_counts_the_first_trade_of_the_minute():
+    buffer = MinuteBuffer()
+    # A thin stock with one 3-lot trade in the minute must not show zero volume.
+    buffer.add({**tick(100, 5, 23), "volume": 3})
+    row = next(iter(buffer.rows.values()))
+    assert row["last_total_volume"] - row["first_total_volume"] == 3
+    assert buffer.candle("2330.TW")["volume"] == 3000
+    buffer.add({**tick(101, 9, 25), "volume": 2})
+    assert row["last_total_volume"] - row["first_total_volume"] == 5
+
+
+def test_live_candle_preserves_ohlc_after_persistence_clears_dirty_rows():
+    buffer = MinuteBuffer()
+    buffer.add(tick(100, 1, 10))
+    buffer.add(tick(105, 3, 20))
+    buffer.rows.clear()
+    buffer.add(tick(102, 4, 25))
+    candle = buffer.candle("2330.TW")
+    assert (candle["open"], candle["high"], candle["low"], candle["close"]) == (100, 105, 100, 102)
+    assert candle["volume"] == 15000
+    assert candle["is_partial"]
+
+
 def test_disabled_quotes_are_explicit_and_do_not_contact_redis(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "quotes_enabled", False)
@@ -112,3 +135,80 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
     assert events[0]["trade_time"].endswith("+08:00")
     assert json.loads(json.dumps(events[0]))["price"] == 100
     feed.close()
+
+
+def test_quote_health_probes_distinguish_standby_from_stuck_collector():
+    import time
+
+    from quant_signal.workers.quote_health import QuoteHealth, create_health_app
+
+    class Redis:
+        ok = True
+
+        async def ping(self):
+            if not self.ok:
+                raise ConnectionError
+            return True
+
+    redis = Redis()
+    health = QuoteHealth()
+    with TestClient(create_health_app(health, redis)) as client:
+        # Standby replica: alive but not leader, so not ready.
+        assert client.get("/livez").status_code == 200
+        assert client.get("/readyz").status_code == 503
+        health.leader = health.connected = True
+        assert client.get("/health").json() == {"ready": True}
+        redis.ok = False
+        assert client.get("/readyz").status_code == 503
+        redis.ok = True
+        health.alive = time.monotonic() - 60
+        assert client.get("/livez").status_code == 503
+        assert client.get("/readyz").status_code == 503
+
+
+def test_minutes_endpoint_shares_short_redis_cache(monkeypatch):
+    from quant_signal.adapters.rest import quotes as rest_quotes
+
+    store = {}
+
+    class Redis:
+        async def get(self, key):
+            return store.get(key)
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in store:
+                return None
+            store[key] = value
+            return True
+
+        async def eval(self, script, numkeys, key, token):
+            if store.get(key) == token:
+                del store[key]
+                return 1
+            return 0
+
+    class Hub:
+        def __init__(self, settings):
+            self.redis = Redis()
+
+        async def close(self):
+            pass
+
+    calls = []
+
+    async def read_minutes(symbol, before, limit):
+        calls.append(symbol)
+        return {"symbol": symbol, "source": "shioaji", "bars": []}
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "quotes_enabled", True)
+    monkeypatch.setattr(settings, "api_auth_enabled", False)
+    monkeypatch.setattr(rest_quotes, "QuoteHub", Hub)
+    monkeypatch.setattr(rest_quotes, "read_minutes", read_minutes)
+    with TestClient(create_app()) as client:
+        first = client.get("/api/v1/quotes/minutes?symbol=2330.TW")
+        second = client.get("/api/v1/quotes/minutes?symbol=2330.TW")
+        expected = {"symbol": "2330.TW", "source": "shioaji", "bars": []}
+        assert first.json() == second.json() == expected
+        assert calls == ["2330.TW"]
+        assert not [key for key in store if key.endswith(":loading")]

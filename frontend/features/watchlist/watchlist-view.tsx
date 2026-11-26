@@ -15,15 +15,20 @@ import { StrategyCell } from "./strategy-cell";
 import { DEFAULT_SORT, nextSort, SORT_OPTIONS, sortItems, sortToValue, valueToSort } from "./sort";
 import type { Sort, SortKey } from "./sort";
 import { useDashboard } from "@/lib/dashboard-context";
-import { formatPrice, shortDate } from "@/lib/format";
+import { formatPrice, formatSignedPct, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
-import { LiveQuotes } from "./live-quotes";
+import { useLiveQuotes, type LiveQuote, type LiveQuoteStatus } from "@/lib/live-quotes";
+import { IntradayDrawer } from "./intraday-drawer";
 import { Lots, PctChange } from "@/features/stock/flow-format";
 
 const marketLabel = { TW: "上市", TWO: "上櫃" } as const;
 
 /** Re-fetch statuses when the page opens, unless the list was loaded just now. */
 const STALE_AFTER_MS = 20_000;
+const tradeTimeFormat = new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+function formatTradeTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "時間未提供" : tradeTimeFormat.format(date); }
+const NO_SYMBOLS: string[] = [];
+const LIVE_STATUS: Record<LiveQuoteStatus, string> = { disabled: "即時報價未啟用", connecting: "即時報價連線中", live: "即時報價已連線", unavailable: "即時報價暫時無法使用", paused: "分頁在背景，即時報價已暫停" };
 
 function ListSkeleton() {
   return (
@@ -63,8 +68,12 @@ function Row({
   removing,
   onOpen,
   onRemove,
+  quote, liveStatus, now, onChart, showLive,
 }: {
   item: WatchlistItem;
+  quote?: LiveQuote; liveStatus: LiveQuoteStatus; now: number; onChart: (symbol: string) => void;
+  /** False when the server has live quotes switched off. */
+  showLive: boolean;
   userId: string;
   removing: boolean;
   onOpen: (symbol: string) => void;
@@ -91,6 +100,11 @@ function Row({
       <td className="col-change num" data-label="當日漲跌">
         <PctChange value={item.day_change_pct} />
       </td>
+      {showLive && <td className="watch-live-cell" data-label="即時成交">
+        {quote ? <><strong className="num">{formatPrice(quote.price)}</strong>{" "}<span className="num">{typeof quote.change_pct === "number" && Number.isFinite(quote.change_pct) ? formatSignedPct(quote.change_pct, 2) : "—"}</span>
+          <small>{formatTradeTime(quote.trade_time)}{liveStatus !== "live" || !Number.isFinite(Date.parse(quote.received_at)) || now - Date.parse(quote.received_at) > 30_000 || !Number.isFinite(Date.parse(quote.trade_time)) || now - Date.parse(quote.trade_time) > 30_000 ? " · 逾時" : ""}</small></> : <small>等待成交</small>}
+        <button type="button" className="button small" onClick={(event) => { event.stopPropagation(); onChart(item.symbol); }}>即時 K 線</button>
+      </td>}
       <td className="col-spark" data-label="20 日走勢">
         <div className="spark-cell">
           <Sparkline
@@ -166,7 +180,8 @@ function SortHeader({
 }
 
 export function WatchlistView() {
-  const { user } = useSession();
+  const { user, config } = useSession();
+  const liveEnabled = config?.quotes === true;
   const { refresh: openSymbol } = useDashboard();
   const router = useRouter();
   const watchlist = useWatchlist();
@@ -213,6 +228,11 @@ export function WatchlistView() {
   );
 
   const items = useMemo(() => watchlist.watchlist?.items ?? [], [watchlist.watchlist]);
+  const liveSymbols = useMemo(() => items.map((item) => item.symbol), [items]);
+  const live = useLiveQuotes(liveEnabled ? liveSymbols : NO_SYMBOLS);
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 5000); return () => window.clearInterval(timer); }, []);
   const sortedItems = useMemo(() => sortItems(items, sort), [items, sort]);
   const { phase, count, limit } = watchlist;
   const full = phase === "ready" && count >= limit;
@@ -281,7 +301,7 @@ export function WatchlistView() {
             {removeError}
           </p>
         )}
-        <LiveQuotes items={items} />
+        {liveEnabled && <p className="watch-live-status" role="status">{LIVE_STATUS[live.status]} · Shioaji · 台北時間 · 超過 30 秒標示逾時{live.message ? ` · ${live.message}` : ""}</p>}
         <Card className="watch-board" aria-label="自選股清單">
           <label className="watch-sort-select">
             <span>排序</span>
@@ -304,6 +324,7 @@ export function WatchlistView() {
                   收盤
                 </th>
                 <SortHeader label="當日漲跌" sortKey="day_change_pct" sort={sort} onSort={onSort} className="col-change" />
+                {liveEnabled && <th scope="col">即時成交</th>}
                 <SortHeader label="20 日走勢" sortKey="change_20d_pct" sort={sort} onSort={onSort} className="col-spark" />
                 <SortHeader label="外資 1 日（張）" sortKey="foreign_net_1d_lots" sort={sort} onSort={onSort} className="col-flow1" />
                 <SortHeader label="三大法人 5 日（張）" sortKey="total_net_5d_lots" sort={sort} onSort={onSort} className="col-flow5" />
@@ -325,6 +346,11 @@ export function WatchlistView() {
                   removing={watchlist.pending.has(item.symbol.toUpperCase())}
                   onOpen={open}
                   onRemove={remove}
+                  quote={live.quotes.get(item.symbol.toUpperCase())}
+                  liveStatus={live.status}
+                  now={now}
+                  onChart={setChartSymbol}
+                  showLive={liveEnabled}
                 />
               ))}
             </tbody>
@@ -384,6 +410,7 @@ export function WatchlistView() {
         </div>
       )}
       {body}
+      {liveEnabled && chartSymbol && items.some((item) => item.symbol === chartSymbol) && <IntradayDrawer items={items} symbol={chartSymbol} onSelect={setChartSymbol} onClose={() => setChartSymbol(null)} quote={live.quotes.get(chartSymbol.toUpperCase())} status={live.status} />}
     </>
   );
 }

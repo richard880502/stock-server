@@ -46,6 +46,11 @@ The SDK is pinned to 1.3.3 with its compatible Pydantic version in uv.lock.
 - Quotes retain their trade time and receive time. The frontend marks data older
   than 30 seconds and disconnected streams. No trade since subscription means
   there may be no quote yet, including outside trading hours.
+- Each SSE quote includes a server-aggregated one-minute candle. The watchlist
+  uses one stream for all rows and opens one 1/5-minute chart at a time. Drawing
+  anchors use time and price coordinates, so they follow chart panning.
+- Minute-history requests share a five-second Redis cache and a distributed
+  loading lock to avoid a database query for every viewer opening the same chart.
 - Redis contains latest quotes with a one-day TTL and ephemeral demand/health.
   Losing Redis causes renewed connections and subscriptions. It is not the
   historical store.
@@ -72,3 +77,19 @@ Keep API_AUTH_ENABLED=true for a multi-user deployment. Verify that your market
 data entitlement covers displaying data to the intended audience before enabling
 QUOTES_ENABLED for those users. Real-account login and subscriptions still need
 an acceptance check in the deployment environment.
+
+## Health checks
+
+The collector exposes an internal HTTP server on port 8003:
+
+- /livez checks the event loop heartbeat, including when a replica is on standby.
+- /readyz and /health require the leader lease, a logged-in Shioaji connection
+  and a successful Redis ping. They do not require new trades, so a market closure
+  does not make a connected collector unhealthy.
+
+The container health check uses /livez (not /health) with a 90-second startup
+grace period, so a standby replica or a new container waiting for the leader lease
+during a rolling deploy is not reported unhealthy. Use /readyz for monitoring the
+active leader.
+The port is not published to the Internet. Health responses contain only boolean
+status values and never credentials or account details.

@@ -132,6 +132,8 @@ class ShioajiFeed:
             price = float(tick.close)
             change_pct = float(tick.pct_chg) / 100
             total_volume = int(tick.total_volume)
+            # The trade's own size, so a minute's first trade is counted too.
+            trade_volume = max(0, int(getattr(tick, "volume", 0) or 0))
             trade_time = tick.datetime
             if not isinstance(trade_time, datetime):
                 return
@@ -154,6 +156,7 @@ class ShioajiFeed:
                 "price": price,
                 "change_pct": change_pct,
                 "total_volume": total_volume,
+                "volume": trade_volume,
                 "trade_time": trade_time.isoformat(),
                 "received_at": datetime.now(UTC).isoformat(),
                 "trade_epoch": trade_time.timestamp(),
