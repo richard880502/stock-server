@@ -24,6 +24,9 @@ import type {
   MarketRankings,
   MarketScope,
   PriceSeries,
+  SectorRotation,
+  SectorStockSort,
+  SectorStocks,
   Signal,
   StockOverview,
   SyncSymbolRequest,
@@ -249,6 +252,28 @@ export function getMarketFlows(
   const params = new URLSearchParams({ market: query.market, days: String(query.days) });
   if (query.asOf) params.set("as_of", query.asOf);
   return fetchJson<MarketFlows>(apiUrl(`/api/v1/market/flows?${params}`), init);
+}
+
+export function getMarketSectors(
+  query: { window: number; asOf?: string | null },
+  init?: Init,
+): Promise<SectorRotation> {
+  const params = new URLSearchParams({ window: String(query.window) });
+  if (query.asOf) params.set("as_of", query.asOf);
+  return fetchJson<SectorRotation>(apiUrl(`/api/v1/market/sectors?${params}`), init);
+}
+
+export function getSectorStocks(
+  query: { code: string; window: number; sort?: SectorStockSort; limit?: number; asOf?: string | null },
+  init?: Init,
+): Promise<SectorStocks> {
+  const params = new URLSearchParams({
+    window: String(query.window),
+    sort: query.sort ?? "window_return",
+    limit: String(query.limit ?? 30),
+  });
+  if (query.asOf) params.set("as_of", query.asOf);
+  return fetchJson<SectorStocks>(apiUrl(`/api/v1/market/sectors/${enc(query.code)}/stocks?${params}`), init);
 }
 
 export const getMarketDataStatus = (init?: Init) =>

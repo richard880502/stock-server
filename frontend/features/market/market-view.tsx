@@ -14,6 +14,7 @@ import { MarketControls } from "./market-controls";
 import { AwaitingReportNotice, BackfillNotice, PartialHistoryNotice } from "./market-notices";
 import { METRICS } from "./metrics";
 import { RankingBoard } from "./ranking-board";
+import { SectorSection } from "./sector-section";
 import { useCommittedAsOf } from "./use-committed-as-of";
 import { useMarketParams } from "./use-market-params";
 import { useMarketResource } from "./use-market-resource";
@@ -140,6 +141,8 @@ export function MarketView() {
         loading={flows.loading}
         stale={flows.stale}
       />
+
+      <SectorSection asOf={asOf} onPick={pick} />
 
       <MarketDataFooter refreshKey={flows.data} />
     </>

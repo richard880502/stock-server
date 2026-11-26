@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
     ensure_market_snapshots,
@@ -16,6 +17,10 @@ from quant_signal.infrastructure.providers.twse import TwseProvider
 from quant_signal.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+# A failed refresh is retried after an hour, not on every poll.
+INDUSTRY_RETRY_AFTER = timedelta(hours=1)
+_industry_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -31,6 +36,14 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
         await ensure_market_snapshots(
             repository, lookback_days=settings.sync_market_lookback_days
         )
+        now = datetime.now(UTC)
+        if now - _industry_attempt["at"] >= INDUSTRY_RETRY_AFTER:
+            _industry_attempt["at"] = now
+            try:
+                await refresh_industries(repository, twse, tpex, now=now)
+            except Exception:
+                # Classification is a weekly nicety; never let it stall the price sync.
+                logger.exception("industry classification refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),
