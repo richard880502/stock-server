@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,46 @@ _SYMBOL = re.compile(r"^[A-Z0-9]{1,16}(?:\.TW|\.TWO)?$")
 
 def _value(value: Any) -> Any:
     return getattr(value, "value", value)
+
+
+def parse_kbars(symbol: str, kbars: Any, day: date) -> list[dict]:
+    """Turn a Shioaji Kbars object into minute rows (start-of-minute, Asia/Taipei).
+
+    Rows outside ``day`` or with non-positive prices are dropped; volume stays in lots.
+    """
+    columns = [getattr(kbars, name, None) for name in ("ts", "Open", "High", "Low", "Close")]
+    volumes = getattr(kbars, "Volume", None)
+    if any(column is None for column in columns) or volumes is None:
+        return []
+    rows = []
+    for ts, open_, high, low, close, volume in zip(*columns, volumes, strict=False):
+        try:
+            wall = datetime.fromtimestamp(int(ts) / 1e9, UTC).replace(tzinfo=_TAIPEI)
+            prices = [float(open_), float(high), float(low), float(close)]
+            lots = int(volume)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not all(math.isfinite(p) and p > 0 for p in prices) or lots < 0:
+            continue
+        minute = wall - timedelta(minutes=1)
+        if minute.date() != day:
+            continue
+        rows.append(
+            dict(
+                symbol=symbol,
+                minute=minute,
+                open=prices[0],
+                high=prices[1],
+                low=prices[2],
+                close=prices[3],
+                first_time=minute,
+                last_time=wall - timedelta(microseconds=1),
+                first_total_volume=0,
+                last_total_volume=lots,
+                is_partial=False,
+            )
+        )
+    return rows
 
 
 class ShioajiFeed:
@@ -91,6 +131,29 @@ class ShioajiFeed:
         except Exception:
             self._subscriptions.pop(code, None)
             raise RuntimeError("Shioaji subscription failed") from None
+
+    def minute_bars(self, symbol: str, day: date) -> list[dict]:
+        """Official 1-minute bars for one trading day, labelled by minute START in Taipei.
+
+        Shioaji's kbars are meant for after-the-fact use, not polling. Their ``ts`` is
+        Taipei wall time encoded as if it were UTC (nanoseconds), and each bar is
+        stamped at the END of its minute (the first bar of a session is 09:01).
+        Volume is in lots. These readings come from the documented examples, not an
+        explicit spec, so the caller compares them with live-built minutes.
+        """
+        if self._api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        symbol = symbol.strip().upper()
+        if not _SYMBOL.fullmatch(symbol):
+            raise ValueError("invalid stock symbol")
+        contract = self._api.Contracts.Stocks[symbol.partition(".")[0]]
+        if contract is None:
+            raise ValueError("stock contract not found")
+        try:
+            kbars = self._api.kbars(contract, start=day.isoformat(), end=day.isoformat())
+        except Exception:
+            raise RuntimeError("Shioaji kbars query failed") from None
+        return parse_kbars(symbol, kbars, day)
 
     def unsubscribe(self, symbol: str) -> None:
         symbol = symbol.strip().upper()

@@ -124,6 +124,9 @@ class MinuteBuffer:
                     current.last_total_volume, incoming.last_total_volume
                 ),
             },
+            # Official (backfilled) minutes store per-minute volume, not running totals;
+            # never mix live ticks into them.
+            where=current.is_partial,
         )
         async with session_factory() as session:
             await session.execute(statement)
