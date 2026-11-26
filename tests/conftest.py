@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
@@ -99,6 +100,29 @@ def make_market_observations(
         )
         current += timedelta(days=1)
     return observations
+
+
+# CI sets CI_REQUIRE_INTEGRATION=1 so the database/Redis integration tests can never
+# pass by being skipped (a missing service or env var would otherwise stay green).
+_INTEGRATION_FILES = (
+    "test_postgres_integration.py",
+    "test_quote_storage_integration.py",
+    "test_schema_drift.py",
+)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if (
+        os.environ.get("CI_REQUIRE_INTEGRATION") == "1"
+        and report.skipped
+        and item.path.name in _INTEGRATION_FILES
+    ):
+        reason = report.longrepr[2] if isinstance(report.longrepr, tuple) else report.longrepr
+        report.outcome = "failed"
+        report.longrepr = f"integration test skipped under CI_REQUIRE_INTEGRATION=1: {reason}"
 
 
 @pytest.fixture

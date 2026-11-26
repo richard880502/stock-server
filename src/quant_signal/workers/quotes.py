@@ -235,7 +235,9 @@ async def collect(redis, settings, owner, stop, health=None):
     seeds: set[asyncio.Task] = set()
     backfiller = None
     if settings.quotes_backfill_enabled:
-        backfiller = MinuteBackfiller(redis, settings, feed.minute_bars, usage_ok=usage.ok)
+        backfiller = MinuteBackfiller(
+            redis, settings, feed.minute_bars, usage_ok=usage.ok, usage_probe=usage.fresh
+        )
     try:
         # Renew independently while SDK login blocks in a thread.
         async def heartbeat():
