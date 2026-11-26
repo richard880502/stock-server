@@ -12,6 +12,10 @@ export type LiveQuote = {
   total_volume: number | null;
   trade_time: string;
   received_at: string;
+  /** Today's session open/high/low so far; absent when the feed did not provide them. */
+  day_open?: number | null;
+  day_high?: number | null;
+  day_low?: number | null;
   candle?: { time: number; open: number; high: number; low: number; close: number; volume: number; is_partial: true } | null;
 };
 export type LiveQuoteStatus = "disabled" | "connecting" | "live" | "unavailable" | "paused";
