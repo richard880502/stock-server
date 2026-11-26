@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 from typing import Protocol
@@ -222,7 +223,7 @@ class OpenAICompatibleClient:
                     headers=headers,
                     json=request_body,
                 )
-            response.raise_for_status()
+            self._raise_for_status(response)
             data = response.json()
         content = data["choices"][0]["message"]["content"]
         return self._parse_json(content)
@@ -254,7 +255,9 @@ class OpenAICompatibleClient:
                 headers=headers,
                 json=request_body,
             ) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    await response.aread()
+                self._raise_for_status(response)
                 non_sse_lines: list[str] = []
                 saw_sse = False
                 async for line in response.aiter_lines():
@@ -281,6 +284,40 @@ class OpenAICompatibleClient:
                         return
                     if isinstance(content, str) and content:
                         yield content
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
+        """Raise a readable error that keeps the provider's own reason (e.g. context too long).
+
+        httpx's default message drops the response body, which is where an
+        OpenAI-compatible server says why it rejected a request. The reason is
+        shown to platform users, so the configured key is removed before it is
+        trimmed, whatever format that key has.
+        """
+        if not response.is_error:
+            return
+        reason = ""
+        try:
+            body = response.json()
+            error = body.get("error") if isinstance(body, dict) else None
+            if isinstance(error, dict):
+                reason = str(error.get("message") or error.get("code") or "")
+            elif isinstance(error, str):
+                reason = error
+            elif isinstance(body, dict):
+                reason = str(body.get("detail") or body.get("message") or "")
+        except ValueError:
+            reason = response.text
+        reason = reason.strip()
+        api_key = self.api_key.strip()
+        if api_key:
+            reason = reason.replace(api_key, "[redacted]")
+        secret_like = r"\b(sk|key|token)[-_][A-Za-z0-9_\-]{8,}"
+        reason = re.sub(secret_like, "[redacted]", reason)[:300]
+        host = response.request.url.host
+        raise LLMProviderError(
+            f"模型服務 {host} 回應 HTTP {response.status_code}"
+            + (f"：{reason}" if reason else "")
+        )
 
     @staticmethod
     def _parse_json(content: str | dict) -> dict:
