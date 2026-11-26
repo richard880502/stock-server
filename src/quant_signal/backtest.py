@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from math import sqrt
 from statistics import fmean, pstdev
 
+from quant_signal.domain import tw_trading
 from quant_signal.domain.models import (
     BacktestReport,
     BacktestSpec,
@@ -15,6 +16,7 @@ from quant_signal.domain.models import (
     MarketObservation,
     MarketRegime,
 )
+from quant_signal.live_bar import PROVISIONAL_SOURCE, TAIPEI
 from quant_signal.quant.chip_flow import ChipFlowEngine
 from quant_signal.quant.engine import QuantSignalEngine
 from quant_signal.quant.market_environment import MarketEnvironmentEngine
@@ -33,6 +35,8 @@ class BacktestEngine:
         spec: BacktestSpec,
         *,
         benchmark_bars: list[Bar] | None = None,
+        provisional_as_of: datetime | None = None,
+        provisional_note: str | None = None,
         market_observations: list[MarketObservation] | None = None,
         institutional_flows: list[InstitutionalFlow] | None = None,
         branch_flows: list[BrokerBranchFlow] | None = None,
@@ -45,7 +49,29 @@ class BacktestEngine:
         if len(period_bars) < 2:
             raise ValueError("backtest period must contain at least two bars")
 
-        cost_rate = (spec.fee_bps + spec.slippage_bps) / 10_000
+        tw_costs = spec.fee_bps is None and spec.sell_tax_bps is None
+        slippage_rate = spec.slippage_bps / 10_000
+        legacy_fee = (spec.fee_bps if spec.fee_bps is not None else 5) / 10_000
+        legacy_tax = (spec.sell_tax_bps or 0) / 10_000
+        cost_config = tw_trading.TWCostConfig(
+            commission_discount=tw_trading.D(str(spec.commission_discount))
+        )
+
+        def trade_cost(side: str, notional: float) -> float:
+            """Cost of one fill of ``notional`` TWD. Position model stays fractional;
+            the NT$20 minimum fee and whole-NT$ rounding apply to this notional."""
+            if notional <= 0:
+                return 0.0
+            slippage = notional * slippage_rate
+            if tw_costs:
+                return slippage + tw_trading.fill_cost(
+                    "buy" if side == "buy" else "sell",
+                    notional,
+                    symbol=spec.symbol,
+                    config=cost_config,
+                )
+            return notional * (legacy_fee + (legacy_tax if side == "sell" else 0)) + slippage
+
         equity = spec.initial_capital
         position = 0.0
         trades = 0
@@ -114,8 +140,8 @@ class BacktestEngine:
 
             turnover = abs(target_position - position)
             if turnover:
-                rate = cost_rate + (spec.sell_tax_bps / 10_000 if target_position < position else 0)
-                cost = equity * turnover * rate
+                side = "buy" if target_position > position else "sell"
+                cost = trade_cost(side, equity * turnover)
                 equity -= cost
                 transactions.append(
                     BacktestTrade(
@@ -137,7 +163,10 @@ class BacktestEngine:
                 EquityPoint(
                     trading_date=next_bar.trading_date,
                     equity=round(
-                        spec.initial_capital * (1 - cost_rate) * next_open / first_open, 4
+                        (spec.initial_capital - trade_cost("buy", spec.initial_capital))
+                        * next_open
+                        / first_open,
+                        4,
                     ),
                     position=1,
                 )
@@ -181,6 +210,17 @@ class BacktestEngine:
             max_drawdown = min(max_drawdown, value / running_peak - 1)
 
         warnings: list[str] = []
+        if provisional_note:
+            warnings.append(provisional_note)
+        has_provisional = any(b.source == PROVISIONAL_SOURCE for b in period_bars)
+        if has_provisional:
+            stamp = (
+                provisional_as_of.astimezone(TAIPEI).strftime("%H:%M") if provisional_as_of else ""
+            )
+            warnings.append(
+                f"含今日盤中暫定 K 棒（截至 {stamp}）：僅用其開盤價估算最新一段報酬，"
+                "收盤後以官方日線取代。"
+            )
         if (spec.end - period_bars[-1].trading_date).days > 7:
             warnings.append(
                 f"價格資料僅到 {period_bars[-1].trading_date}，未涵蓋指定結束日；"
@@ -210,4 +250,7 @@ class BacktestEngine:
             ),
             transactions=transactions,
             warnings=warnings,
+            cost_model="tw" if tw_costs else "custom",
+            provisional_bar=has_provisional,
+            as_of_time=provisional_as_of if has_provisional else None,
         )

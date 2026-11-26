@@ -209,13 +209,15 @@ curl -X POST "http://127.0.0.1:18100/api/v1/backtests" \
     "end": "2026-07-31",
     "entry_score": 70,
     "exit_score": 45,
-    "fee_bps": 5,
     "slippage_bps": 5,
+    "include_live_today": false,
     "use_chip_filter": true,
     "chip_entry_score": 55,
     "chip_exit_score": 40
   }'
 ```
+
+成本預設採台股規則（`domain/tw_trading.py`）：手續費 0.1425%（可用 `commission_discount` 打折）每筆最低 NT$20、賣出證交稅股票 0.3% / ETF 0.1%（代號 `00` 開頭視為 ETF），另加 `slippage_bps`。`fee_bps` / `sell_tax_bps` 留空即用此規則，填任一欄則回到舊的固定 bps 模型。`include_live_today=true` 且 `quotes_enabled` 時，若今日尚無官方日線，會用 `quote_minutes` 補一根暫定 K 棒（結果 `provisional_bar` / `as_of_time` 標示）。
 
 Use the returned ID:
 

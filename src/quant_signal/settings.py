@@ -101,6 +101,25 @@ class Settings(BaseSettings):
     shioaji_api_key: SecretStr = SecretStr("")
     shioaji_secret_key: SecretStr = SecretStr("")
     shioaji_simulation: bool = False
+    # Official 1-minute bars (Shioaji kbars) fill the minutes the live feed missed.
+    quotes_backfill_enabled: bool = True
+    # Taipei time after which the day's minutes are replaced with official kbars.
+    quotes_backfill_after_close: str = Field(
+        default="14:45", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
+    )
+    # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
+    quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
+    # After the close, collect the whole listed + OTC market (~2,000 symbols, watched
+    # ones first). At 40 queries / 10 s that takes ~9 minutes and ~30 MB of traffic.
+    quotes_backfill_whole_market: bool = True
+    quotes_backfill_max_symbols: int = Field(default=2500, ge=1, le=4000)
+    # Stop history queries and snapshots when today's remaining Shioaji traffic
+    # (api.usage().remaining_bytes) drops below this reserve, so live quotes keep flowing.
+    quotes_usage_reserve_mb: int = Field(default=100, ge=0, le=10000)
+    # Whole-market snapshots (latest price for every stock) every N minutes in the session.
+    quotes_snapshot_minutes: int = Field(default=10, ge=0, le=60)
+    # Keep this many months of 1-minute bars (0 keeps everything).
+    minute_bars_retention_months: int = Field(default=0, ge=0, le=240)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

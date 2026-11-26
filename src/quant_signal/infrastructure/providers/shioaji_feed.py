@@ -1,37 +1,141 @@
 """Thin, quote-only adapter for Shioaji 1.3.3.
 
 Callbacks run on SDK threads: consumers should enqueue ticks without blocking.
-Total volume is in exchange lots (1,000 shares), not shares.
+Stock volume is in exchange lots (1,000 shares); futures volume is in contracts.
+History queries (kbars) are paced by the shared Redis budget in ``shioaji_budget``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
+from quant_signal.infrastructure.providers.shioaji_budget import BudgetExhausted
+
 _TAIPEI = ZoneInfo("Asia/Taipei")
 _SYMBOL = re.compile(r"^[A-Z0-9]{1,16}(?:\.TW|\.TWO)?$")
+# Stable symbol -> (futures root, continuous near-month code). TXFR1 always points
+# at the current near-month TAIEX futures contract (its target_code, e.g. TXFL6).
+_FUTURES = {"TXF.TAIFEX": ("TXF", "TXFR1")}
 
 
 def _value(value: Any) -> Any:
     return getattr(value, "value", value)
 
 
+def _wall_time(ts: Any) -> datetime:
+    """Shioaji history ``ts``: Taipei wall time encoded as if it were UTC (nanoseconds)."""
+    return datetime.fromtimestamp(int(ts) / 1e9, UTC).replace(tzinfo=_TAIPEI)
+
+
+def parse_kbars(symbol: str, kbars: Any, start: datetime, end: datetime) -> list[MinuteBar]:
+    """Turn a Shioaji Kbars object into minute rows (start-of-minute, Asia/Taipei).
+
+    Keeps minutes in ``[start, end)``; drops non-positive prices and malformed rows.
+    Volume stays in the instrument's unit (lots for stocks, contracts for futures).
+    """
+    columns = [getattr(kbars, name, None) for name in ("ts", "Open", "High", "Low", "Close")]
+    volumes = getattr(kbars, "Volume", None)
+    if any(column is None for column in columns) or volumes is None:
+        return []
+    rows = []
+    for ts, open_, high, low, close, volume in zip(*columns, volumes, strict=False):
+        try:
+            wall = _wall_time(ts)
+            prices = [float(open_), float(high), float(low), float(close)]
+            lots = int(volume)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        if not all(math.isfinite(p) and p > 0 for p in prices) or lots < 0:
+            continue
+        if not (prices[2] <= min(prices[0], prices[3]) and prices[1] >= max(prices[0], prices[3])):
+            continue
+        # Bars are stamped at the END of their minute (stocks 09:01, futures 08:46).
+        minute = wall - timedelta(minutes=1)
+        if not start <= minute < end:
+            continue
+        rows.append(
+            MinuteBar(
+                symbol=symbol,
+                minute=minute,
+                open=prices[0],
+                high=prices[1],
+                low=prices[2],
+                close=prices[3],
+                volume=lots,
+                official=True,
+            )
+        )
+    return rows
+
+
+def parse_snapshots(
+    snapshots: Any, symbols: dict[str, str], received_at: datetime
+) -> list[LatestQuote]:
+    """Shioaji snapshots -> latest quotes. ``symbols`` maps contract code -> our symbol.
+
+    The reference price (平盤價) is ``close - change_price``; it already reflects
+    ex-rights adjustments made by the exchange for the day.
+    """
+    quotes = []
+    for item in snapshots or []:
+        symbol = symbols.get(str(getattr(item, "code", "")))
+        if symbol is None:
+            continue
+        try:
+            close = float(item.close)
+            change = float(getattr(item, "change_price", 0) or 0)
+            trade_time = _wall_time(item.ts)
+        except (AttributeError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        if not math.isfinite(close) or close <= 0 or not math.isfinite(change):
+            continue
+        reference = close - change
+        volume = getattr(item, "total_volume", None)
+        amount = getattr(item, "total_amount", None)
+        quotes.append(
+            LatestQuote(
+                symbol=symbol,
+                price=close,
+                reference=round(reference, 2) if reference > 0 else None,
+                open=_positive_float(getattr(item, "open", None)),
+                high=_positive_float(getattr(item, "high", None)),
+                low=_positive_float(getattr(item, "low", None)),
+                volume=int(volume) if isinstance(volume, int | float) and volume >= 0 else None,
+                amount=int(amount) if isinstance(amount, int | float) and amount >= 0 else None,
+                trade_time=trade_time,
+                source="snapshot",
+                updated_at=received_at,
+            )
+        )
+    return quotes
+
+
 class ShioajiFeed:
     def __init__(
-        self, settings: Any, on_tick: Callable[[dict], None], on_disconnect: Callable[[], None]
+        self,
+        settings: Any,
+        on_tick: Callable[[dict], None],
+        on_disconnect: Callable[[], None],
+        budget: Any = None,
     ) -> None:
         self._settings = settings
         self._on_tick = on_tick
         self._on_disconnect = on_disconnect
+        # Without a budget no history query (kbars/ticks/snapshots) is ever sent.
+        self._budget = budget
         self._api: Any = None
         self._sdk: Any = None
-        # SDK tick codes have no market suffix. Keep the exact subscribed symbol.
+        # Subscription key (stock code or continuous futures code) -> (symbol, contract).
         self._subscriptions: dict[str, tuple[str, Any]] = {}
+        # Tick code -> subscription key. Futures ticks carry the real contract code.
+        self._tick_codes: dict[str, str] = {}
         self._closing = False
 
     def start(self) -> None:
@@ -45,6 +149,7 @@ class ShioajiFeed:
         try:
             api = sj.Shioaji(simulation=self._settings.shioaji_simulation)
             api.quote.set_on_tick_stk_v1_callback(self._handle_tick)
+            api.quote.set_on_tick_fop_v1_callback(self._handle_fop_tick)
             api.quote.set_event_callback(self._handle_event)
             api.login(
                 api_key=self._settings.shioaji_api_key.get_secret_value(),
@@ -61,17 +166,19 @@ class ShioajiFeed:
         self._closing = False
         self._sdk, self._api = sj, api
 
-    def subscribe(self, symbol: str) -> None:
-        if self._api is None:
-            raise RuntimeError("Shioaji feed is not started")
+    def _resolve(self, symbol: str) -> tuple[str, Any, tuple[str, ...]]:
+        """(subscription key, contract, tick codes) for a validated symbol."""
         symbol = symbol.strip().upper()
+        if symbol in _FUTURES:
+            root, code = _FUTURES[symbol]
+            contract = getattr(getattr(self._api.Contracts.Futures, root, None), code, None)
+            if contract is None or _value(getattr(contract, "exchange", None)) != "TAIFEX":
+                raise ValueError("futures contract not found on TAIFEX")
+            target = str(getattr(contract, "target_code", "") or "")
+            return code, contract, tuple(c for c in (code, target) if c)
         if not _SYMBOL.fullmatch(symbol):
             raise ValueError("invalid stock symbol")
         code, _, suffix = symbol.partition(".")
-        if code in self._subscriptions:
-            if self._subscriptions[code][0] != symbol:
-                raise ValueError("stock code already subscribed under another symbol")
-            return
         contract = self._api.Contracts.Stocks[code]
         exchange = _value(getattr(contract, "exchange", None))
         if (
@@ -81,7 +188,20 @@ class ShioajiFeed:
             or (suffix == "TWO" and exchange != "OTC")
         ):
             raise ValueError("stock contract not found on TSE or OTC")
-        self._subscriptions[code] = (symbol, contract)
+        return code, contract, (code,)
+
+    def subscribe(self, symbol: str) -> None:
+        if self._api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        symbol = symbol.strip().upper()
+        key, contract, codes = self._resolve(symbol)
+        if key in self._subscriptions:
+            if self._subscriptions[key][0] != symbol:
+                raise ValueError("contract already subscribed under another symbol")
+            return
+        self._subscriptions[key] = (symbol, contract)
+        for code in codes:
+            self._tick_codes[code] = key
         try:
             self._api.quote.subscribe(
                 contract,
@@ -89,13 +209,86 @@ class ShioajiFeed:
                 version=self._sdk.constant.QuoteVersion.v1,
             )
         except Exception:
-            self._subscriptions.pop(code, None)
+            self._forget(key)
             raise RuntimeError("Shioaji subscription failed") from None
+
+    def _forget(self, key: str) -> None:
+        self._subscriptions.pop(key, None)
+        for code in [code for code, owner in self._tick_codes.items() if owner == key]:
+            self._tick_codes.pop(code, None)
+
+    async def _query(self, kind: str, *args: Any, **kwargs: Any) -> Any:
+        """The only path to Shioaji history queries: budgeted, then run off the loop."""
+        if self._budget is None:
+            raise BudgetExhausted("no Shioaji query budget configured")
+        await self._budget.acquire(kind)
+        api = self._api
+        if api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        try:
+            return await asyncio.to_thread(getattr(api, kind), *args, **kwargs)
+        except Exception:
+            raise RuntimeError(f"Shioaji {kind} query failed") from None
+
+    async def minute_bars(self, symbol: str, start: datetime, end: datetime) -> list[dict]:
+        """Official 1-minute bars with ``start <= minute < end``, labelled by minute START.
+
+        Shioaji's kbars are meant for after-the-fact use, not polling. Their ``ts`` is
+        Taipei wall time encoded as if it were UTC (nanoseconds), and each bar is
+        stamped at the END of its minute (the first stock bar is 09:01, the first
+        TXFR1 bar 08:46). Volume is in lots (stocks) or contracts (futures). These
+        readings come from the documented examples, not an explicit spec, so the
+        caller compares them with live-built minutes.
+        """
+        if self._api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        symbol = symbol.strip().upper()
+        _, contract, _ = self._resolve(symbol)
+        first = start.astimezone(_TAIPEI).date()
+        last = (end.astimezone(_TAIPEI) - timedelta(microseconds=1)).date()
+        if last < first:
+            return []
+        kbars = await self._query("kbars", contract, start=first.isoformat(), end=last.isoformat())
+        return parse_kbars(symbol, kbars, start, end)
+
+    async def snapshot_quotes(self, symbols: list[str]) -> list[LatestQuote]:
+        """Latest price for up to 500 symbols in one budgeted query (stocks only)."""
+        if self._api is None:
+            raise RuntimeError("Shioaji feed is not started")
+        if len(symbols) > 500:
+            raise ValueError("Shioaji snapshots take at most 500 contracts per call")
+        contracts, codes = [], {}
+        for symbol in symbols:
+            try:
+                key, contract, _ = self._resolve(symbol)
+            except (ValueError, LookupError, KeyError):
+                continue
+            contracts.append(contract)
+            codes[str(getattr(contract, "code", key))] = symbol.strip().upper()
+        if not contracts:
+            return []
+        result = await self._query("snapshots", contracts)
+        return parse_snapshots(result, codes, datetime.now(UTC))
+
+    def usage(self) -> dict | None:
+        """Today's data usage (``api.usage()`` -> UsageStatus); None when unavailable."""
+        api = self._api
+        if api is None:
+            return None
+        try:
+            status = api.usage()
+        except Exception:
+            return None
+        fields = ("connections", "bytes", "limit_bytes", "remaining_bytes")
+        values = {name: getattr(status, name, None) for name in fields}
+        if not all(isinstance(values[name], int) for name in ("limit_bytes", "remaining_bytes")):
+            return None
+        return values
 
     def unsubscribe(self, symbol: str) -> None:
         symbol = symbol.strip().upper()
-        code = symbol.partition(".")[0]
-        entry = self._subscriptions.get(code)
+        key = _FUTURES[symbol][1] if symbol in _FUTURES else symbol.partition(".")[0]
+        entry = self._subscriptions.get(key)
         if entry is None or entry[0] != symbol or self._api is None:
             return
         try:
@@ -106,12 +299,13 @@ class ShioajiFeed:
             )
         except Exception:
             raise RuntimeError("Shioaji unsubscription failed") from None
-        self._subscriptions.pop(code, None)
+        self._forget(key)
 
     def close(self) -> None:
         self._closing = True
         api, self._api = self._api, None
         self._subscriptions.clear()
+        self._tick_codes.clear()
         if api is not None:
             try:
                 api.logout()
@@ -125,9 +319,20 @@ class ShioajiFeed:
     def _handle_tick(self, exchange: Any, tick: Any) -> None:
         if self._closing or getattr(tick, "simtrade", True) or getattr(tick, "intraday_odd", True):
             return
-        entry = self._subscriptions.get(str(tick.code))
-        if entry is None or _value(exchange) != _value(entry[1].exchange):
+        entry = self._subscriptions.get(self._tick_codes.get(str(tick.code), ""))
+        if entry is None or entry[0] in _FUTURES or _value(exchange) != _value(entry[1].exchange):
             return
+        self._emit(entry[0], tick, "lot", entry[1])
+
+    def _handle_fop_tick(self, exchange: Any, tick: Any) -> None:
+        if self._closing or getattr(tick, "simtrade", True) or _value(exchange) != "TAIFEX":
+            return
+        entry = self._subscriptions.get(self._tick_codes.get(str(tick.code), ""))
+        if entry is None or entry[0] not in _FUTURES:
+            return
+        self._emit(entry[0], tick, "contract", entry[1])
+
+    def _emit(self, symbol: str, tick: Any, unit: str, contract: Any = None) -> None:
         try:
             price = float(tick.close)
             change_pct = float(tick.pct_chg) / 100
@@ -155,14 +360,24 @@ class ShioajiFeed:
             for name in ("open", "high", "low")
             if (value := _positive_float(getattr(tick, name, None))) is not None
         }
+        # The exchange's reference price for today (平盤價, set at login), which
+        # already reflects ex-rights / ex-dividend adjustments.
+        reference = _positive_float(getattr(contract, "reference", None))
+        if reference is not None:
+            day_stats["reference"] = reference
+        amount = getattr(tick, "total_amount", None)
+        if isinstance(amount, int | float) and math.isfinite(amount) and amount >= 0:
+            day_stats["total_amount"] = int(amount)
         self._on_tick(
             {
                 **day_stats,
-                "symbol": entry[0],
+                "symbol": symbol,
                 "price": price,
                 "change_pct": change_pct,
                 "total_volume": total_volume,
                 "volume": trade_volume,
+                # "lot" = 張 (1,000 shares) for stocks, "contract" = 口 for futures.
+                "unit": unit,
                 "trade_time": trade_time.isoformat(),
                 "received_at": datetime.now(UTC).isoformat(),
                 "trade_epoch": trade_time.timestamp(),

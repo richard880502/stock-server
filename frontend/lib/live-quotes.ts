@@ -84,3 +84,26 @@ export function useLiveQuotes(symbols: string[]): State {
   if (!key) return { status: "disabled", quotes: new Map() };
   return visible ? state : { ...state, status: "paused" };
 }
+
+/**
+ * The server's latest price for a watchlist row, shaped like a live quote. Used until
+ * the live stream delivers one, so a page opened after the last trade (or before the
+ * stream connects) shows today's price rather than yesterday's official close.
+ */
+export function quoteFromLatest(item: {
+  symbol: string;
+  latest_price?: number | null;
+  latest_change_pct?: number | null;
+  latest_at?: string | null;
+}): LiveQuote | undefined {
+  if (item.latest_price == null || !item.latest_at) return undefined;
+  return {
+    symbol: item.symbol.toUpperCase(),
+    price: item.latest_price,
+    change_pct: item.latest_change_pct == null ? null : item.latest_change_pct / 100,
+    total_volume: null,
+    trade_time: item.latest_at,
+    received_at: item.latest_at,
+    candle: null,
+  };
+}

@@ -36,6 +36,7 @@ from quant_signal.application.llm_analysis import (
 )
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
+from quant_signal.application.market_sectors import SectorRotationService, SortKey
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
     BacktestJobService,
@@ -86,6 +87,8 @@ from quant_signal.domain.models import (
     NewsSentimentSnapshot,
     PriceSeries,
     RankingMetric,
+    SectorRotation,
+    SectorStocks,
     SignalSnapshot,
     StockOverview,
     Watchlist,
@@ -537,6 +540,34 @@ def create_app() -> FastAPI:
         return await MarketRankingService(
             repository, backfill_days=get_settings().sync_market_lookback_days
         ).flows(market=market, days=days, as_of=as_of)
+
+    @router.get("/market/sectors", response_model=SectorRotation)
+    async def market_sectors(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        window: Annotated[int, Query(description="Sessions: 1, 5 or 20")] = 5,
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> SectorRotation:
+        try:
+            return await SectorRotationService(repository).rotation(window=window, as_of=as_of)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/market/sectors/{code}/stocks", response_model=SectorStocks)
+    async def market_sector_stocks(
+        code: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        window: Annotated[int, Query(description="Sessions: 1, 5 or 20")] = 5,
+        sort: SortKey = "window_return",
+        order: Literal["desc", "asc"] = "desc",
+        limit: Annotated[int, Query(ge=1, le=100)] = 30,
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> SectorStocks:
+        try:
+            return await SectorRotationService(repository).stocks(
+                code, window=window, as_of=as_of, sort=sort, order=order, limit=limit
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.get("/market/backfill-status", response_model=list[MarketBackfillStatus])
     async def market_backfill_status(

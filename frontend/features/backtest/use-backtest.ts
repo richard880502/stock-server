@@ -4,12 +4,14 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { createBacktest, getBacktest, type MarketCode } from "@/lib/api/endpoints";
 import { isAbortError } from "@/lib/api/errors";
 import type { BacktestJob } from "@/lib/api/types";
+import { today } from "@/lib/format";
 
 export type BacktestForm = {
   start: string;
-  feeBps: number;
+  /** null = 台股規則（手續費 0.1425% 最低 20 元、證交稅 0.3%/ETF 0.1%）。 */
+  feeBps: number | null;
   slippageBps: number;
-  sellTaxBps: number;
+  sellTaxBps: number | null;
   initialCapital: number;
   entryScore: number;
   exitScore: number;
@@ -19,9 +21,9 @@ export type BacktestForm = {
 
 const initialForm: BacktestForm = {
   start: "2025-01-01",
-  feeBps: 5,
+  feeBps: null,
   slippageBps: 5,
-  sellTaxBps: 0,
+  sellTaxBps: null,
   initialCapital: 1_000_000,
   entryScore: 70,
   exitScore: 45,
@@ -100,6 +102,7 @@ export function useBacktest(
           slippage_bps: form.slippageBps,
           sell_tax_bps: form.sellTaxBps,
           initial_capital: form.initialCapital,
+          include_live_today: query.asOf === today(),
           use_chip_filter: form.useChipFilter,
           chip_entry_score: 55,
           chip_exit_score: 40,

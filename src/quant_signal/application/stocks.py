@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from quant_signal.application.data_sync import _recently_synced
 from quant_signal.application.ports import QuantRepository
+from quant_signal.application.prices import price_now
 from quant_signal.application.sync_jobs import request_symbol_sync
 from quant_signal.domain.models import (
     MarketStockDay,
@@ -239,10 +240,12 @@ class WatchlistService:
         for row in rows:
             by_symbol.setdefault(row.symbol, []).append(row)
         tracked = set(await self.repository.list_tracked_symbols())
+        latest = await self.repository.latest_quotes([e[0] for e in entries])
         items: list[WatchlistItem] = []
         for symbol, name, market, added_at in entries:
             points = _points(by_symbol.get(symbol, []))
             last = points[-1] if points else None
+            now = price_now(latest.get(symbol.upper()), last.trading_date if last else None)
             items.append(
                 WatchlistItem(
                     symbol=symbol,
@@ -262,6 +265,10 @@ class WatchlistService:
                         else None
                     ),
                     full_analysis="ready" if symbol in tracked else "preparing",
+                    latest_price=now.price if now else None,
+                    latest_change_pct=now.change_pct if now else None,
+                    latest_at=now.at if now else None,
+                    latest_source=now.source if now else None,  # type: ignore[arg-type]
                 )
             )
         return Watchlist(limit=self.limit, count=len(items), items=items)

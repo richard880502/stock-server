@@ -18,10 +18,12 @@ from quant_signal.domain.models import (
     FetchCoverage,
     InstitutionalFlow,
     Instrument,
+    IntradaySnapshot,
     JobStatus,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketFlowDay,
+    MarketIndustry,
     MarketObservation,
     MarketStockDay,
     NewsItem,
@@ -30,6 +32,7 @@ from quant_signal.domain.models import (
     SyncJobKind,
     User,
 )
+from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 
 
 class MemoryQuantRepository:
@@ -51,6 +54,11 @@ class MemoryQuantRepository:
         self.fetch_coverage: dict[tuple[str, str, str, str], FetchCoverage] = {}
         self.sync_jobs: dict[UUID, SyncJob] = {}
         self.market_stock_days: dict[tuple[str, date, str], MarketStockDay] = {}
+        self.market_industries: dict[str, MarketIndustry] = {}
+        self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
+        # Test seams for the ingest-owned price layers (``quote_latest``, ``minute_bars``).
+        self.quotes_latest: dict[str, LatestQuote] = {}
+        self.minute_bars: dict[str, list[MinuteBar]] = {}
         self.users: dict[UUID, User] = {}
         self.user_sessions: dict[str, tuple[UUID, datetime]] = {}
         self.usage: dict[tuple[UUID, str, date], int] = {}
@@ -549,6 +557,50 @@ class MemoryQuantRepository:
         for item in rows:
             self.market_stock_days[(item.symbol, item.trading_date, item.source)] = item
         return len(rows)
+
+    async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int:
+        for item in rows:
+            self.market_industries[item.symbol] = item
+        return len(rows)
+
+    async def list_market_industries(self) -> list[MarketIndustry]:
+        return list(self.market_industries.values())
+
+    async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]:
+        wanted = {s.upper() for s in symbols}
+        return {s: q for s, q in self.quotes_latest.items() if s in wanted}
+
+    async def list_minute_bars(
+        self, symbol: str, *, since: datetime, until: datetime
+    ) -> list[MinuteBar]:
+        return [
+            bar
+            for bar in self.minute_bars.get(symbol.upper(), [])
+            if since <= bar.minute < until
+        ]
+
+    async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int:
+        """Test seam: production rows come from ``quote_latest`` (ingest service)."""
+        for item in rows:
+            self.intraday_snapshots[(item.symbol, item.taken_at)] = item
+        return len(rows)
+
+    async def latest_intraday_snapshots(
+        self, *, day: date, now: datetime
+    ) -> list[IntradaySnapshot]:
+        zone = ZoneInfo("Asia/Taipei")
+        start = datetime.combine(day, time.min, zone)
+        end = start + timedelta(days=1)
+        latest: dict[str, IntradaySnapshot] = {}
+        for item in self.intraday_snapshots.values():
+            if not (start <= item.taken_at < end) or item.taken_at > now:
+                continue
+            if item.available_at > now:
+                continue
+            current = latest.get(item.symbol)
+            if current is None or item.taken_at > current.taken_at:
+                latest[item.symbol] = item
+        return list(latest.values())
 
     def _market_rows(
         self, market: str | None, as_of: date | None

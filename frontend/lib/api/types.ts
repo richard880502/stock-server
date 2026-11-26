@@ -192,6 +192,10 @@ export type BacktestJob = {
     buy_hold_return?: number | null;
     excess_return?: number | null;
     warnings?: string[];
+    cost_model?: "tw" | "custom";
+    /** True when the last bar is today's intraday provisional bar. */
+    provisional_bar?: boolean;
+    as_of_time?: string | null;
     transactions?: {
       trading_date: string;
       side: string;
@@ -326,6 +330,11 @@ export type WatchlistItem = {
   recent_closes?: number[];
   change_20d_pct?: number | null;
   full_analysis: Exclude<FullAnalysisState, "insufficient">;
+  /** Today's latest price when newer than the official close (percent change). */
+  latest_price?: number | null;
+  latest_change_pct?: number | null;
+  latest_at?: string | null;
+  latest_source?: "tick" | "snapshot" | null;
 };
 
 export type Watchlist = { limit: number; count: number; items: WatchlistItem[] };
@@ -358,9 +367,11 @@ export type BacktestRequest = {
   end: string;
   entry_score: number;
   exit_score: number;
-  fee_bps: number;
+  /** null (with sell_tax_bps null) = Taiwan cost model: commission w/ NT$20 min + sell tax. */
+  fee_bps: number | null;
   slippage_bps: number;
-  sell_tax_bps: number;
+  sell_tax_bps: number | null;
+  include_live_today?: boolean;
   initial_capital: number;
   use_chip_filter: boolean;
   chip_entry_score: number;
@@ -490,4 +501,79 @@ export type BackfillStatus = {
   latest_score_date: string | null;
   /** The latest stored day already has a score. */
   score_ready: boolean;
+};
+
+// ---- 族群輪動 ------------------------------------------------------------
+
+export type SectorQuadrant = "leading" | "weakening" | "lagging" | "improving";
+
+export type SectorReturn = { equal_pct: number | null; weighted_pct: number | null };
+
+export type SectorRrgPoint = { rs_ratio: number; rs_momentum: number };
+
+export type SectorRrg = SectorRrgPoint & { quadrant: SectorQuadrant; trail: SectorRrgPoint[] };
+
+export type SectorRow = {
+  code: string;
+  name: string;
+  stock_count: number;
+  /** Keyed by session count: "1", "5", "20". */
+  returns: Record<string, SectorReturn>;
+  turnover_value: number;
+  /** Share (0-1) of the whole market's turnover over the selected window. */
+  turnover_share: number;
+  turnover_share_avg20: number | null;
+  /** turnover_share minus its 20-session average, as a 0-1 difference. */
+  turnover_share_change: number | null;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  breadth_up_pct: number | null;
+  institutional_net_lots: number | null;
+  institutional_net_value: number | null;
+  rrg: SectorRrg | null;
+};
+
+export type SectorRotation = {
+  window: number;
+  as_of: string | null;
+  mode: "close" | "intraday";
+  /** "unavailable": inside the session but no intraday snapshots are stored yet. */
+  intraday_status: "live" | "unavailable" | "not_applicable";
+  data_through: string | null;
+  /** ISO timestamp: the intraday snapshot time, or when the closing data became available. */
+  data_time: string | null;
+  trading_days: number;
+  institutional_through: string | null;
+  unclassified_count: number;
+  classification_ready: boolean;
+  market_turnover_value: number;
+  market_return_equal_pct: Record<string, number | null>;
+  backfill_pending: boolean;
+  sectors: SectorRow[];
+};
+
+export type SectorStockSort = "window_return" | "day_change" | "turnover" | "institutional";
+
+export type SectorStockEntry = {
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  close: number;
+  day_change_pct: number | null;
+  window_return_pct: number | null;
+  volume_lots: number;
+  turnover_value: number;
+  institutional_net_lots: number | null;
+};
+
+export type SectorStocks = {
+  code: string;
+  name: string;
+  window: number;
+  mode: "close" | "intraday";
+  data_through: string | null;
+  data_time: string | null;
+  backfill_pending: boolean;
+  entries: SectorStockEntry[];
 };

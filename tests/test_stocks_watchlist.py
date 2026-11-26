@@ -262,3 +262,40 @@ def test_cors_preflight_allows_watchlist_mutations(client) -> None:
         )
         assert response.status_code == 200, method
         assert method in response.headers["access-control-allow-methods"]
+
+
+async def test_watchlist_shows_todays_latest_price_until_the_official_close_lands(repo) -> None:
+    from quant_signal.infrastructure.db.prices import LatestQuote
+
+    service = WatchlistService(repo, limit=25)
+    await service.add(ME, "2330.TW")
+    official = (await service.get(ME)).items[0]
+    trade_day = official.data_through + timedelta(days=1)
+    traded = datetime.combine(trade_day, time(10, 30), tzinfo=UTC)
+
+    def quote(at: datetime) -> LatestQuote:
+        return LatestQuote(
+            symbol="2330.TW",
+            price=1081.0,
+            reference=1060.0,
+            open=None,
+            high=None,
+            low=None,
+            volume=1234,
+            amount=None,
+            trade_time=at,
+            source="snapshot",
+            updated_at=at,
+        )
+
+    repo.quotes_latest["2330.TW"] = quote(traded)
+    item = (await service.get(ME)).items[0]
+    # The official close stays as it is; today's price is reported next to it.
+    assert item.close == official.close
+    assert (item.latest_price, item.latest_source, item.latest_at) == (1081.0, "snapshot", traded)
+    assert round(item.latest_change_pct, 4) == round((1081 / 1060 - 1) * 100, 4)
+
+    # A quote from the same day as the official record is stale: the record wins.
+    same_day = datetime.combine(official.data_through, time(5, 0), tzinfo=UTC)
+    repo.quotes_latest["2330.TW"] = quote(same_day)
+    assert (await service.get(ME)).items[0].latest_price is None

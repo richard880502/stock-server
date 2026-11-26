@@ -17,7 +17,7 @@ import type { Sort, SortKey } from "./sort";
 import { useDashboard } from "@/lib/dashboard-context";
 import { formatPrice, formatSignedPct, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
-import { useLiveQuotes, type LiveQuote, type LiveQuoteStatus } from "@/lib/live-quotes";
+import { quoteFromLatest, useLiveQuotes, type LiveQuote, type LiveQuoteStatus } from "@/lib/live-quotes";
 import { IntradayDrawer } from "./intraday-drawer";
 import { useWatchlistAdd } from "./use-watchlist-add";
 import { Lots, PctChange } from "@/features/stock/flow-format";
@@ -334,7 +334,7 @@ export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNo
                   removing={watchlist.pending.has(item.symbol.toUpperCase())}
                   onOpen={open}
                   onRemove={remove}
-                  quote={live.quotes.get(item.symbol.toUpperCase())}
+                  quote={live.quotes.get(item.symbol.toUpperCase()) ?? quoteFromLatest(item)}
                   liveStatus={live.status}
                   now={now}
                   onChart={setChartSymbol}

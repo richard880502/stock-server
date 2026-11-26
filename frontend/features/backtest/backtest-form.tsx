@@ -104,7 +104,7 @@ export function BacktestForm() {
               資金與成本
               <small className="summary-meta num">
                 {" "}
-                · 費用 {form.feeBps} · 滑價 {form.slippageBps} · 稅 {form.sellTaxBps} bps
+                · {form.feeBps === null && form.sellTaxBps === null ? "台股規則" : `費用 ${form.feeBps ?? 5} · 稅 ${form.sellTaxBps ?? 0} bps`} · 滑價 {form.slippageBps} bps
               </small>
             </span>
             <ChevronDownIcon size={16} />
@@ -120,12 +120,15 @@ export function BacktestForm() {
             <div className="field-row">
               <NumberField
                 label="單邊費用（bps）"
+                hint="留白＝台股規則"
                 min="0"
                 max="1000"
                 step="0.01"
-                required
-                value={form.feeBps}
-                onChange={(event) => updateForm({ feeBps: Number(event.target.value) })}
+                placeholder="0.1425%，低消 20 元"
+                value={form.feeBps ?? ""}
+                onChange={(event) =>
+                  updateForm({ feeBps: event.target.value === "" ? null : Number(event.target.value) })
+                }
               />
               <NumberField
                 label="單邊滑價（bps）"
@@ -142,12 +145,15 @@ export function BacktestForm() {
               min="0"
               max="1000"
               step="0.01"
-              required
-              value={form.sellTaxBps}
-              onChange={(event) => updateForm({ sellTaxBps: Number(event.target.value) })}
+              hint="留白＝股票 0.3%、ETF 0.1%"
+              placeholder="依商品自動判斷"
+              value={form.sellTaxBps ?? ""}
+              onChange={(event) =>
+                updateForm({ sellTaxBps: event.target.value === "" ? null : Number(event.target.value) })
+              }
             />
             <p className="note">
-              1 bps = 0.01%。請依商品與券商填入成本；期末保留部位，未強制平倉。
+              1 bps = 0.01%。費用與稅留白時採台股規則（手續費 0.1425%、每筆最低 20 元；賣出證交稅股票 0.3%、ETF 0.1%），填入任一欄則改用固定 bps；期末保留部位，未強制平倉。
             </p>
           </div>
         </details>

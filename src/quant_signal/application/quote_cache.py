@@ -12,7 +12,9 @@ PREFIX = "quant:quotes:"
 DEMAND = PREFIX + "demand"
 HEALTH = PREFIX + "health"
 LOCK = PREFIX + "leader"
-SYMBOL = re.compile(r"^[0-9]{4,6}[A-Z]?\.TW(O)?$")
+# Stocks are CODE.TW / CODE.TWO. Futures use a stable continuous-contract symbol.
+FUTURES_SYMBOLS = frozenset({"TXF.TAIFEX"})  # TAIEX futures, near month (台指期近月)
+SYMBOL = re.compile(r"^(?:[0-9]{4,6}[A-Z]?\.TW(O)?|TXF\.TAIFEX)$")
 
 # Admission is atomic across API replicas. Each requested symbol holds a 60s lease.
 ADMIT = """
@@ -36,10 +38,19 @@ return 1
 """
 
 
+def is_futures(symbol: str) -> bool:
+    return symbol in FUTURES_SYMBOLS
+
+
+def volume_unit(symbol: str) -> str:
+    """Stocks trade in lots (張, 1,000 shares); futures in contracts (口)."""
+    return "contract" if is_futures(symbol) else "lot"
+
+
 def parse_symbols(raw: str) -> tuple[str, ...]:
     symbols = tuple(sorted(set(raw.upper().split(","))))
     if not 1 <= len(symbols) <= 25 or any(not SYMBOL.fullmatch(s) for s in symbols):
-        raise ValueError("請提供最多 25 檔上市或上櫃股票代號")
+        raise ValueError("請提供最多 25 檔上市、上櫃股票代號或台指期 TXF.TAIFEX")
     return symbols
 
 

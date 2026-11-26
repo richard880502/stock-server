@@ -66,6 +66,43 @@ class MarketStockDay(BaseModel):
     source: str
 
 
+class MarketIndustry(BaseModel):
+    """One listed/OTC stock's official industry (TWSE/TPEx 產業別)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    market: Literal["TW", "TWO"]
+    industry_code: str
+    industry_name: str
+    source: str
+    available_at: datetime
+
+
+class IntradaySnapshot(BaseModel):
+    """One stock's intraday state at a 10-minute collector tick.
+
+    ``change_pct`` is a ratio versus the previous close (0.0123 = +1.23%);
+    ``volume_lots`` and ``amount_twd`` are cumulative for the session so far.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    taken_at: datetime
+    price: float = Field(gt=0)
+    change_pct: float
+    volume_lots: int = Field(ge=0)
+    amount_twd: float = Field(ge=0)
+    available_at: datetime
+
+    @model_validator(mode="after")
+    def _timezone_aware(self) -> IntradaySnapshot:
+        if self.taken_at.tzinfo is None or self.available_at.tzinfo is None:
+            raise ValueError("taken_at and available_at must be timezone-aware")
+        return self
+
+
 RankingMetric = Literal[
     "foreign_net",
     "trust_net",
@@ -497,9 +534,15 @@ class BacktestSpec(BaseModel):
     initial_capital: float = Field(default=1_000_000, gt=0)
     entry_score: float = Field(default=70, ge=0, le=100)
     exit_score: float = Field(default=45, ge=0, le=100)
-    fee_bps: float = Field(default=5, ge=0, le=1000)
+    # None for both fee_bps and sell_tax_bps (the default) selects the Taiwan cost model
+    # (domain/tw_trading.py: 0.1425% commission with NT$20 minimum, sell tax 0.3% / ETF
+    # 0.1%). Supplying either one keeps the legacy flat-bps model (missing one = 5 / 0).
+    fee_bps: float | None = Field(default=None, ge=0, le=1000)
     slippage_bps: float = Field(default=5, ge=0, le=1000)
-    sell_tax_bps: float = Field(default=0, ge=0, le=1000)
+    sell_tax_bps: float | None = Field(default=None, ge=0, le=1000)
+    commission_discount: float = Field(default=1.0, gt=0, le=1)
+    # Append a provisional bar for today from quote_minutes when no official bar exists.
+    include_live_today: bool = False
     use_chip_filter: bool = False
     chip_entry_score: float = Field(default=55, ge=0, le=100)
     chip_exit_score: float = Field(default=40, ge=0, le=100)
@@ -546,6 +589,9 @@ class BacktestReport(BaseModel):
     excess_return: float | None = None
     transactions: list[BacktestTrade] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    cost_model: Literal["tw", "custom"] = "custom"
+    provisional_bar: bool = False
+    as_of_time: datetime | None = None
 
 
 class BacktestJob(BaseModel):
@@ -760,9 +806,95 @@ class WatchlistItem(BaseModel):
     recent_closes: list[float] = Field(default_factory=list)
     change_20d_pct: float | None = None
     full_analysis: Literal["ready", "preparing"] = "preparing"
+    # Today's latest price when it is newer than the official close above (live tick
+    # or the 10-minute whole-market snapshot). Percent units, like day_change_pct.
+    latest_price: float | None = None
+    latest_change_pct: float | None = None
+    latest_at: datetime | None = None
+    latest_source: Literal["tick", "snapshot"] | None = None
 
 
 class Watchlist(BaseModel):
     limit: int
     count: int
     items: list[WatchlistItem]
+
+
+SectorQuadrant = Literal["leading", "weakening", "lagging", "improving"]
+
+
+class SectorReturn(BaseModel):
+    equal_pct: float | None
+    weighted_pct: float | None
+
+
+class SectorRrgPoint(BaseModel):
+    rs_ratio: float
+    rs_momentum: float
+
+
+class SectorRrg(BaseModel):
+    rs_ratio: float
+    rs_momentum: float
+    quadrant: SectorQuadrant
+    trail: list[SectorRrgPoint]
+
+
+class SectorRow(BaseModel):
+    code: str
+    name: str
+    stock_count: int
+    returns: dict[str, SectorReturn]
+    turnover_value: float
+    turnover_share: float
+    turnover_share_avg20: float | None
+    turnover_share_change: float | None
+    up_count: int
+    down_count: int
+    flat_count: int
+    breadth_up_pct: float | None
+    institutional_net_lots: float | None
+    institutional_net_value: float | None
+    rrg: SectorRrg | None
+
+
+class SectorRotation(BaseModel):
+    window: int
+    as_of: date | None
+    mode: Literal["close", "intraday"]
+    # "live": serving intraday snapshots; "unavailable": inside the session but no
+    # usable snapshots; "not_applicable": historical as-of or outside the session.
+    intraday_status: Literal["live", "unavailable", "not_applicable"]
+    data_through: date | None
+    data_time: datetime | None
+    trading_days: int
+    institutional_through: date | None
+    unclassified_count: int
+    classification_ready: bool = True
+    market_turnover_value: float
+    market_return_equal_pct: dict[str, float | None]
+    backfill_pending: bool = False
+    sectors: list[SectorRow]
+
+
+class SectorStockEntry(BaseModel):
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    close: float
+    day_change_pct: float | None
+    window_return_pct: float | None
+    volume_lots: int
+    turnover_value: float
+    institutional_net_lots: float | None
+
+
+class SectorStocks(BaseModel):
+    code: str
+    name: str
+    window: int
+    mode: Literal["close", "intraday"]
+    data_through: date | None
+    data_time: datetime | None
+    backfill_pending: bool = False
+    entries: list[SectorStockEntry]

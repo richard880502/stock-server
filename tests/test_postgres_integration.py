@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
 import pytest
@@ -47,6 +47,10 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await session.execute(text("DELETE FROM instruments WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM market_stock_daily WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM users WHERE google_sub LIKE 'zz-%'"))
+        await session.execute(text("DELETE FROM market_industries WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(
+            text("DELETE FROM quote_latest WHERE symbol LIKE 'ZZ%'")
+        )
         await session.commit()
     await engine.dispose()
 
@@ -379,3 +383,63 @@ async def _seed_market(sessions, names: dict[str, str], day: date) -> None:
         await PostgresQuantRepository(session).upsert_market_stock_days(
             [_market_row(symbol, day, name=name) for symbol, name in names.items()]
         )
+
+
+async def test_industries_and_intraday_snapshots_roundtrip(sessions) -> None:
+    from quant_signal.domain.models import MarketIndustry
+    from quant_signal.infrastructure.db.prices import LatestQuote, store_latest
+
+    symbol = _symbol()
+    slot = datetime(2026, 11, 2, 2, 30, tzinfo=UTC)  # 10:30 Taipei on a Monday
+
+    def quote(at: datetime, price: float, stored: datetime) -> LatestQuote:
+        return LatestQuote(
+            symbol=symbol,
+            price=price,
+            reference=100.0,
+            open=None,
+            high=None,
+            low=None,
+            volume=5,
+            amount=1_000_000,
+            trade_time=at,
+            source="snapshot",
+            updated_at=stored,
+        )
+
+    async with sessions() as session:
+        repository = PostgresQuantRepository(session)
+        industry = MarketIndustry(
+            symbol=symbol,
+            market="TW",
+            industry_code="24",
+            industry_name="半導體業",
+            source="twse_openapi",
+            available_at=slot,
+        )
+        await repository.upsert_market_industries([industry])
+        await repository.upsert_market_industries([industry])
+        stored = [i for i in await repository.list_market_industries() if i.symbol == symbol]
+        assert len(stored) == 1 and stored[0].industry_name == "半導體業"
+
+        await store_latest(session, [quote(slot + timedelta(minutes=10), 101, slot)])
+        # An older snapshot never replaces a newer price.
+        await store_latest(session, [quote(slot, 99, slot)])
+        await session.commit()
+        now = slot + timedelta(minutes=15)
+        latest = [
+            i
+            for i in await repository.latest_intraday_snapshots(day=date(2026, 11, 2), now=now)
+            if i.symbol == symbol
+        ]
+        assert [(i.taken_at, i.price, round(i.change_pct, 4)) for i in latest] == [
+            (slot + timedelta(minutes=10), 101, 0.01)
+        ]
+        # Not yet stored at an earlier "now" (point in time).
+        assert not [
+            i
+            for i in await repository.latest_intraday_snapshots(
+                day=date(2026, 11, 2), now=slot - timedelta(minutes=1)
+            )
+            if i.symbol == symbol
+        ]

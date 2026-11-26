@@ -5,7 +5,7 @@ import { PriceChartCard } from "@/features/stock/price-chart-card";
 import { useSession } from "@/lib/api/session";
 import { useDashboard } from "@/lib/dashboard-context";
 import { today } from "@/lib/format";
-import { useLiveQuotes } from "@/lib/live-quotes";
+import { type LiveQuote, quoteFromLatest, useLiveQuotes } from "@/lib/live-quotes";
 import { useWatchlistAdd } from "@/features/watchlist/use-watchlist-add";
 import { useWatchlist } from "@/lib/use-watchlist";
 import { AiRail } from "./ai-rail";
@@ -67,7 +67,17 @@ export function TerminalView({ switcher }: { switcher?: ReactNode } = {}) {
     [symbol, railItems],
   );
   const stream = useLiveQuotes(liveEnabled ? streamSymbols : NO_SYMBOLS);
-  const live: LiveState = { enabled: liveEnabled, status: stream.status, quotes: stream.quotes };
+  // Server-side latest prices fill in until the stream delivers a newer one.
+  const quotes = useMemo(() => {
+    const merged = new Map<string, LiveQuote>();
+    for (const item of watchlist?.items ?? []) {
+      const fallback = quoteFromLatest(item);
+      if (fallback) merged.set(fallback.symbol, fallback);
+    }
+    for (const [symbol, liveQuote] of stream.quotes) merged.set(symbol, liveQuote);
+    return merged;
+  }, [watchlist, stream.quotes]);
+  const live: LiveState = { enabled: liveEnabled, status: stream.status, quotes };
   const quote = live.quotes.get(symbol.toUpperCase());
   const name = instrumentName?.symbol === symbol ? instrumentName.name : null;
   const signal = signalData.signal?.symbol === symbol ? signalData.signal : null;
