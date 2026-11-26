@@ -24,16 +24,21 @@ class FakeHeadlineProvider:
 
 
 class FakeClassifierClient:
+    """Answers the batched contract: {"symbol", "headlines": [{"index", "headline"}]}."""
+
     def __init__(self) -> None:
-        self.calls: list[str] = []
+        self.calls: list[dict] = []
 
     async def complete_json(self, system_prompt: str, payload: dict) -> dict:
-        assert "不得補造" in system_prompt
-        headline = payload["headline"]
-        self.calls.append(headline)
-        if "創新高" in headline:
-            return {"sentiment_label": "bullish", "sentiment_score": 0.8, "reason": "利多"}
-        return {"sentiment_label": "bearish", "sentiment_score": -0.6, "reason": "利空"}
+        assert "不受信任" in system_prompt
+        self.calls.append(payload)
+        results = []
+        for row in payload["headlines"]:
+            if "創新高" in row["headline"]:
+                results.append({"index": row["index"], "label": "bullish", "score": 0.8})
+            else:
+                results.append({"index": row["index"], "label": "bearish", "score": -0.6})
+        return {"results": results}
 
 
 async def test_news_sentiment_sync_classifies_and_persists_new_headlines() -> None:
@@ -66,9 +71,11 @@ async def test_news_sentiment_sync_classifies_and_persists_new_headlines() -> No
     inserted = await service.sync_symbol("2330.TW")
 
     assert inserted == 2
-    assert len(classifier.calls) == 2
+    assert len(classifier.calls) == 1  # one batched call for the whole symbol
+    assert len(classifier.calls[0]["headlines"]) == 2
     stored = await repository.list_news_items("2330.TW")
     assert {item.sentiment_label for item in stored} == {"bullish", "bearish"}
+    assert all(item.available_at is not None for item in stored)
 
     # Re-running the sync should skip already-persisted URLs.
     classifier.calls.clear()

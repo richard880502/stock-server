@@ -37,6 +37,7 @@ from quant_signal.domain.models import (
     SyncJob,
     SyncJobKind,
     User,
+    taipei_day_end,
 )
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -758,6 +759,11 @@ class PostgresQuantRepository:
         end: date | None = None,
         start: date | None = None,
     ) -> list[NewsItem]:
+        """News for ``symbol``; with ``end`` only items known by the end of that Taipei day.
+
+        Point-in-time: an item counts only once ``available_at`` (when we first held
+        it) and ``published_at`` are both within the as-of day.
+        """
         statement = (
             select(NewsItemRow, InstrumentRow.symbol)
             .join(InstrumentRow, NewsItemRow.instrument_id == InstrumentRow.id)
@@ -765,12 +771,12 @@ class PostgresQuantRepository:
             .order_by(NewsItemRow.published_at.desc())
         )
         if start:
-            statement = statement.where(
-                NewsItemRow.published_at >= datetime.combine(start, datetime.min.time(), UTC)
-            )
+            begin = datetime.combine(start, time.min, ZoneInfo("Asia/Taipei"))
+            statement = statement.where(NewsItemRow.published_at >= begin)
         if end:
+            cutoff = taipei_day_end(end)
             statement = statement.where(
-                NewsItemRow.published_at <= datetime.combine(end, datetime.max.time(), UTC)
+                NewsItemRow.published_at < cutoff, NewsItemRow.available_at < cutoff
             )
         rows = (await self.session.execute(statement)).all()
         return [
@@ -783,18 +789,31 @@ class PostgresQuantRepository:
                 sentiment_score=row.sentiment_score,
                 sentiment_label=row.sentiment_label,
                 retrieved_at=row.retrieved_at,
+                available_at=row.available_at,
                 revision=row.revision,
             )
             for row, row_symbol in rows
         ]
 
     async def upsert_news_items(self, items: list[NewsItem]) -> int:
+        """Insert news for a symbol that already has an ``instruments`` row.
+
+        Never creates an instrument: returns 0 for an unknown symbol. On a repeat
+        (same url/source) only the classification is refreshed; ``available_at`` and
+        ``retrieved_at`` keep the first-seen values so history is never rewritten.
+        """
         if not items:
             return 0
         symbol = items[0].symbol.upper()
         if any(item.symbol.upper() != symbol for item in items):
             raise ValueError("one news upsert may contain only one symbol")
-        instrument_id = await self._ensure_instrument(symbol)
+        instrument_id = (
+            await self.session.execute(
+                select(InstrumentRow.id).where(InstrumentRow.symbol == symbol)
+            )
+        ).scalar_one_or_none()
+        if instrument_id is None:
+            return 0
         inserted = 0
         for item in items:
             values = item.model_dump(mode="python", exclude={"symbol"})
@@ -803,13 +822,26 @@ class PostgresQuantRepository:
                 .values(instrument_id=instrument_id, **values)
                 .on_conflict_do_update(
                     constraint="uq_news_item_version",
-                    set_=values,
+                    set_={
+                        key: value
+                        for key, value in values.items()
+                        if key not in {"available_at", "retrieved_at"}
+                    },
                 )
             )
             result = await self.session.execute(statement)
             inserted += result.rowcount or 0
         await self.session.commit()
         return inserted
+
+    async def instrument_exists(self, symbol: str) -> bool:
+        statement = select(InstrumentRow.id).where(InstrumentRow.symbol == symbol.upper())
+        return (await self.session.execute(statement)).first() is not None
+
+    async def list_watchlist_symbols(self) -> list[str]:
+        """Distinct symbols on any user's watchlist."""
+        statement = select(WatchlistItemRow.symbol).distinct().order_by(WatchlistItemRow.symbol)
+        return list((await self.session.execute(statement)).scalars().all())
 
     @staticmethod
     def _api_key_from_row(row: ApiKeyRow) -> ApiKey:

@@ -41,6 +41,23 @@ services:
       SYNC_DAILY_TIME: ${SYNC_DAILY_TIME:-15:30,21:45}
       SYNC_MARKET_LOOKBACK_DAYS: ${SYNC_MARKET_LOOKBACK_DAYS:-520}
       SYNC_LOOKBACK_DAYS: ${SYNC_LOOKBACK_DAYS:-500}
+      # News (消息面) job: headlines for watchlist + tracked symbols, twice a day.
+      NEWS_SYNC_ENABLED: ${NEWS_SYNC_ENABLED:-true}
+      NEWS_SYNC_TIME: "${NEWS_SYNC_TIME:-08:30,14:10}"
+      NEWS_SYNC_MAX_SYMBOLS: ${NEWS_SYNC_MAX_SYMBOLS:-60}
+      NEWS_FEED_URLS: ${NEWS_FEED_URLS:-}
+      NEWS_ANTHROPIC_MODEL: ${NEWS_ANTHROPIC_MODEL:-}
+      SEARXNG_PROXY_URL: ${SEARXNG_PROXY_URL:-}
+      SEARXNG_PROXY_KEY: ${SEARXNG_PROXY_KEY:-}
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai_compatible}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3:8b}
+      LLM_API_KEY: ${LLM_API_KEY:-local}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5-5}
+      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-medium}
+      ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-16000}
     depends_on:
       api:
         condition: service_healthy

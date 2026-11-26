@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+import hashlib
+from datetime import date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -397,8 +399,22 @@ class ChipFlowSnapshot(BaseModel):
     data_available_at: datetime
 
 
+_TAIPEI = ZoneInfo("Asia/Taipei")
+
+
+def taipei_day_end(day: date) -> datetime:
+    """First instant after ``day`` in Asia/Taipei: the exclusive upper bound for as-of reads."""
+    return datetime.combine(day + timedelta(days=1), time.min, _TAIPEI)
+
+
 class NewsItem(BaseModel):
-    """One classified headline, point-in-time filterable by ``published_at``."""
+    """One classified headline.
+
+    ``published_at`` is the display/recency time (the publisher's own clock).
+    ``available_at`` is when this system first held the item: point-in-time reads
+    must filter on it, because an item published on 11/20 but fetched on 11/26 was
+    not knowable on 11/21. It defaults to ``retrieved_at``.
+    """
 
     symbol: str
     headline: str
@@ -408,7 +424,20 @@ class NewsItem(BaseModel):
     sentiment_score: float | None = Field(default=None, ge=-1, le=1)
     sentiment_label: Literal["bullish", "neutral", "bearish"] | None = None
     retrieved_at: datetime
+    available_at: datetime | None = None
     revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def _default_available_at(self) -> NewsItem:
+        if self.available_at is None:
+            self.available_at = self.retrieved_at
+        return self
+
+    @property
+    def short_id(self) -> str:
+        """Stable 8-hex id for citing this item as ``news:<short_id>``."""
+        digest = hashlib.sha1(f"{self.source}|{self.url}".encode()).hexdigest()
+        return digest[:8]
 
 
 class NewsHeadlineRanking(BaseModel):

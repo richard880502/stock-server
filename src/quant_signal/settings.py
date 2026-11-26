@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     sync_daily_time: str = Field(
         default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
     )
+    # News (消息面) job in the ingest service: Taipei times, like sync_daily_time.
+    news_sync_enabled: bool = True
+    news_sync_time: str = Field(
+        default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
+    )
+    news_sync_max_symbols: int = Field(default=60, ge=0)
+    # Seconds between per-company queries to Google News (be polite).
+    news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
+    # Comma-separated RSS/Atom feed URLs read whole and matched to symbols by code/name.
+    news_feed_urls: str = ""
+    # Optional cheaper Claude model used only to classify headlines.
+    news_anthropic_model: str | None = None
     # How far back the whole-market snapshot is filled on first run.
     sync_market_lookback_days: int = Field(default=520, ge=30)
     kronos_url: str | None = None
