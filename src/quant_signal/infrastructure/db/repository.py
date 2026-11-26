@@ -7,7 +7,7 @@ from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, case, func, or_, select, text, update
+from sqlalchemy import Select, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,10 +24,12 @@ from quant_signal.domain.models import (
     FetchCoverage,
     InstitutionalFlow,
     Instrument,
+    IntradaySnapshot,
     JobStatus,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketFlowDay,
+    MarketIndustry,
     MarketObservation,
     MarketStockDay,
     NewsItem,
@@ -46,6 +48,8 @@ from quant_signal.infrastructure.db.models import (
     InstitutionalFlowRow,
     InstrumentRow,
     MarketEnvironmentSnapshotRow,
+    MarketIndustryRow,
+    MarketIntradaySnapshotRow,
     MarketObservationRow,
     MarketStockDayRow,
     NewsItemRow,
@@ -1007,6 +1011,90 @@ class PostgresQuantRepository:
             written += result.rowcount or 0
         await self.session.commit()
         return written
+
+    async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int:
+        if not rows:
+            return 0
+        written = 0
+        for offset in range(0, len(rows), 500):
+            chunk = rows[offset : offset + 500]
+            statement = insert(MarketIndustryRow).values(
+                [item.model_dump(mode="python") for item in chunk]
+            )
+            excluded = statement.excluded
+            statement = statement.on_conflict_do_update(
+                index_elements=["symbol"],
+                set_={
+                    column: getattr(excluded, column)
+                    for column in MarketIndustry.model_fields
+                    if column != "symbol"
+                },
+            )
+            written += (await self.session.execute(statement)).rowcount or 0
+        await self.session.commit()
+        return written
+
+    async def list_market_industries(self) -> list[MarketIndustry]:
+        rows = (await self.session.execute(select(MarketIndustryRow))).scalars().all()
+        return [
+            MarketIndustry.model_validate(
+                {column: getattr(row, column) for column in MarketIndustry.model_fields}
+            )
+            for row in rows
+        ]
+
+    async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int:
+        if not rows:
+            return 0
+        written = 0
+        for offset in range(0, len(rows), 1000):
+            chunk = rows[offset : offset + 1000]
+            statement = insert(MarketIntradaySnapshotRow).values(
+                [item.model_dump(mode="python") for item in chunk]
+            )
+            excluded = statement.excluded
+            statement = statement.on_conflict_do_update(
+                index_elements=["symbol", "taken_at"],
+                set_={
+                    column: getattr(excluded, column)
+                    for column in IntradaySnapshot.model_fields
+                    if column not in ("symbol", "taken_at")
+                },
+            )
+            written += (await self.session.execute(statement)).rowcount or 0
+        await self.session.commit()
+        return written
+
+    async def latest_intraday_snapshots(
+        self, *, day: date, now: datetime
+    ) -> list[IntradaySnapshot]:
+        start = datetime.combine(day, time.min, ZoneInfo("Asia/Taipei"))
+        row = MarketIntradaySnapshotRow
+        statement = (
+            select(row)
+            .where(
+                row.taken_at >= start,
+                row.taken_at < start + timedelta(days=1),
+                row.taken_at <= now,
+                row.available_at <= now,
+            )
+            .distinct(row.symbol)
+            .order_by(row.symbol, row.taken_at.desc())
+        )
+        rows = (await self.session.execute(statement)).scalars().all()
+        return [
+            IntradaySnapshot.model_validate(
+                {column: getattr(item, column) for column in IntradaySnapshot.model_fields}
+            )
+            for item in rows
+        ]
+
+    async def delete_intraday_snapshots_before(self, cutoff: datetime) -> int:
+        result = await self.session.execute(
+            delete(MarketIntradaySnapshotRow).where(MarketIntradaySnapshotRow.taken_at < cutoff)
+        )
+        await self.session.commit()
+        return result.rowcount or 0
 
     @staticmethod
     def _market_filters(market: str | None, as_of: date | None) -> list:

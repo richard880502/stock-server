@@ -491,3 +491,78 @@ export type BackfillStatus = {
   /** The latest stored day already has a score. */
   score_ready: boolean;
 };
+
+// ---- 族群輪動 ------------------------------------------------------------
+
+export type SectorQuadrant = "leading" | "weakening" | "lagging" | "improving";
+
+export type SectorReturn = { equal_pct: number | null; weighted_pct: number | null };
+
+export type SectorRrgPoint = { rs_ratio: number; rs_momentum: number };
+
+export type SectorRrg = SectorRrgPoint & { quadrant: SectorQuadrant; trail: SectorRrgPoint[] };
+
+export type SectorRow = {
+  code: string;
+  name: string;
+  stock_count: number;
+  /** Keyed by session count: "1", "5", "20". */
+  returns: Record<string, SectorReturn>;
+  turnover_value: number;
+  /** Share (0-1) of the whole market's turnover over the selected window. */
+  turnover_share: number;
+  turnover_share_avg20: number | null;
+  /** turnover_share minus its 20-session average, as a 0-1 difference. */
+  turnover_share_change: number | null;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  breadth_up_pct: number | null;
+  institutional_net_lots: number | null;
+  institutional_net_value: number | null;
+  rrg: SectorRrg | null;
+};
+
+export type SectorRotation = {
+  window: number;
+  as_of: string | null;
+  mode: "close" | "intraday";
+  /** "unavailable": inside the session but no intraday snapshots are stored yet. */
+  intraday_status: "live" | "unavailable" | "not_applicable";
+  data_through: string | null;
+  /** ISO timestamp: the intraday snapshot time, or when the closing data became available. */
+  data_time: string | null;
+  trading_days: number;
+  institutional_through: string | null;
+  unclassified_count: number;
+  classification_ready: boolean;
+  market_turnover_value: number;
+  market_return_equal_pct: Record<string, number | null>;
+  backfill_pending: boolean;
+  sectors: SectorRow[];
+};
+
+export type SectorStockSort = "window_return" | "day_change" | "turnover" | "institutional";
+
+export type SectorStockEntry = {
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  close: number;
+  day_change_pct: number | null;
+  window_return_pct: number | null;
+  volume_lots: number;
+  turnover_value: number;
+  institutional_net_lots: number | null;
+};
+
+export type SectorStocks = {
+  code: string;
+  name: string;
+  window: number;
+  mode: "close" | "intraday";
+  data_through: string | null;
+  data_time: string | null;
+  backfill_pending: boolean;
+  entries: SectorStockEntry[];
+};

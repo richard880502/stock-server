@@ -1,0 +1,367 @@
+/* Sector rotation (族群輪動) inside the market view. */
+
+.sector-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.sector-heading h2 {
+  font-size: var(--text-lg);
+}
+
+.sector-heading p {
+  margin-top: var(--space-1);
+  color: var(--text-2);
+}
+
+.sector-card {
+  min-width: 0;
+}
+
+.sector-card .card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chip.live {
+  --tone: var(--accent-strong);
+  --tone-soft: var(--accent-soft);
+}
+
+.refresh-note {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.sector-card .callout {
+  margin-bottom: var(--space-4);
+}
+
+.sector-card .estimate-note {
+  margin-top: var(--space-3);
+}
+
+.sector-table-wrap {
+  max-height: none;
+}
+
+.sector-table {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.sector-table th,
+.sector-table td {
+  padding: var(--space-2) var(--space-3);
+  vertical-align: middle;
+  white-space: nowrap;
+  font-weight: var(--weight-regular);
+  border-top: 1px solid var(--border);
+}
+
+.sector-table thead th {
+  border-top: 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-3);
+}
+
+.sector-table .num-col {
+  text-align: right;
+}
+
+.sector-table .name-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 9.5rem;
+  text-align: left;
+  background: var(--surface);
+}
+
+.sector-table tbody tr:first-child > * {
+  border-top: 0;
+}
+
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sort-button:hover {
+  color: var(--text);
+}
+
+.sector-table .num-col .sort-button {
+  flex-direction: row-reverse;
+}
+
+.sort-mark {
+  display: inline-block;
+  width: 1em;
+  font-size: 0.7em;
+}
+
+.sector-row,
+.sector-stock-row {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.sector-row:hover > *,
+.sector-stock-row:hover > *,
+.sector-row:focus-within > * {
+  background: var(--surface-2);
+}
+
+.sector-row.is-selected > * {
+  background: var(--accent-soft);
+}
+
+.sector-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  text-align: left;
+}
+
+.sector-name small {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.name-col .quadrant-chip {
+  margin-left: var(--space-2);
+}
+
+.muted {
+  color: var(--text-3);
+}
+
+.breadth {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.breadth-bar {
+  position: relative;
+  display: inline-block;
+  width: 3rem;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.breadth-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Quadrant colours avoid red / green, which already mean up / down. */
+.q-leading {
+  --q: var(--accent);
+  --q-soft: var(--accent-soft);
+}
+
+.q-weakening {
+  --q: var(--warn);
+  --q-soft: var(--warn-soft);
+}
+
+.q-lagging {
+  --q: var(--text-3);
+  --q-soft: var(--flat-soft);
+}
+
+.q-improving {
+  --q: var(--series-dealer);
+  --q-soft: color-mix(in srgb, var(--series-dealer) 14%, transparent);
+}
+
+.quadrant-chip {
+  display: inline-block;
+  padding: 0 0.5em;
+  border-radius: var(--radius-full);
+  background: var(--q-soft);
+  color: var(--q);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.6;
+}
+
+.rrg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 44rem;
+  margin: 0 auto;
+}
+
+.rrg-svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.rrg-q {
+  fill: var(--q-soft);
+  opacity: 0.55;
+}
+
+.rrg-axis {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.rrg-corner {
+  fill: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+}
+
+.rrg-axis-label {
+  fill: var(--text-3);
+  font-size: 11px;
+}
+
+.rrg-point {
+  cursor: pointer;
+}
+
+.rrg-dot {
+  fill: var(--q);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+
+.rrg-point.is-active .rrg-dot {
+  stroke: var(--text);
+  stroke-width: 2;
+}
+
+.rrg-hit {
+  fill: transparent;
+}
+
+.rrg-trail {
+  fill: none;
+  stroke: var(--q);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.18;
+}
+
+.rrg-point.is-active .rrg-trail {
+  stroke-width: 2;
+  opacity: 0.9;
+}
+
+.rrg-name {
+  fill: var(--text);
+  font-size: 11px;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}
+
+.rrg [role="button"]:focus-visible {
+  outline: none;
+}
+
+.rrg [role="button"]:focus-visible .rrg-dot {
+  stroke: var(--text);
+  stroke-width: 2.5;
+}
+
+.rrg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.rrg-legend-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.rrg-legend-item i {
+  width: 0.6rem;
+  height: 0.6rem;
+  align-self: center;
+  border-radius: var(--radius-full);
+  background: var(--q);
+}
+
+.rrg-legend-item small {
+  color: var(--text-3);
+}
+
+.rrg-empty {
+  color: var(--text-3);
+  font-size: var(--text-sm);
+}
+
+.scroll-hint {
+  display: none;
+  margin-bottom: var(--space-2);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 719px) {
+  .rrg-legend-item small {
+    display: none;
+  }
+
+  .scroll-hint {
+    display: block;
+  }
+
+  .sector-table {
+    min-width: 34rem;
+  }
+
+  .sector-table .name-col {
+    min-width: 8.5rem;
+    padding-right: var(--space-2);
+  }
+
+  .name-col .quadrant-chip {
+    display: table;
+    margin: 0;
+  }
+}

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
 import pytest
@@ -47,6 +47,10 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await session.execute(text("DELETE FROM instruments WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM market_stock_daily WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM users WHERE google_sub LIKE 'zz-%'"))
+        await session.execute(text("DELETE FROM market_industries WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(
+            text("DELETE FROM market_intraday_snapshots WHERE symbol LIKE 'ZZ%'")
+        )
         await session.commit()
     await engine.dispose()
 
@@ -379,3 +383,55 @@ async def _seed_market(sessions, names: dict[str, str], day: date) -> None:
         await PostgresQuantRepository(session).upsert_market_stock_days(
             [_market_row(symbol, day, name=name) for symbol, name in names.items()]
         )
+
+
+async def test_industries_and_intraday_snapshots_roundtrip(sessions) -> None:
+    from quant_signal.application.intraday_snapshots import store_intraday_snapshots
+    from quant_signal.domain.models import IntradaySnapshot, MarketIndustry
+
+    symbol = _symbol()
+    slot = datetime(2026, 11, 2, 2, 30, tzinfo=UTC)  # 10:30 Taipei on a Monday
+
+    def snap(at: datetime, price: float, available: datetime) -> IntradaySnapshot:
+        return IntradaySnapshot(
+            symbol=symbol,
+            taken_at=at,
+            price=price,
+            change_pct=0.01,
+            volume_lots=5,
+            amount_twd=1e6,
+            available_at=available,
+        )
+
+    async with sessions() as session:
+        repository = PostgresQuantRepository(session)
+        industry = MarketIndustry(
+            symbol=symbol,
+            market="TW",
+            industry_code="24",
+            industry_name="半導體業",
+            source="twse_openapi",
+            available_at=slot,
+        )
+        await repository.upsert_market_industries([industry])
+        await repository.upsert_market_industries([industry])
+        stored = [i for i in await repository.list_market_industries() if i.symbol == symbol]
+        assert len(stored) == 1 and stored[0].industry_name == "半導體業"
+
+        await store_intraday_snapshots(
+            [
+                snap(slot, 100, slot),
+                snap(slot + timedelta(minutes=10), 101, slot + timedelta(minutes=10)),
+                snap(slot + timedelta(minutes=20), 102, slot + timedelta(minutes=21)),
+            ],
+            repository,
+        )
+        await store_intraday_snapshots([snap(slot, 99, slot)], repository)  # upsert
+        now = slot + timedelta(minutes=15)  # the 10:50 slot is not yet known
+        latest = [
+            i
+            for i in await repository.latest_intraday_snapshots(day=date(2026, 11, 2), now=now)
+            if i.symbol == symbol
+        ]
+        assert [(i.taken_at, i.price) for i in latest] == [(slot + timedelta(minutes=10), 101)]
+        assert await repository.delete_intraday_snapshots_before(slot + timedelta(days=1)) >= 3

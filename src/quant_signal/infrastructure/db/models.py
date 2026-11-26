@@ -442,6 +442,30 @@ class MarketStockDayRow(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class MarketIndustryRow(Base):
+    __tablename__ = "market_industries"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    industry_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    industry_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MarketIntradaySnapshotRow(Base):
+    __tablename__ = "market_intraday_snapshots"
+    __table_args__ = (Index("ix_market_intraday_taken_at", "taken_at"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    change_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    volume_lots: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_twd: Mapped[float] = mapped_column(Float, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class UserRow(Base):
     __tablename__ = "users"
     __table_args__ = (UniqueConstraint("google_sub", name="uq_users_google_sub"),)

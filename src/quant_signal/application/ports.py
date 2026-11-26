@@ -16,9 +16,11 @@ from quant_signal.domain.models import (
     FetchCoverage,
     InstitutionalFlow,
     Instrument,
+    IntradaySnapshot,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketFlowDay,
+    MarketIndustry,
     MarketObservation,
     MarketStockDay,
     NewsItem,
@@ -174,6 +176,18 @@ class QuantRepository(Protocol):
     ) -> list[MarketFlowDay]: ...
 
     async def market_data_status(self) -> list[MarketDataStatus]: ...
+
+    async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int: ...
+
+    async def list_market_industries(self) -> list[MarketIndustry]: ...
+
+    async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int: ...
+
+    async def latest_intraday_snapshots(
+        self, *, day: date, now: datetime
+    ) -> list[IntradaySnapshot]: ...
+
+    async def delete_intraday_snapshots_before(self, cutoff: datetime) -> int: ...
 
     async def list_market_closes(
         self, dates: list[date], market: str

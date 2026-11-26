@@ -66,6 +66,43 @@ class MarketStockDay(BaseModel):
     source: str
 
 
+class MarketIndustry(BaseModel):
+    """One listed/OTC stock's official industry (TWSE/TPEx 產業別)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    market: Literal["TW", "TWO"]
+    industry_code: str
+    industry_name: str
+    source: str
+    available_at: datetime
+
+
+class IntradaySnapshot(BaseModel):
+    """One stock's intraday state at a 10-minute collector tick.
+
+    ``change_pct`` is a ratio versus the previous close (0.0123 = +1.23%);
+    ``volume_lots`` and ``amount_twd`` are cumulative for the session so far.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    taken_at: datetime
+    price: float = Field(gt=0)
+    change_pct: float
+    volume_lots: int = Field(ge=0)
+    amount_twd: float = Field(ge=0)
+    available_at: datetime
+
+    @model_validator(mode="after")
+    def _timezone_aware(self) -> IntradaySnapshot:
+        if self.taken_at.tzinfo is None or self.available_at.tzinfo is None:
+            raise ValueError("taken_at and available_at must be timezone-aware")
+        return self
+
+
 RankingMetric = Literal[
     "foreign_net",
     "trust_net",
@@ -766,3 +803,83 @@ class Watchlist(BaseModel):
     limit: int
     count: int
     items: list[WatchlistItem]
+
+
+SectorQuadrant = Literal["leading", "weakening", "lagging", "improving"]
+
+
+class SectorReturn(BaseModel):
+    equal_pct: float | None
+    weighted_pct: float | None
+
+
+class SectorRrgPoint(BaseModel):
+    rs_ratio: float
+    rs_momentum: float
+
+
+class SectorRrg(BaseModel):
+    rs_ratio: float
+    rs_momentum: float
+    quadrant: SectorQuadrant
+    trail: list[SectorRrgPoint]
+
+
+class SectorRow(BaseModel):
+    code: str
+    name: str
+    stock_count: int
+    returns: dict[str, SectorReturn]
+    turnover_value: float
+    turnover_share: float
+    turnover_share_avg20: float | None
+    turnover_share_change: float | None
+    up_count: int
+    down_count: int
+    flat_count: int
+    breadth_up_pct: float | None
+    institutional_net_lots: float | None
+    institutional_net_value: float | None
+    rrg: SectorRrg | None
+
+
+class SectorRotation(BaseModel):
+    window: int
+    as_of: date | None
+    mode: Literal["close", "intraday"]
+    # "live": serving intraday snapshots; "unavailable": inside the session but no
+    # usable snapshots; "not_applicable": historical as-of or outside the session.
+    intraday_status: Literal["live", "unavailable", "not_applicable"]
+    data_through: date | None
+    data_time: datetime | None
+    trading_days: int
+    institutional_through: date | None
+    unclassified_count: int
+    classification_ready: bool = True
+    market_turnover_value: float
+    market_return_equal_pct: dict[str, float | None]
+    backfill_pending: bool = False
+    sectors: list[SectorRow]
+
+
+class SectorStockEntry(BaseModel):
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    close: float
+    day_change_pct: float | None
+    window_return_pct: float | None
+    volume_lots: int
+    turnover_value: float
+    institutional_net_lots: float | None
+
+
+class SectorStocks(BaseModel):
+    code: str
+    name: str
+    window: int
+    mode: Literal["close", "intraday"]
+    data_through: date | None
+    data_time: datetime | None
+    backfill_pending: bool = False
+    entries: list[SectorStockEntry]
