@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
 from quant_signal.application.data_sync import ensure_symbol_bar_coverage
@@ -110,6 +110,10 @@ class InstrumentSearchService:
         return sorted(merged.values(), key=rank)[: max(limit, 1)]
 
 
+# The aggregate only looks at recent headlines so stale ones do not dominate.
+NEWS_AGGREGATE_DAYS = 14
+
+
 class NewsSentimentService:
     def __init__(
         self,
@@ -126,7 +130,9 @@ class NewsSentimentService:
         as_of: date,
         strategy_version: str = "news_sentiment_v1",
     ) -> NewsSentimentSnapshot:
-        items = await self.repository.list_news_items(symbol, end=as_of)
+        items = await self.repository.list_news_items(
+            symbol, end=as_of, start=as_of - timedelta(days=NEWS_AGGREGATE_DAYS)
+        )
         return self.engine.analyze(items, as_of=as_of, strategy_version=strategy_version)
 
 

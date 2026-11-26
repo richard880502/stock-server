@@ -31,6 +31,8 @@ from quant_signal.domain.models import (
     SyncJob,
     SyncJobKind,
     User,
+    hide_late_label,
+    taipei_day_end,
 )
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 
@@ -411,27 +413,55 @@ class MemoryQuantRepository:
     ) -> list[NewsItem]:
         result = self.news_items.get(symbol.upper(), [])
         if start:
-            start_dt = datetime.combine(start, datetime.min.time(), UTC)
+            start_dt = datetime.combine(start, datetime.min.time(), ZoneInfo("Asia/Taipei"))
             result = [item for item in result if item.published_at >= start_dt]
         if end:
-            end_dt = datetime.combine(end, datetime.max.time(), UTC)
-            result = [item for item in result if item.published_at <= end_dt]
+            cutoff = taipei_day_end(end)
+            result = [
+                item
+                for item in result
+                if item.published_at < cutoff and (item.available_at or item.retrieved_at) < cutoff
+            ]
+        if end:
+            result = [hide_late_label(item, taipei_day_end(end)) for item in result]
         return sorted(result, key=lambda item: item.published_at, reverse=True)
 
     async def upsert_news_items(self, items: list[NewsItem]) -> int:
+        if items and items[0].symbol.upper() not in self.instruments:
+            return 0
         for item in items:
             existing = self.news_items.setdefault(item.symbol.upper(), [])
-            existing = [
-                row
-                for row in existing
-                if not (
-                    row.url == item.url
+            previous = next(
+                (
+                    row
+                    for row in existing
+                    if row.url == item.url
                     and row.source == item.source
                     and row.revision == item.revision
-                )
-            ]
+                ),
+                None,
+            )
+            if previous is not None:
+                update = {
+                    "available_at": previous.available_at,
+                    "retrieved_at": previous.retrieved_at,
+                }
+                if item.sentiment_label is None:
+                    update.update(
+                        sentiment_label=previous.sentiment_label,
+                        sentiment_score=previous.sentiment_score,
+                        classified_at=previous.classified_at,
+                    )
+                item = item.model_copy(update=update)
+            existing = [row for row in existing if row is not previous]
             self.news_items[item.symbol.upper()] = [*existing, item]
         return len(items)
+
+    async def instrument_exists(self, symbol: str) -> bool:
+        return symbol.upper() in self.instruments
+
+    async def list_watchlist_symbols(self) -> list[str]:
+        return sorted({symbol for items in self.watchlists.values() for symbol in items})
 
     @staticmethod
     def _series_status(

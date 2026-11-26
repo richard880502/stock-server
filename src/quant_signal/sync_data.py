@@ -10,11 +10,8 @@ from quant_signal.application.data_sync import (
     TpexDataSyncService,
     TwseDataSyncService,
 )
-from quant_signal.application.llm_analysis import create_llm_client
-from quant_signal.application.news_sync import NewsSentimentSyncService
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
 from quant_signal.infrastructure.providers import TpexProvider, TwseProvider
-from quant_signal.infrastructure.providers.news import SearxNgNewsProvider
 from quant_signal.settings import get_settings
 
 
@@ -74,22 +71,13 @@ async def _run(args: argparse.Namespace) -> None:
     ):
         repository = PostgresQuantRepository(session)
         if args.command == "news":
+            from quant_signal.workers.news import build_news_service
+
             settings = get_settings()
             if settings.llm_errors():
-                raise SystemExit(
-                    f"LLM is not configured: {', '.join(settings.llm_errors())}"
-                )
-            searxng_provider = None
-            if settings.searxng_proxy_url and settings.searxng_proxy_key.get_secret_value():
-                searxng_provider = SearxNgNewsProvider(
-                    base_url=settings.searxng_proxy_url,
-                    api_key=settings.searxng_proxy_key.get_secret_value(),
-                )
-            inserted = await NewsSentimentSyncService(
-                repository,
-                create_llm_client(settings),
-                searxng_provider=searxng_provider,
-            ).sync_symbol(args.symbol, limit_per_source=args.limit)
+                print("LLM is not configured: headlines are stored unclassified")
+            async with build_news_service(settings, repository) as service:
+                inserted = await service.sync_symbol(args.symbol, limit_per_source=args.limit)
             print(
                 json.dumps(
                     {"symbol": args.symbol.strip().upper(), "inserted": inserted},

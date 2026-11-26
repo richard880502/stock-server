@@ -1,9 +1,10 @@
 """The ingest service: the only process that writes market data.
 
-Two writers live here, deployed together from the same commit:
+Three writers live here, deployed together from the same commit:
 
 * the official exchange sync (TWSE / TPEx daily bars, institutional flows, the
-  whole-market day, industry classification), and
+  whole-market day, industry classification),
+* the news (消息面) job: twice a day, headlines for watchlist + tracked symbols, and
 * the Shioaji collector (live ticks -> minute bars and latest prices, official
   minute backfill, whole-market snapshots), when quotes are enabled.
 
@@ -82,6 +83,7 @@ async def liveness() -> None:
 
 
 async def run_forever() -> None:
+    from quant_signal.workers import news as news_worker
     from quant_signal.workers import quotes
     from quant_signal.workers import sync as sync_worker
 
@@ -89,6 +91,9 @@ async def run_forever() -> None:
     jobs = [asyncio.create_task(upkeep_forever(), name="upkeep")]
     if settings.sync_enabled:
         jobs.append(asyncio.create_task(sync_worker.run_forever(), name="official-sync"))
+    if settings.news_sync_enabled:
+        # Own task: a slow or failing news fetch can never stall prices.
+        jobs.append(asyncio.create_task(news_worker.run_forever(), name="news"))
     if quotes_ready(settings):
         jobs.append(asyncio.create_task(quotes.run(), name="shioaji-collector"))
     else:

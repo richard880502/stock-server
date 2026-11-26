@@ -370,32 +370,94 @@ it. Set `JUDGE_LLM_ENABLED=true` plus `JUDGE_LLM_BASE_URL`/`JUDGE_LLM_MODEL`/
 call — reduces the risk of a single model rubber-stamping its own debate.
 Falls back to the bull/bear model when left disabled.
 
-### News sentiment analyst
+### News pipeline (消息面)
 
-Unlike a live news-search tool call, this stays point-in-time-safe: headlines
-are fetched and classified once, ahead of time, into the `news_items` table
-with a real `published_at`, and analysis only ever reads headlines that were
-already published as of the requested `as_of` date.
+**Who fetches.** Only the ingest service. API, MCP and the compute worker never
+fetch news and no request ever triggers a fetch. The ingest service runs a `news`
+task of its own (not inside the Shioaji collector, so a news failure cannot stall
+prices) at each Taipei time in `NEWS_SYNC_TIME` (default `08:30,14:10`, every day;
+`NEWS_SYNC_ENABLED=false` disables it). Scope is every user's watchlist plus the
+tracked instruments, watchlist first, capped by `NEWS_SYNC_MAX_SYMBOLS` (60).
+Symbols are fetched one after another with a pause (`NEWS_SYNC_DELAY_SECONDS`,
+at least 1 s) between Google queries, and each (symbol, slot) is recorded once in
+`fetch_coverage`, so restarts do not refetch. News is only stored for symbols that
+already have an `instruments` row (adding to a watchlist creates it through the
+background sync); other symbols are skipped and counted in the log. The manual
+trigger still works: `uv run quant-signal-sync-data news --symbol 2330.TW`.
+
+**Sources.**
+
+- Google News RSS, queried per company name; `pubDate` is the real publish time.
+- Optional SearxNG (`SEARXNG_PROXY_URL`/`SEARXNG_PROXY_KEY`); results have no
+  trustworthy publish time and are stamped with the fetch time.
+- Any RSS/Atom feed: put URLs, comma separated, in `NEWS_FEED_URLS`. Each feed is
+  read whole once per slot and each item is filed under the symbols whose stock
+  code (digit-bounded, not beside 年/月/元/點 and similar) or company name (at
+  least two Chinese characters; two-character names must not sit inside a longer
+  word) appears in the headline. To add a feed, append its URL; nothing else changes.
+- A self-hosted [RSSHub](https://docs.rsshub.app/) is just another feed URL, for
+  example `NEWS_FEED_URLS=http://rsshub:1200/<route>`. RSSHub is AGPL-3.0: run it
+  **unmodified, on the private network only**, never exposed to users, and do not
+  vendor its code here. It is not a core source (it has no cnyes, PTT or MOPS
+  routes), only an optional extra.
+
+**Point in time.** Each row has `published_at` (publisher clock, used for display
+and recency) and `available_at` (when this system first held it). An as-of read
+only sees rows with both `published_at` and `available_at` before the end of the
+as-of day in Asia/Taipei, so a headline published on 11/20 but fetched on 11/26 is
+invisible to an 11/21 analysis. Repeat fetches never rewrite `available_at`.
+
+**De-duplication.** By `(url, source)` and by a normalized headline hash per symbol
+(punctuation, whitespace and a trailing " - media name" removed), so syndicated
+copies count once.
+
+**Classification.** One batched LLM call per symbol per run (at most 20 headlines).
+Each headline gets a random short `id` for that batch (never its position), and the
+model returns `{"results": [{"id", "label", "score"}]}`. An entry that is missing,
+unknown, duplicated or sign-inconsistent stays **unclassified** (no score, no label)
+instead of becoming a fake neutral, and is retried by a later run while the item is
+under 7 days old; unclassified rows never count in the aggregate. Each label records
+`classified_at`; an as-of read before it sees the item as unclassified. Already
+classified items are never classified again. Classification uses
+`NEWS_ANTHROPIC_MODEL` (default `claude-haiku-5-5`) whenever `LLM_PROVIDER=anthropic`,
+so the analyst/debate models (e.g. Opus) are not spent on headlines; set it to another
+model, or empty to reuse `ANTHROPIC_MODEL`.
+
+**Deployment.** The classification runs in the *ingest* service, so that service needs
+`LLM_ENABLED=true`, `LLM_PROVIDER` and (for Claude) `ANTHROPIC_API_KEY` in its
+environment (the compose files pass them through). Without them items are stored
+unclassified and are only classified later, within the 7-day window, once the LLM is
+configured.
+
+**Hardening.** Feed and search responses are capped at 2 MB and 200 items; XML with a
+DOCTYPE/ENTITY declaration is refused; only `http(s)` URLs are stored; zero-width and
+bidi control characters are removed from headlines; requests send a normal
+User-Agent. Headline-hash dedupe only looks at the last 7 days (a recurring headline
+is not dropped forever); stories published more than 30 days ago are not ingested.
+HTTP clients live for one whole run (not per symbol), every database phase uses its own
+short session, and a symbol whose sources all failed counts as failed (retried up to
+three times per slot) and is not recorded as done.
+
+**In the debate.** The aggregate `news_sentiment` (score, label, count; no raw
+headlines; only items from the 14 days before `as_of`, so stale headlines do not
+dominate) stays in the evidence. The newest 8 distinct items from the last 7
+days known at `as_of` are added as separate evidence ids `news:<8 hex>`; the model
+sees source, time, label and a truncated headline (never the URL) and may cite a
+single item in `evidence_refs`. The response's `evidence[].details` carries the
+full headline and URL so a client can resolve an id. Prompts state that headlines
+are untrusted data (instructions inside are ignored), weigh less than quantitative
+evidence and official events, must be called out when they conflict with it, and
+that missing news is a limitation, never something to invent. The risk and judge
+calls get the items once, with 60-character headlines.
 
 ```bash
 uv run quant-signal-sync-data news --symbol 2330.TW
 curl "http://127.0.0.1:18100/api/v1/news-sentiment/2330.TW?as_of=2026-07-31"
 ```
 
-`quant-signal-sync-data news` resolves the company name (via the instrument
-search below), pulls headlines from Google News RSS — `pubDate` is a genuine
-historical timestamp, safe for backfill — and, if `SEARXNG_PROXY_URL`/
-`SEARXNG_PROXY_KEY` are set, also from a self-hosted SearxNG instance behind
-the small authenticated proxy in `searxng-proxy/`. SearxNG's general search
-results carry no reliable historical publish date, so those are stamped with
-the sync run time and are only meaningful for *current* sentiment, never for
-backfilling history. Each new headline is classified into
-`bullish`/`neutral`/`bearish` by the configured LLM, bound only to the
-headline text itself. `analyze_news_sentiment` (MCP) and
-`GET /api/v1/news-sentiment/{symbol}` aggregate the point-in-time-filtered
-headlines into one `NewsSentimentSnapshot`, and it's automatically included as
-`news_sentiment` in the evidence bundle for the single-shot and debate
-analysts above whenever classified headlines exist for that symbol.
+`analyze_news_sentiment` (MCP) and `GET /api/v1/news-sentiment/{symbol}` aggregate
+the point-in-time-filtered headlines into one `NewsSentimentSnapshot`, included as
+`news_sentiment` in the evidence bundle for the single-shot and debate analysts.
 
 ## API authentication
 

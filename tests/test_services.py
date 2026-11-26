@@ -44,6 +44,7 @@ async def test_instrument_search_resolves_name_or_symbol() -> None:
 async def test_news_sentiment_aggregates_classified_items() -> None:
     repository = MemoryQuantRepository()
     now = datetime(2026, 7, 30, tzinfo=UTC)
+    repository.instruments["2330.TW"] = Instrument(symbol="2330.TW", name="台積電", market="TW")
     await repository.upsert_news_items(
         [
             NewsItem(
