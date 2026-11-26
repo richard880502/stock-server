@@ -289,6 +289,15 @@ def test_openai_compatible_errors_keep_the_provider_reason() -> None:
 
     from quant_signal.application.llm_analysis import LLMProviderError
 
+    configured_key = "EXAMPLE_CREDENTIAL_1234567890"
+    client = OpenAICompatibleClient(
+        base_url="https://api.example.test/v1",
+        model="test-model",
+        api_key=configured_key,
+        temperature=0,
+        max_tokens=100,
+        timeout_seconds=5,
+    )
     request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
     too_long = httpx.Response(
         400,
@@ -297,15 +306,53 @@ def test_openai_compatible_errors_keep_the_provider_reason() -> None:
                         "code": "context_length_exceeded"}},
     )
     with pytest.raises(LLMProviderError) as caught:
-        OpenAICompatibleClient._raise_for_status(too_long)
+        client._raise_for_status(too_long)
     message = str(caught.value)
     assert "api.example.test" in message and "HTTP 400" in message
     assert "maximum context length" in message
 
     leaky = httpx.Response(401, request=request, text="invalid key sk-abcdefghijklmnop")
     with pytest.raises(LLMProviderError) as caught:
-        OpenAICompatibleClient._raise_for_status(leaky)
+        client._raise_for_status(leaky)
     assert "sk-abcdefghijklmnop" not in str(caught.value)
     assert "[redacted]" in str(caught.value)
 
-    OpenAICompatibleClient._raise_for_status(httpx.Response(200, request=request, json={}))
+    client._raise_for_status(httpx.Response(200, request=request, json={}))
+
+
+def test_openai_compatible_errors_hide_the_configured_key_without_a_known_prefix() -> None:
+    import httpx
+
+    from quant_signal.application.llm_analysis import LLMProviderError
+
+    configured_key = "EXAMPLE_CREDENTIAL_1234567890"
+    client = OpenAICompatibleClient(
+        base_url="https://api.example.test/v1",
+        model="test-model",
+        api_key=configured_key,
+        temperature=0,
+        max_tokens=100,
+        timeout_seconds=5,
+    )
+    request = httpx.Request("POST", "https://api.example.test/v1/chat/completions")
+    # The key sits past the 300-character cut, so redaction must happen first.
+    padding = "x" * 290
+    echoed = httpx.Response(
+        401,
+        request=request,
+        json={"error": {"message": f"{padding} Invalid API key: {configured_key}"}},
+    )
+    with pytest.raises(LLMProviderError) as caught:
+        client._raise_for_status(echoed)
+    message = str(caught.value)
+    assert configured_key not in message
+    assert configured_key[:12] not in message
+    assert "HTTP 401" in message
+
+    short = httpx.Response(
+        401, request=request, json={"error": {"message": f"Invalid API key: {configured_key}"}}
+    )
+    with pytest.raises(LLMProviderError) as caught:
+        client._raise_for_status(short)
+    assert configured_key not in str(caught.value)
+    assert "Invalid API key: [redacted]" in str(caught.value)

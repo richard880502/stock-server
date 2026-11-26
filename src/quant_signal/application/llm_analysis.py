@@ -285,12 +285,13 @@ class OpenAICompatibleClient:
                     if isinstance(content, str) and content:
                         yield content
 
-    @staticmethod
-    def _raise_for_status(response: httpx.Response) -> None:
+    def _raise_for_status(self, response: httpx.Response) -> None:
         """Raise a readable error that keeps the provider's own reason (e.g. context too long).
 
         httpx's default message drops the response body, which is where an
-        OpenAI-compatible server says why it rejected a request.
+        OpenAI-compatible server says why it rejected a request. The reason is
+        shown to platform users, so the configured key is removed before it is
+        trimmed, whatever format that key has.
         """
         if not response.is_error:
             return
@@ -306,8 +307,12 @@ class OpenAICompatibleClient:
                 reason = str(body.get("detail") or body.get("message") or "")
         except ValueError:
             reason = response.text
+        reason = reason.strip()
+        api_key = self.api_key.strip()
+        if api_key:
+            reason = reason.replace(api_key, "[redacted]")
         secret_like = r"\b(sk|key|token)[-_][A-Za-z0-9_\-]{8,}"
-        reason = re.sub(secret_like, "[redacted]", reason.strip())[:300]
+        reason = re.sub(secret_like, "[redacted]", reason)[:300]
         host = response.request.url.host
         raise LLMProviderError(
             f"模型服務 {host} 回應 HTTP {response.status_code}"
