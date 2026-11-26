@@ -13,6 +13,8 @@ export type SyncWait = {
   /** Tries made so far. */
   attempt: number;
   maxAttempts: number;
+  /** Seconds between tries (the server's Retry-After), so the UI can say "every N s". */
+  intervalSeconds: number;
   secondsLeft: number;
 };
 
@@ -73,6 +75,7 @@ export async function withSyncRetry<T>(
             message: error.message,
             attempt,
             maxAttempts,
+            intervalSeconds: seconds,
             secondsLeft: left,
           });
           await sleep(1_000, signal);

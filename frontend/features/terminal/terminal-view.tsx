@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo } from "react";
 import { PriceChartCard } from "@/features/stock/price-chart-card";
 import { useSession } from "@/lib/api/session";
 import { useDashboard } from "@/lib/dashboard-context";
 import { today } from "@/lib/format";
 import { useLiveQuotes } from "@/lib/live-quotes";
+import { useWatchlistAdd } from "@/features/watchlist/use-watchlist-add";
 import { useWatchlist } from "@/lib/use-watchlist";
 import { AiRail } from "./ai-rail";
 import { QuoteHeader } from "./quote-header";
@@ -24,9 +25,10 @@ const NO_SYMBOLS: string[] = [];
  * The selected stock is the dashboard's shared symbol, so switching here also
  * switches the other pages (and the other pages' choice opens here).
  */
-export function TerminalView() {
+export function TerminalView({ switcher }: { switcher?: ReactNode } = {}) {
   const { query, refresh, signalData, instrumentName, recentSymbols } = useDashboard();
-  const { watchlist } = useWatchlist();
+  const { watchlist, phase, count, limit, pending, setMember } = useWatchlist();
+  const { add, note } = useWatchlistAdd(setMember);
   const { config } = useSession();
   const symbol = query.symbol;
 
@@ -72,6 +74,10 @@ export function TerminalView() {
 
   return (
     <div className="terminal">
+      <div className="terminal-head">
+        <h1>自選股</h1>
+        {switcher}
+      </div>
       <TopStrip live={live} />
       <div className="terminal-grid">
         <WatchRail
@@ -80,6 +86,16 @@ export function TerminalView() {
           live={live}
           selected={symbol.toUpperCase()}
           onSelect={(next) => refresh({ symbol: next })}
+          edit={{
+            onAdd: add,
+            onRemove: (symbol) => setMember(symbol, false),
+            note,
+            pending,
+            members: new Set((watchlist?.items ?? []).map((item) => item.symbol.toUpperCase())),
+            full: phase === "ready" && count >= limit,
+            limit,
+            loading: phase === "loading",
+          }}
         />
         <section className="terminal-center" aria-label="報價與 K 線">
           <QuoteHeader symbol={symbol} name={name} quote={quote} signal={signal} live={live} />

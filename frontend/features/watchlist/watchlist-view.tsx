@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/card";
 import { Sparkline } from "@/components/charts/sparkline";
 import { EmptyState } from "@/components/empty-state";
@@ -19,6 +19,7 @@ import { formatPrice, formatSignedPct, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
 import { useLiveQuotes, type LiveQuote, type LiveQuoteStatus } from "@/lib/live-quotes";
 import { IntradayDrawer } from "./intraday-drawer";
+import { useWatchlistAdd } from "./use-watchlist-add";
 import { Lots, PctChange } from "@/features/stock/flow-format";
 
 const marketLabel = { TW: "上市", TWO: "上櫃" } as const;
@@ -179,7 +180,7 @@ function SortHeader({
   );
 }
 
-export function WatchlistView() {
+export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNode; onOpenTerminal?: (symbol: string) => void } = {}) {
   const { user, config } = useSession();
   const liveEnabled = config?.quotes === true;
   const { refresh: openSymbol } = useDashboard();
@@ -187,7 +188,6 @@ export function WatchlistView() {
   const watchlist = useWatchlist();
   const { refresh: refreshList, setMember } = watchlist;
   const [removeError, setRemoveError] = useState<string | null>(null);
-  const [addNote, setAddNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   // First click sorts high → low, second low → high, third returns to the order added.
   const onSort = useCallback((key: SortKey) => setSort((current) => nextSort(current, key)), []);
@@ -213,19 +213,7 @@ export function WatchlistView() {
     [setMember],
   );
 
-  const add = useCallback(
-    async (symbol: string, name?: string) => {
-      setAddNote(null);
-      const result = await setMember(symbol, true);
-      const code = symbol.replace(/\.TWO?$/, "");
-      setAddNote(
-        result.ok
-          ? { ok: true, text: `已加入 ${name ? `${name}（${code}）` : symbol}` }
-          : { ok: false, text: result.message },
-      );
-    },
-    [setMember],
-  );
+  const { add, note: addNote } = useWatchlistAdd(setMember);
 
   const items = useMemo(() => watchlist.watchlist?.items ?? [], [watchlist.watchlist]);
   const liveSymbols = useMemo(() => items.map((item) => item.symbol), [items]);
@@ -374,6 +362,7 @@ export function WatchlistView() {
           <h1>自選股</h1>
           <p>點股票名稱查看訊號，或開啟策略研究查看條件與風險。研究紀錄儲存在此瀏覽器。</p>
         </div>
+        {switcher}
         {watchlist.watchlist && phase !== "unavailable" && (
           <span
             className="chip plain num watch-count"
@@ -410,7 +399,7 @@ export function WatchlistView() {
         </div>
       )}
       {body}
-      {liveEnabled && chartSymbol && items.some((item) => item.symbol === chartSymbol) && <IntradayDrawer items={items} symbol={chartSymbol} onSelect={setChartSymbol} onClose={() => setChartSymbol(null)} quote={live.quotes.get(chartSymbol.toUpperCase())} status={live.status} />}
+      {liveEnabled && chartSymbol && items.some((item) => item.symbol === chartSymbol) && <IntradayDrawer items={items} symbol={chartSymbol} onSelect={setChartSymbol} onClose={() => setChartSymbol(null)} onOpenTerminal={onOpenTerminal} quote={live.quotes.get(chartSymbol.toUpperCase())} status={live.status} />}
     </>
   );
 }
