@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     screener_enabled: bool = True
     screener_retention_sessions: int = Field(default=60, ge=1)
     screener_backfill_sessions: int = Field(default=5, ge=1)
+    # Whole-market holder data: TDCC weekly shareholding distribution (大戶/散戶持股) and
+    # TWSE/TPEx shares outstanding + foreign holding (also run by the sync worker).
+    holders_tdcc_enabled: bool = True
+    holders_foreign_enabled: bool = True
+    # Weekdays re-checked for foreign holding on each run (only missing ones are fetched).
+    holders_foreign_days: int = Field(default=5, ge=1, le=30)
+    holders_retry_minutes: float = Field(default=10.0, gt=0)
     kronos_url: str | None = None
     kronos_api_key: SecretStr = SecretStr("")
     log_level: str = "INFO"

@@ -15,6 +15,7 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataStatus,
     FetchCoverage,
+    ForeignHolding,
     InstitutionalFlow,
     Instrument,
     IntradaySnapshot,
@@ -29,6 +30,8 @@ from quant_signal.domain.models import (
     MonthlyRevenue,
     NewsItem,
     RiskFlag,
+    ShareholdingDistribution,
+    ShareholdingPair,
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
@@ -212,6 +215,24 @@ class QuantRepository(Protocol):
     ) -> list[MonthlyRevenue]: ...
 
     async def latest_monthly_revenue(self, as_of: datetime) -> list[MonthlyRevenue]: ...
+
+    async def upsert_shareholding_distribution(
+        self, rows: list[ShareholdingDistribution]
+    ) -> int: ...
+
+    async def upsert_foreign_holding(self, rows: list[ForeignHolding]) -> int: ...
+
+    async def latest_shareholding_pairs(self, as_of: datetime) -> dict[str, ShareholdingPair]: ...
+
+    async def latest_foreign_holdings(self, as_of: datetime) -> dict[str, ForeignHolding]: ...
+
+    async def latest_foreign_holding(
+        self, symbol: str, as_of: datetime
+    ) -> ForeignHolding | None: ...
+
+    async def shareholding_history(
+        self, symbol: str, as_of: datetime, weeks: int = 26
+    ) -> list[ShareholdingDistribution]: ...
 
     async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
 
