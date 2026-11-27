@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date, datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from quant_signal.domain.models import (
@@ -20,6 +21,7 @@ from quant_signal.domain.models import (
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketEvent,
+    MarketFactorSnapshot,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
@@ -263,3 +265,23 @@ class QuantRepository(Protocol):
     ) -> Literal["added", "exists", "full"]: ...
 
     async def remove_watchlist_item(self, user_id: UUID, symbol: str) -> bool: ...
+
+    async def market_flow_through(self, end: date) -> dict[str, date]: ...
+
+    def iter_market_histories(
+        self, end: date, sessions: int
+    ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]: ...
+
+    async def replace_market_factors(
+        self, trading_date: date, version: str, rows: list[MarketFactorSnapshot]
+    ) -> int: ...
+
+    async def prune_market_factors(self, version: str, keep: int) -> int: ...
+
+    async def latest_market_factor_date(
+        self, version: str, as_of: date | None = None
+    ) -> date | None: ...
+
+    async def list_market_factors(
+        self, trading_date: date, version: str
+    ) -> list[MarketFactorSnapshot]: ...

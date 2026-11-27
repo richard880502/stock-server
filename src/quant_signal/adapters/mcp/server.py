@@ -20,6 +20,14 @@ from quant_signal.application.llm_analysis import (
 )
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
+from quant_signal.application.screener import (
+    MCP_DEFAULT_COLUMNS,
+    PRESET_BY_KEY,
+    ScreenerQueryError,
+    ScreenerService,
+    ScreenFilter,
+    analyst_view,
+)
 from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
@@ -182,6 +190,66 @@ async def get_market_environment(
 ) -> dict[str, Any]:
     """Return the complete point-in-time market breadth and capital environment."""
     return await _get_market_environment(market, as_of, strategy_version)
+
+
+@mcp.tool()
+async def screen_market(
+    preset: Literal[
+        "balanced",
+        "money_flow",
+        "quiet_accumulation",
+        "momentum",
+        "revenue_growth",
+        "chip_transfer",
+        "stable",
+    ]
+    | None = None,
+    market: Literal["ALL", "TW", "TWO"] = "ALL",
+    sort: str | None = None,
+    order: Literal["desc", "asc"] = "desc",
+    filters: list[dict[str, Any]] | None = None,
+    industries: list[str] | None = None,
+    limit: int = 20,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """Screen every listed and OTC Taiwan stock on a daily multi-factor snapshot.
+
+    Results are deterministic rankings of official historical data (price momentum,
+    institutional money flow, credit balances, monthly revenue, risk), not
+    recommendations. Scores are 0-100 percentiles within the snapshot. ``preset`` picks
+    a ready-made screen (its filters and sort are defaults). ``filters`` is a list of
+    ``{"key": "ret_20d", "min": -8, "max": 8}`` bounds (either optional) or
+    ``{"key": "trend_aligned", "equals": true}`` for boolean metrics; ``sort`` is a score
+    (composite, momentum, trend, flow, accumulation, fundamental, stability) or a numeric
+    metric key. 處置股 are excluded. Money-flow values are in lots (張). An empty result
+    with snapshot_pending=true means no snapshot has been computed yet.
+    """
+    numeric: list[ScreenFilter] = []
+    flags: list[str] = []
+    for item in filters or []:
+        if item.get("equals") is True:
+            flags.append(str(item["key"]))
+        else:
+            numeric.append(
+                ScreenFilter(key=str(item["key"]), min=item.get("min"), max=item.get("max"))
+            )
+    async with session_factory() as session:
+        try:
+            result = await ScreenerService(PostgresQuantRepository(session)).screen(
+                market=market,
+                as_of=date.fromisoformat(as_of) if as_of else None,
+                preset=preset,
+                sort=sort,
+                order=order,
+                filters=numeric,
+                flags=flags,
+                industries=industries,
+                limit=max(1, min(limit, 50)),
+            )
+        except ScreenerQueryError as exc:
+            return {"error": str(exc)}
+        columns = [*(PRESET_BY_KEY[preset]["columns"] if preset else []), *MCP_DEFAULT_COLUMNS]
+        return analyst_view(result, columns)
 
 
 @mcp.tool()
