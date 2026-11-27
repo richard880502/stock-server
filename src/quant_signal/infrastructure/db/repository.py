@@ -41,6 +41,7 @@ from quant_signal.domain.models import (
     taipei_day_end,
 )
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
+from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -76,7 +77,10 @@ LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
 class PostgresQuantRepository(
-    OfficialDataRepositoryMixin, FactorDataRepositoryMixin, HoldersRepositoryMixin
+    OfficialDataRepositoryMixin,
+    FactorDataRepositoryMixin,
+    HoldersRepositoryMixin,
+    FundamentalsRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

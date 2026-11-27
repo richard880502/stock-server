@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from quant_signal.adapters.rest.fundamentals import install_fundamentals
 from quant_signal.adapters.rest.quotes import install_quotes
 from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
 from quant_signal.application.data_sync import (
@@ -232,6 +233,7 @@ def create_app() -> FastAPI:
     )
     router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_principal)])
     install_quotes(application, settings)
+    install_fundamentals(application)
 
     @application.exception_handler(DataSyncPending)
     async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:
