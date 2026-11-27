@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 
+from quant_signal.application.derivatives_data import refresh_derivatives_data
 from quant_signal.application.holders_data import refresh_holders_data
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
@@ -16,6 +17,7 @@ from quant_signal.application.sync_jobs import (
     retry_delay_seconds,
 )
 from quant_signal.infrastructure.db import PostgresQuantRepository, session_factory
+from quant_signal.infrastructure.providers.taifex import TaifexClient
 from quant_signal.infrastructure.providers.tpex import TpexProvider
 from quant_signal.infrastructure.providers.twse import TwseProvider
 from quant_signal.settings import get_settings
@@ -55,9 +57,13 @@ async def _after_market_sync(repository: QuantRepository) -> None:
 
 
 _holders_attempts: dict[str, datetime] = {}
+_derivatives_attempts: dict[str, datetime] = {}
+_derivatives_specs: dict[str, object] = {}
 
 
-async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
+async def tick(
+    twse: TwseProvider, tpex: TpexProvider, taifex: TaifexClient | None = None
+) -> bool | None:
     """One scheduling pass: recover stuck jobs, queue the daily refresh, run one job."""
     settings = get_settings()
     async with session_factory() as session:
@@ -106,6 +112,22 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
             except Exception:
                 # Holder data is a side feed; never let it stall the price sync.
                 logger.exception("holders data refresh failed")
+        if settings.derivatives_enabled and taifex is not None:
+            try:
+                await refresh_derivatives_data(
+                    repository,
+                    taifex,
+                    now=now,
+                    attempts=_derivatives_attempts,
+                    specs_cache=_derivatives_specs,
+                    backfill_sessions=settings.derivatives_backfill_sessions,
+                    after_close=settings.derivatives_after_close,
+                    request_budget=settings.derivatives_requests_per_tick,
+                    retry_after=timedelta(minutes=settings.derivatives_retry_minutes),
+                )
+            except Exception:
+                # Derivatives are a side feed; never let them stall the price sync.
+                logger.exception("derivatives data refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),
@@ -135,10 +157,13 @@ async def run_forever() -> None:
     """
     settings = get_settings()
     failures = 0
-    async with TwseProvider() as twse, TpexProvider() as tpex:
+    taifex_client = TaifexClient(
+        request_interval_seconds=settings.derivatives_request_interval_seconds
+    )
+    async with TwseProvider() as twse, TpexProvider() as tpex, taifex_client as taifex:
         while True:
             try:
-                outcome = await tick(twse, tpex)
+                outcome = await tick(twse, tpex, taifex)
             except Exception:
                 logger.exception("sync worker tick failed")
                 outcome = False

@@ -152,6 +152,17 @@ class Settings(BaseSettings):
     quotes_snapshot_minutes: int = Field(default=10, ge=0, le=60)
     # Keep this many months of 1-minute bars (0 keeps everything).
     minute_bars_retention_months: int = Field(default=0, ge=0, le=240)
+    # TAIFEX derivatives (futures/options positioning, P/C ratio, large traders, single-stock
+    # futures, VIX), fetched by the sync worker once the day's reports are published.
+    derivatives_enabled: bool = True
+    # Sessions back-filled gradually and off-session; 0 disables the back-fill.
+    derivatives_backfill_sessions: int = Field(default=120, ge=0, le=500)
+    # Taipei time from which the day's reports are polled (day session closes 13:45).
+    derivatives_after_close: str = Field(default="15:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # TAIFEX redirects clients that burst, so keep the spacing generous.
+    derivatives_request_interval_seconds: float = Field(default=6.0, ge=1.0)
+    derivatives_requests_per_tick: int = Field(default=4, ge=1, le=50)
+    derivatives_retry_minutes: float = Field(default=15.0, gt=0)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

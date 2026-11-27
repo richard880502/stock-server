@@ -5,6 +5,12 @@ from datetime import date, datetime
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+from quant_signal.domain.derivatives import (
+    DerivativesRows,
+    MarketDerivativesLatest,
+    StockFuturesDay,
+    StockFuturesMetrics,
+)
 from quant_signal.domain.models import (
     ApiKey,
     BacktestJob,
@@ -235,6 +241,29 @@ class QuantRepository(Protocol):
     async def shareholding_history(
         self, symbol: str, as_of: datetime, weeks: int = 26
     ) -> list[ShareholdingDistribution]: ...
+
+    # TAIFEX derivatives (see ``infrastructure/derivatives_queries.py``).
+    async def derivatives_rows(self, as_of: datetime, days: int) -> DerivativesRows: ...
+
+    async def latest_market_derivatives(
+        self, as_of: datetime
+    ) -> MarketDerivativesLatest | None: ...
+
+    async def latest_stock_futures_metrics(
+        self, as_of: datetime
+    ) -> dict[str, StockFuturesMetrics]: ...
+
+    async def stock_futures_history(
+        self, symbol: str, as_of: datetime, days: int
+    ) -> list[StockFuturesDay]: ...
+
+    async def has_stock_futures(self, symbol: str) -> bool: ...
+
+    async def stock_spot_closes(
+        self, symbol: str, start: date, end: date
+    ) -> dict[date, float]: ...
+
+    async def foreign_tx_equiv_net_oi_on(self, day: date) -> float | None: ...
 
     async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
 

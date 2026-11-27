@@ -507,6 +507,13 @@ class TwseDataSyncService:
                 current += timedelta(days=1)
                 continue
             observation = self._build_market_observation(full_day, histories)
+            if observation is not None and self.market_code == "TW":
+                lookup = getattr(self.repository, "foreign_tx_equiv_net_oi_on", None)
+                futures = await lookup(current) if lookup is not None else None
+                if futures is not None:
+                    observation = observation.model_copy(
+                        update={"futures_net_open_interest": float(futures)}
+                    )
             if observation is not None:
                 observations.append(observation)
                 checkpoint.append(observation)
@@ -523,8 +530,8 @@ class TwseDataSyncService:
                 "with up to 252 sessions of rolling history."
             ),
             (
-                "Futures open interest is not yet available from this provider "
-                "and is neutralized at 0."
+                "Futures net open interest is the stored TAIFEX foreign TX-equivalent "
+                "position (TW only); it stays 0 for dates without TAIFEX data."
             ),
             (
                 f"Market observations with source {self.provider_source} take precedence "

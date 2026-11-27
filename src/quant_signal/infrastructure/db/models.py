@@ -665,3 +665,6 @@ class ForeignHoldingRow(Base):
     foreign_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
     foreign_holding_pct: Mapped[float] = mapped_column(Float, nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+from quant_signal.infrastructure.db import derivatives_models  # noqa: E402,F401
