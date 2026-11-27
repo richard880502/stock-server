@@ -9,6 +9,7 @@ from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.screener import refresh_screener
+from quant_signal.application.short_data import refresh_short_data
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
     ensure_market_snapshots,
@@ -55,6 +56,7 @@ async def _after_market_sync(repository: QuantRepository) -> None:
 
 
 _holders_attempts: dict[str, datetime] = {}
+_short_data_attempts: dict[str, datetime] = {}
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -106,6 +108,24 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
             except Exception:
                 # Holder data is a side feed; never let it stall the price sync.
                 logger.exception("holders data refresh failed")
+        try:
+            await refresh_short_data(
+                repository,
+                twse,
+                tpex,
+                now=now,
+                attempts=_short_data_attempts,
+                sbl_enabled=settings.short_data_sbl_enabled,
+                daytrade_enabled=settings.short_data_daytrade_enabled,
+                insider_enabled=settings.short_data_insider_enabled,
+                dividend_enabled=settings.short_data_dividend_enabled,
+                backfill_sessions=settings.short_data_backfill_sessions,
+                backfill_per_tick=settings.short_data_backfill_per_tick,
+                retry_after=timedelta(minutes=settings.short_data_retry_minutes),
+            )
+        except Exception:
+            # A side feed; never let it stall the price sync.
+            logger.exception("short data refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),

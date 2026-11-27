@@ -152,6 +152,16 @@ class Settings(BaseSettings):
     quotes_snapshot_minutes: int = Field(default=10, ge=0, le=60)
     # Keep this many months of 1-minute bars (0 keeps everything).
     minute_bars_retention_months: int = Field(default=0, ge=0, le=240)
+    # Securities-lending short selling, day trading, insider pledges and dividend forecasts
+    # (official TWSE/TPEx data, run by the sync worker).
+    short_data_sbl_enabled: bool = True
+    short_data_daytrade_enabled: bool = True
+    short_data_insider_enabled: bool = True
+    short_data_dividend_enabled: bool = True
+    # Past sessions filled gradually (off-session) before the recent window.
+    short_data_backfill_sessions: int = Field(default=60, ge=0, le=500)
+    short_data_backfill_per_tick: int = Field(default=2, ge=1, le=10)
+    short_data_retry_minutes: float = Field(default=10.0, gt=0)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

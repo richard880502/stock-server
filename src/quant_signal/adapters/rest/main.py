@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from quant_signal.adapters.rest.quotes import install_quotes
 from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
+from quant_signal.adapters.rest.short_data import install_short_data
 from quant_signal.application.data_sync import (
     DataSyncPending,
     TpexDataSyncService,
@@ -968,6 +969,7 @@ def create_app() -> FastAPI:
         )
 
     application.include_router(router)
+    install_short_data(application, get_repository)
     return application
 
 
