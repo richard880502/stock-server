@@ -393,8 +393,7 @@ class OpenAICompatibleClient:
         reason = re.sub(secret_like, "[redacted]", reason)[:300]
         host = response.request.url.host
         raise LLMProviderError(
-            f"模型服務 {host} 回應 HTTP {response.status_code}"
-            + (f"：{reason}" if reason else "")
+            f"模型服務 {host} 回應 HTTP {response.status_code}" + (f"：{reason}" if reason else "")
         )
 
     @staticmethod
@@ -509,9 +508,7 @@ class AnthropicClient:
         if message.stop_reason == "refusal":
             details = getattr(message, "stop_details", None)
             category = getattr(details, "category", None) if details else None
-            raise LLMProviderError(
-                f"Claude 拒絕回答這次請求（類別：{category or '未提供'}）"
-            )
+            raise LLMProviderError(f"Claude 拒絕回答這次請求（類別：{category or '未提供'}）")
         if message.stop_reason == "max_tokens":
             raise LLMProviderError(
                 "Claude 的回答超過 ANTHROPIC_MAX_TOKENS 上限而被截斷，請調高該設定"
@@ -608,9 +605,7 @@ def create_judge_llm_client(settings: Settings) -> LLMClient | None:
             settings, settings.judge_anthropic_model or settings.anthropic_model
         )
     if not settings.judge_llm_base_url or not settings.judge_llm_model:
-        raise ValueError(
-            "Judge LLM is not configured: JUDGE_LLM_BASE_URL, JUDGE_LLM_MODEL"
-        )
+        raise ValueError("Judge LLM is not configured: JUDGE_LLM_BASE_URL, JUDGE_LLM_MODEL")
     return OpenAICompatibleClient(
         base_url=settings.judge_llm_base_url,
         model=settings.judge_llm_model,
@@ -793,31 +788,40 @@ class DebateAnalysisService:
         )
         evidence = []
         for source in (
-            "symbol_signal", "market_environment", "chip_flow", "news_sentiment", "backtest"
+            "symbol_signal",
+            "market_environment",
+            "chip_flow",
+            "news_sentiment",
+            "backtest",
         ):
             item = getattr(context, source)
             if item is not None:
-                evidence.append(DebateEvidence(
-                    id=source, source=source,
-                    as_of=item.spec.end if source == "backtest" else item.as_of,
-                    details=item.model_dump(mode="json"),
-                ))
+                evidence.append(
+                    DebateEvidence(
+                        id=source,
+                        source=source,
+                        as_of=item.spec.end if source == "backtest" else item.as_of,
+                        details=item.model_dump(mode="json"),
+                    )
+                )
         news_items = await select_news_items(self.context_service.repository, symbol, as_of)
         for item in news_items:
-            evidence.append(DebateEvidence(
-                id=news_evidence_id(item),
-                source="news_item",
-                as_of=item.published_at.astimezone(TAIPEI).date(),
-                # Details are for the UI to resolve an id to headline + url; they are
-                # not part of the model-facing payload.
-                details={
-                    "headline": item.headline,
-                    "url": item.url,
-                    "news_source": item.source,
-                    "published_at": item.published_at.isoformat(),
-                    "sentiment_label": item.sentiment_label,
-                },
-            ))
+            evidence.append(
+                DebateEvidence(
+                    id=news_evidence_id(item),
+                    source="news_item",
+                    as_of=item.published_at.astimezone(TAIPEI).date(),
+                    # Details are for the UI to resolve an id to headline + url; they are
+                    # not part of the model-facing payload.
+                    details={
+                        "headline": item.headline,
+                        "url": item.url,
+                        "news_source": item.source,
+                        "published_at": item.published_at.isoformat(),
+                        "sentiment_label": item.sentiment_label,
+                    },
+                )
+            )
         data_sufficient = context.market_environment.latest.source != "synthetic_demo"
         evidence_payload = prompt_context(context, news_items)
         evidence_payload["evidence"] = [
@@ -846,8 +850,7 @@ class DebateAnalysisService:
             "bear_case": bear_case.model_dump(mode="json"),
         }
         risk_review = validate_llm_output(
-            DebateRiskReview,
-            await self.client.complete_json(RISK_SYSTEM_PROMPT, risk_payload)
+            DebateRiskReview, await self.client.complete_json(RISK_SYSTEM_PROMPT, risk_payload)
         )
         risk_review.evidence_refs = [ref for ref in risk_review.evidence_refs if ref in valid_refs]
         synthesis_payload = {

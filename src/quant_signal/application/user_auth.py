@@ -178,9 +178,7 @@ async def exchange_code(
     return token
 
 
-def parse_id_token(
-    id_token: str, *, client_id: str, nonce: str, now: datetime
-) -> GoogleIdentity:
+def parse_id_token(id_token: str, *, client_id: str, nonce: str, now: datetime) -> GoogleIdentity:
     try:
         claims = json.loads(_unb64(id_token.split(".")[1]))
     except (IndexError, ValueError, json.JSONDecodeError) as exc:

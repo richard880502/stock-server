@@ -58,9 +58,9 @@ def commission(amount: float | Decimal, config: TWCostConfig = DEFAULT_COSTS) ->
     value = D(str(amount))
     if value <= 0:
         return 0
-    fee = int((value * config.commission_rate * config.commission_discount).to_integral_value(
-        ROUND_FLOOR
-    ))
+    fee = int(
+        (value * config.commission_rate * config.commission_discount).to_integral_value(ROUND_FLOOR)
+    )
     return max(fee, config.min_commission)
 
 
@@ -136,9 +136,7 @@ def round_to_tick_up(price: float | Decimal, *, etf: bool = False) -> Decimal:
     return _round_to_tick(D(str(price)), ROUND_CEILING, etf)
 
 
-def price_limits(
-    reference: float | Decimal, *, etf: bool = False
-) -> tuple[Decimal, Decimal]:
+def price_limits(reference: float | Decimal, *, etf: bool = False) -> tuple[Decimal, Decimal]:
     """(limit_down, limit_up): reference ±10% rounded inward to legal ticks."""
     ref = D(str(reference))
     up = round_to_tick_down(ref * (1 + PRICE_LIMIT_PCT), etf=etf)
@@ -170,3 +168,39 @@ def is_limit_locked(
 def round_lots(shares: int) -> int:
     """Floor to whole board lots (1,000 shares)."""
     return (max(shares, 0) // BOARD_LOT) * BOARD_LOT
+
+
+def is_on_tick(price: float | Decimal, *, etf: bool = False) -> bool:
+    """True when ``price`` is a legal price at its own tick band."""
+    p = D(str(price))
+    return p > 0 and p % tick_size(p, etf=etf) == 0
+
+
+def tick_up(price: float | Decimal, *, etf: bool = False) -> Decimal:
+    """The next legal price above ``price`` (a price off the grid is first rounded up)."""
+    p = round_to_tick_up(price, etf=etf)
+    if p != D(str(price)):
+        return p
+    return p + tick_size(p, etf=etf)
+
+
+def tick_down(price: float | Decimal, *, etf: bool = False) -> Decimal:
+    """The next legal price below ``price``; the band below a boundary sets the step.
+
+    From 100 the step is 0.1 (the band under 100), so one tick down is 99.9.
+    """
+    p = round_to_tick_down(price, etf=etf)
+    if p != D(str(price)):
+        return p
+    step = tick_size(p - D("0.0001"), etf=etf)
+    return p - step
+
+
+def move_ticks(
+    price: float | Decimal, ticks: int, direction: Literal["up", "down"], *, etf: bool = False
+) -> Decimal:
+    """``ticks`` legal steps from ``price``, crossing tick bands one step at a time."""
+    p = D(str(price))
+    for _ in range(max(ticks, 0)):
+        p = tick_up(p, etf=etf) if direction == "up" else tick_down(p, etf=etf)
+    return p

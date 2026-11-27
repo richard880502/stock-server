@@ -42,11 +42,7 @@ def _integer(value: Any) -> int:
 
 def _roc_date(value: str) -> date:
     normalized = (
-        value.strip()
-        .replace("年", "/")
-        .replace("月", "/")
-        .replace("日", "")
-        .replace("-", "/")
+        value.strip().replace("年", "/").replace("月", "/").replace("日", "").replace("-", "/")
     )
     parts = normalized.split("/")
     if len(parts) != 3:
@@ -524,9 +520,7 @@ class TwseProvider:
         requested = str(payload.get("date") or "")
         if len(requested) != 8:
             return None
-        trading_date = date.fromisoformat(
-            f"{requested[:4]}-{requested[4:6]}-{requested[6:]}"
-        )
+        trading_date = date.fromisoformat(f"{requested[:4]}-{requested[4:6]}-{requested[6:]}")
         tables = payload.get("tables") or []
         index_close: float | None = None
         quote_rows: list[list[Any]] = []

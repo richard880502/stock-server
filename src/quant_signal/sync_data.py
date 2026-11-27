@@ -90,11 +90,7 @@ async def _run(args: argparse.Namespace) -> None:
         reports = []
         if args.command == "symbol":
             normalized = args.symbol.strip().upper()
-            service = (
-                tpex
-                if normalized.endswith(".TWO") or normalized == "^TWOII"
-                else twse
-            )
+            service = tpex if normalized.endswith(".TWO") or normalized == "^TWOII" else twse
             reports.append(
                 await service.sync_symbol(
                     args.symbol,
@@ -131,13 +127,9 @@ async def _run(args: argparse.Namespace) -> None:
                 symbols.append("^TWOII")
             for symbol in dict.fromkeys(symbols):
                 service = (
-                    tpex
-                    if symbol.upper().endswith(".TWO") or symbol.upper() == "^TWOII"
-                    else twse
+                    tpex if symbol.upper().endswith(".TWO") or symbol.upper() == "^TWOII" else twse
                 )
-                reports.append(
-                    await service.sync_symbol(symbol, start=start, end=end)
-                )
+                reports.append(await service.sync_symbol(symbol, start=start, end=end))
                 if not symbol.startswith("^"):
                     reports.append(
                         await service.sync_institutional_flows(

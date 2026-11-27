@@ -38,9 +38,7 @@ async def _list() -> None:
                     "key_prefix": key.key_prefix,
                     "created_at": key.created_at.isoformat(),
                     "revoked_at": key.revoked_at.isoformat() if key.revoked_at else None,
-                    "last_used_at": key.last_used_at.isoformat()
-                    if key.last_used_at
-                    else None,
+                    "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
                 }
                 for key in keys
             ],
