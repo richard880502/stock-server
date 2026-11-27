@@ -170,3 +170,9 @@ export const StarIcon = ({ filled = false, ...p }: IconProps & { filled?: boolea
     <path d="m12 3.6 2.6 5.3 5.8.85-4.2 4.1 1 5.8-5.2-2.75-5.2 2.75 1-5.8-4.2-4.1 5.8-.85Z" />
   </Icon>
 );
+
+export const ScreenerIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 5h16l-6.2 7.4V19l-3.6-1.8v-4.8L4 5Z" />
+  </Icon>
+);

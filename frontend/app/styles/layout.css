@@ -146,6 +146,23 @@
   display: none;
 }
 
+/* Six tabs: tighten the inline tab bar on mid-size screens so the header actions are not pushed out. */
+@media (min-width: 720px) and (max-width: 1099px) {
+  .topbar {
+    gap: var(--space-3);
+  }
+
+  .view-tab {
+    padding-inline: var(--space-2);
+    font-size: var(--text-sm);
+  }
+
+  .view-tab[aria-current="page"]::after {
+    left: var(--space-2);
+    right: var(--space-2);
+  }
+}
+
 @media (max-width: 719px) {
   .brand-text small {
     display: none;
