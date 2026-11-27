@@ -10,16 +10,21 @@ market capitalisation is not stored.
 
 from __future__ import annotations
 
+import asyncio
+import gc
+import threading
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
-from typing import Literal
+from typing import Any, Literal, NamedTuple
 
 from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.ports import QuantRepository
+from quant_signal.application.result_cache import ResultCache
 from quant_signal.domain.models import (
-    MarketStockDay,
+    IntradaySnapshot,
     SectorQuadrant,
     SectorReturn,
     SectorRotation,
@@ -42,15 +47,38 @@ SESSION_CLOSE = time(13, 30)
 # Intraday data must cover at least this share of yesterday's universe to be used.
 MIN_INTRADAY_COVERAGE = 0.5
 INTRADAY_SOURCE = "intraday_snapshot"
+# Intraday snapshots arrive about every ten minutes; a cached result is good for one slot.
+INTRADAY_SLOT_MINUTES = 10
+
+# The loaded sessions (tens of MB each) and the answers computed from them. Entries are
+# keyed by the data version, so a sync that writes rows retires them.
+_loaded_cache = ResultCache(max_entries=3)
+_rotation_cache = ResultCache(max_entries=32)
+_stocks_cache = ResultCache(max_entries=32)
 
 SortKey = Literal["window_return", "day_change", "turnover", "institutional"]
+
+
+class _Day(NamedTuple):
+    """The columns of one stock-session that sector rotation reads."""
+
+    symbol: str
+    trading_date: date
+    name: str
+    market: str
+    close: float
+    change: float
+    volume: int
+    turnover_value: float
+    total_net: int | None
+    available_at: datetime
 
 
 @dataclass
 class _Loaded:
     sessions: list[date]
     # symbol -> {session -> row}
-    by_symbol: dict[str, dict[date, MarketStockDay]]
+    by_symbol: dict[str, dict[date, _Day]]
     industry: dict[str, tuple[str, str]]
     mode: Literal["close", "intraday"]
     intraday_status: Literal["live", "unavailable", "not_applicable"]
@@ -59,7 +87,7 @@ class _Loaded:
     daily_returns: dict[str, dict[date, float]] = field(default_factory=dict)
 
 
-def _daily_return(row: MarketStockDay) -> float | None:
+def _daily_return(row: _Day) -> float | None:
     previous = row.close - row.change
     return row.change / previous if previous > 0 else None
 
@@ -109,6 +137,131 @@ def rrg_points(industry: list[float], market: list[float]) -> list[SectorRrgPoin
     return points
 
 
+_gc_lock = threading.Lock()
+_gc_pausers = 0
+_gc_was_enabled = False
+
+
+@contextmanager
+def _gc_paused() -> Iterator[None]:
+    """Keep the cyclic collector off while a worker thread builds tens of thousands of rows.
+
+    A collection pass over them is one uninterruptible stretch that stalls the event
+    loop; none of these objects form cycles, so reference counting frees them anyway.
+    Reentrant across threads: the collector comes back when the last builder is done.
+    """
+    global _gc_pausers, _gc_was_enabled
+    with _gc_lock:
+        if _gc_pausers == 0:
+            _gc_was_enabled = gc.isenabled()
+            gc.disable()
+        _gc_pausers += 1
+    try:
+        yield
+    finally:
+        with _gc_lock:
+            _gc_pausers -= 1
+            if _gc_pausers == 0 and _gc_was_enabled:
+                gc.enable()
+
+
+def _group_sessions(
+    raw: list[tuple[Any, ...]], known_by: datetime | None
+) -> tuple[dict[str, dict[date, _Day]], list[date], datetime | None]:
+    """Lean rows -> ``symbol -> {session -> row}``, the newest sessions and their data time.
+
+    ``known_by``: a row is unknown until the moment it became available (point in time).
+    """
+    rows = [_Day._make(item) for item in raw]
+    if known_by is not None:
+        rows = [row for row in rows if row.available_at <= known_by]
+    sessions = sorted({row.trading_date for row in rows})[-HISTORY_SESSIONS:]
+    if not sessions:
+        return {}, [], None
+    wanted = set(sessions)
+    by_symbol: dict[str, dict[date, _Day]] = defaultdict(dict)
+    for row in rows:
+        if row.trading_date in wanted:
+            by_symbol[row.symbol][row.trading_date] = row
+    data_time = max(
+        (row.available_at for row in rows if row.trading_date == sessions[-1]), default=None
+    )
+    return by_symbol, sessions, data_time
+
+
+def _assemble(
+    by_symbol: dict[str, dict[date, _Day]],
+    sessions: list[date],
+    data_time: datetime | None,
+    industries: dict[str, tuple[str, str]],
+    snapshots: list[IntradaySnapshot],
+    now: datetime,
+    present: bool,
+) -> _Loaded:
+    """Merge today's intraday snapshots (when it applies) and derive daily returns."""
+    if not sessions:
+        return _Loaded(
+            sessions=[],
+            by_symbol={},
+            industry=industries,
+            mode="close",
+            intraday_status="not_applicable",
+            data_time=None,
+            classification_ready=bool(industries),
+        )
+    local_now = now.astimezone(TAIPEI)
+    today = local_now.date()
+    mode: Literal["close", "intraday"] = "close"
+    status: Literal["live", "unavailable", "not_applicable"] = "not_applicable"
+    weekday = local_now.weekday() < 5
+    in_session = weekday and SESSION_OPEN <= local_now.time() < SESSION_CLOSE
+    if present and weekday and sessions[-1] < today:
+        latest_rows = {symbol: days[max(days)] for symbol, days in by_symbol.items()}
+        live = [item for item in snapshots if item.symbol in latest_rows]
+        universe = sum(1 for days in by_symbol.values() if sessions[-1] in days)
+        if live and universe and len(live) / universe >= MIN_INTRADAY_COVERAGE:
+            for item in live:
+                base = latest_rows[item.symbol]
+                previous = item.price / (1 + item.change_pct) if item.change_pct > -1 else 0
+                if previous <= 0:
+                    continue
+                by_symbol[item.symbol][today] = _Day(
+                    symbol=item.symbol,
+                    trading_date=today,
+                    name=base.name,
+                    market=base.market,
+                    close=item.price,
+                    change=item.price - previous,
+                    volume=item.volume_lots * SHARES_PER_LOT,
+                    turnover_value=item.amount_twd,
+                    total_net=None,
+                    available_at=item.available_at,
+                )
+            sessions = [*sessions, today][-HISTORY_SESSIONS:]
+            mode, status = "intraday", "live"
+            data_time = max(item.taken_at for item in live)
+        elif in_session:
+            status = "unavailable"
+    elif present and in_session:
+        status = "unavailable"
+
+    returns: dict[str, dict[date, float]] = {}
+    for symbol, days in by_symbol.items():
+        returns[symbol] = {
+            day: value for day, row in days.items() if (value := _daily_return(row)) is not None
+        }
+    return _Loaded(
+        sessions=sessions,
+        by_symbol=by_symbol,
+        industry=industries,
+        mode=mode,
+        intraday_status=status,
+        data_time=data_time,
+        classification_ready=bool(industries),
+        daily_returns=returns,
+    )
+
+
 class SectorRotationService:
     def __init__(
         self,
@@ -120,8 +273,23 @@ class SectorRotationService:
         self._clock = clock or (lambda: datetime.now(UTC))
 
     # ------------------------------------------------------------------ loading
-    async def _load(self, as_of: date | None) -> _Loaded | None:
-        now = self._clock()
+    async def _cache_key(self, as_of: date | None, now: datetime) -> tuple[Any, ...]:
+        """Identifies one loaded view: store, row fingerprint, as-of, intraday slot."""
+        version = await self.repository.market_data_version()
+        local_now = now.astimezone(TAIPEI)
+        present = as_of is None or as_of >= local_now.date()
+        slot: tuple[date, int] | None = None
+        if (
+            present
+            and local_now.weekday() < 5
+            and (version.newest_date is None or version.newest_date < local_now.date())
+        ):
+            # Today's row is not stored yet: the intraday snapshot stands in for it.
+            minutes = local_now.hour * 60 + local_now.minute
+            slot = (local_now.date(), minutes // INTRADAY_SLOT_MINUTES)
+        return (self.repository.cache_namespace, version.fingerprint, as_of, present, slot)
+
+    async def _load(self, as_of: date | None, now: datetime) -> _Loaded:
         local_now = now.astimezone(TAIPEI)
         today = local_now.date()
         present = as_of is None or as_of >= today
@@ -129,81 +297,39 @@ class SectorRotationService:
         dates = await self.repository.list_market_trading_dates(
             None, as_of=cutoff_date, limit=HISTORY_SESSIONS + 2
         )
-        rows = await self.repository.list_market_stock_days(dates, None, as_of=cutoff_date)
-        if present:
-            # Point in time: a row is unknown until the moment it became available.
-            rows = [row for row in rows if row.available_at <= now]
+        with _gc_paused():
+            return await self._load_rows(dates, cutoff_date, now, present)
+
+    async def _load_rows(
+        self,
+        dates: list[date],
+        cutoff_date: date | None,
+        now: datetime,
+        present: bool,
+    ) -> _Loaded:
+        local_now = now.astimezone(TAIPEI)
+        today = local_now.date()
+        raw = await self.repository.list_market_sector_days(dates, as_of=cutoff_date)
         industries = {
             item.symbol: (item.industry_code, item.industry_name)
             for item in await self.repository.list_market_industries()
         }
-        sessions = sorted({row.trading_date for row in rows})[-HISTORY_SESSIONS:]
-        if not sessions:
-            return None
-        by_symbol: dict[str, dict[date, MarketStockDay]] = defaultdict(dict)
-        for row in rows:
-            if row.trading_date in sessions:
-                by_symbol[row.symbol][row.trading_date] = row
-
-        mode: Literal["close", "intraday"] = "close"
-        status: Literal["live", "unavailable", "not_applicable"] = "not_applicable"
-        data_time: datetime | None = max(
-            (row.available_at for row in rows if row.trading_date == sessions[-1]),
-            default=None,
+        # The heavy lifting (tens of thousands of rows) runs off the event loop.
+        by_symbol, sessions, data_time = await asyncio.to_thread(
+            _group_sessions, raw, now if present else None
         )
+        snapshots: list[IntradaySnapshot] = []
         weekday = local_now.weekday() < 5
-        in_session = weekday and SESSION_OPEN <= local_now.time() < SESSION_CLOSE
-        if present and weekday and sessions[-1] < today:
+        if sessions and present and weekday and sessions[-1] < today:
             snapshots = await self.repository.latest_intraday_snapshots(day=today, now=now)
-            latest_rows = {symbol: days[max(days)] for symbol, days in by_symbol.items()}
-            live = [item for item in snapshots if item.symbol in latest_rows]
-            universe = sum(1 for days in by_symbol.values() if sessions[-1] in days)
-            if live and universe and len(live) / universe >= MIN_INTRADAY_COVERAGE:
-                for item in live:
-                    base = latest_rows[item.symbol]
-                    previous = item.price / (1 + item.change_pct) if item.change_pct > -1 else 0
-                    if previous <= 0:
-                        continue
-                    by_symbol[item.symbol][today] = MarketStockDay(
-                        symbol=item.symbol,
-                        name=base.name,
-                        market=base.market,
-                        trading_date=today,
-                        open=item.price,
-                        high=item.price,
-                        low=item.price,
-                        close=item.price,
-                        volume=item.volume_lots * SHARES_PER_LOT,
-                        turnover_value=item.amount_twd,
-                        change=item.price - previous,
-                        available_at=item.available_at,
-                        source=INTRADAY_SOURCE,
-                    )
-                sessions = [*sessions, today][-HISTORY_SESSIONS:]
-                mode, status = "intraday", "live"
-                data_time = max(item.taken_at for item in live)
-            elif in_session:
-                status = "unavailable"
-        elif present and in_session:
-            status = "unavailable"
-
-        returns: dict[str, dict[date, float]] = {}
-        for symbol, days in by_symbol.items():
-            returns[symbol] = {
-                day: value
-                for day, row in days.items()
-                if (value := _daily_return(row)) is not None
-            }
-        return _Loaded(
-            sessions=sessions,
-            by_symbol=by_symbol,
-            industry=industries,
-            mode=mode,
-            intraday_status=status,
-            data_time=data_time,
-            classification_ready=bool(industries),
-            daily_returns=returns,
+        return await asyncio.to_thread(
+            _assemble, by_symbol, sessions, data_time, industries, snapshots, now, present
         )
+
+    async def _loaded(self, as_of: date | None, now: datetime) -> tuple[tuple[Any, ...], _Loaded]:
+        key = await self._cache_key(as_of, now)
+        loaded = await _loaded_cache.get_or_compute(key, lambda: self._load(as_of, now))
+        return key, loaded
 
     # --------------------------------------------------------------- statistics
     @staticmethod
@@ -219,7 +345,7 @@ class SectorRotationService:
 
     @staticmethod
     def _institutional(
-        days: dict[date, MarketStockDay], sessions: list[date]
+        days: dict[date, _Day], sessions: list[date]
     ) -> tuple[float, float] | None:
         lots = value = 0.0
         seen = False
@@ -258,9 +384,23 @@ class SectorRotationService:
     ) -> SectorRotation:
         if window not in WINDOWS:
             raise ValueError(f"window must be one of {WINDOWS}")
-        loaded = await self._load(as_of)
+        now = self._clock()
+        key, loaded = await self._loaded(as_of, now)
+
+        async def compute() -> SectorRotation:
+            return await asyncio.to_thread(self._rotation_of, loaded, window, as_of)
+
+        result: SectorRotation = await _rotation_cache.get_or_compute(
+            (*key, "rotation", window), compute
+        )
         pending = await self.repository.has_active_sync_job(SyncJobKind.MARKET)
-        if loaded is None:
+        return result.model_copy(update={"backfill_pending": pending})
+
+    def _rotation_of(
+        self, loaded: _Loaded, window: int, as_of: date | None
+    ) -> SectorRotation:
+        """The answer for one loaded view (CPU only; ``backfill_pending`` is set by the caller)."""
+        if not loaded.sessions:
             return SectorRotation(
                 window=window,
                 as_of=as_of,
@@ -274,7 +414,7 @@ class SectorRotationService:
                 classification_ready=False,
                 market_turnover_value=0.0,
                 market_return_equal_pct={str(w): None for w in WINDOWS},
-                backfill_pending=pending,
+                backfill_pending=False,
                 sectors=[],
             )
         sessions = loaded.sessions
@@ -408,7 +548,7 @@ class SectorRotationService:
             classification_ready=loaded.classification_ready,
             market_turnover_value=market_turnover,
             market_return_equal_pct=market_returns,
-            backfill_pending=pending,
+            backfill_pending=False,
             sectors=sectors,
         )
 
@@ -424,8 +564,28 @@ class SectorRotationService:
     ) -> SectorStocks:
         if window not in WINDOWS:
             raise ValueError(f"window must be one of {WINDOWS}")
-        loaded = await self._load(as_of)
-        if loaded is None:
+        now = self._clock()
+        key, loaded = await self._loaded(as_of, now)
+
+        async def compute() -> SectorStocks:
+            return await asyncio.to_thread(
+                self._stocks_of, loaded, code, window, sort, order, limit
+            )
+
+        return await _stocks_cache.get_or_compute(
+            (*key, "stocks", code, window, sort, order, limit), compute
+        )
+
+    def _stocks_of(
+        self,
+        loaded: _Loaded,
+        code: str,
+        window: int,
+        sort: SortKey,
+        order: Literal["desc", "asc"],
+        limit: int,
+    ) -> SectorStocks:
+        if not loaded.sessions:
             return SectorStocks(
                 code=code,
                 name="",

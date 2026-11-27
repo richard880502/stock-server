@@ -20,6 +20,7 @@ from quant_signal.domain.models import (
     Instrument,
     IntradaySnapshot,
     MarketDataStatus,
+    MarketDataVersion,
     MarketEnvironmentSnapshot,
     MarketEvent,
     MarketFactorSnapshot,
@@ -27,6 +28,7 @@ from quant_signal.domain.models import (
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
+    MarketRankingRow,
     MarketSession,
     MarketStockDay,
     MonthlyRevenue,
@@ -192,7 +194,42 @@ class QuantRepository(Protocol):
         as_of: date | None = None,
     ) -> list[MarketFlowDay]: ...
 
+    async def market_ranking(
+        self,
+        metric: str,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None,
+        order: Literal["desc", "asc"],
+        limit: int,
+    ) -> list[MarketRankingRow]:
+        """Top ``limit`` stocks by ``metric`` over ``dates``, aggregated by the store.
+
+        Only stocks with a row on the newest of ``dates`` are ranked; ties sort by symbol.
+        """
+        ...
+
+    async def list_market_sector_days(
+        self, dates: list[date], *, as_of: date | None = None
+    ) -> list[tuple[Any, ...]]:
+        """Lean rows ``(symbol, trading_date, name, market, close, change, volume,
+        turnover_value, total_net, available_at)`` for sector rotation (whole market)."""
+        ...
+
+    async def market_data_version(self) -> MarketDataVersion:
+        """A cheap fingerprint of the whole-market tables; it changes when a sync writes."""
+        ...
+
+    cache_namespace: str
+
     async def market_data_status(self) -> list[MarketDataStatus]: ...
+
+    async def market_session_summary(self, market: str) -> tuple[int, date | None]:
+        """``(number of stored sessions, newest session)`` of one market."""
+        ...
+
+    async def latest_market_observation_date(self, market: str, source: str) -> date | None: ...
 
     async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int: ...
 
