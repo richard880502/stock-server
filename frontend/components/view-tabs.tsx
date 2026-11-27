@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChartIcon, FlaskIcon, MarketIcon, PulseIcon, StarIcon } from "./icons";
+import { ChartIcon, FlaskIcon, MarketIcon, PulseIcon, ScreenerIcon, StarIcon } from "./icons";
 
 export const VIEWS = [
   { href: "/", label: "市場與訊號", short: "訊號", Icon: PulseIcon },
   { href: "/market", label: "市場深入", short: "市場", Icon: MarketIcon },
+  { href: "/screener", label: "選股", short: "選股", Icon: ScreenerIcon },
   { href: "/watchlist", label: "自選股", short: "自選", Icon: StarIcon },
   { href: "/backtest", label: "策略回測", short: "回測", Icon: ChartIcon },
   { href: "/forecast", label: "預測實驗室", short: "預測", Icon: FlaskIcon },

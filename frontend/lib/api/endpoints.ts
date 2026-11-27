@@ -24,6 +24,8 @@ import type {
   MarketRankings,
   MarketScope,
   PriceSeries,
+  ScreenerMeta,
+  ScreenerResponse,
   SectorRotation,
   SectorStockSort,
   SectorStocks,
@@ -317,3 +319,11 @@ export const removeFromWatchlist = (symbol: string, init?: Init) =>
     ...init,
     method: "DELETE",
   });
+
+/** Factor / metric / preset / industry catalogue that drives the whole 選股 page. */
+export const getScreenerMeta = (init?: Init) =>
+  fetchJson<ScreenerMeta>(apiUrl("/api/v1/market/screener/meta"), init);
+
+/** `query` is the already-built query string (see features/screener/screener-model.ts). */
+export const getScreener = (query: URLSearchParams, init?: Init) =>
+  fetchJson<ScreenerResponse>(apiUrl(`/api/v1/market/screener?${query}`), init);

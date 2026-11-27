@@ -39,7 +39,7 @@ export function MarketOverview() {
           <p className="note">{signalData.loading ? "市場環境載入中…" : "目前沒有市場環境資料。"}</p>
         </Card>
       )}
-      <Card title="市場候選股" sub="上市與上櫃 · 三大法人當日買賣超由高到低；這是排行，並非買進建議。" aside={<Link href="/market" className="button small">深入市場 →</Link>}>
+      <Card title="市場候選股" sub="上市與上櫃 · 三大法人當日買賣超由高到低；這是排行，並非買進建議。" aside={<span className="home-card-links"><Link href="/screener" className="button small">用多因子選股 →</Link><Link href="/market" className="button small">深入市場 →</Link></span>}>
         {data?.awaiting_report_date && <AwaitingReportNotice report="三大法人" awaiting={data.awaiting_report_date} through={data.data_through} />}
         {data?.backfill_pending && <p className="note" role="status">資料回補中，排行可能不完整，頁面會自動更新。</p>}
         {ranking.error ? <p className="note" role="alert">{ranking.error} <button className="button small" onClick={ranking.retry}>重試</button></p>

@@ -577,3 +577,110 @@ export type SectorStocks = {
   backfill_pending: boolean;
   entries: SectorStockEntry[];
 };
+
+/* ---- Whole-market screener (選股), contract v1: see SCREENER_SPEC.md §4 ---- */
+
+export type ScreenerOrder = "desc" | "asc";
+
+export type ScreenerFactorInput = {
+  key: string;
+  weight: number;
+  /** Optional: the input is used negated (lower raw value scores higher). */
+  invert?: boolean;
+  /** Uses |value| (with invert: a smaller magnitude scores higher). */
+  absolute?: boolean;
+};
+
+/** A 0–100 cross-sectional score (momentum, flow, …). */
+export type ScreenerFactor = {
+  key: string;
+  label: string;
+  kind: "score";
+  group: string;
+  unit: string;
+  description: string;
+  higher_is_better: boolean;
+  inputs: ScreenerFactorInput[];
+};
+
+export type ScreenerMetric = {
+  key: string;
+  label: string;
+  group: string;
+  /** "%", "張", "元", "日", … ; booleans may use kind "bool" or unit "bool". */
+  unit: string;
+  decimals?: number | null;
+  description: string;
+  higher_is_better: boolean | null;
+  /** Optional hints; the client falls back to heuristics when the server omits them. */
+  kind?: "number" | "bool" | "text";
+  signed?: boolean;
+};
+
+export type ScreenerGroup = { key: string; label: string };
+
+export type ScreenerPresetFilter = {
+  key: string;
+  min?: number | null;
+  max?: number | null;
+  /** Boolean metric that must be true (any of these spellings is accepted). */
+  flag?: boolean;
+  value?: boolean;
+  equals?: boolean;
+};
+
+export type ScreenerPreset = {
+  key: string;
+  label: string;
+  description: string;
+  sort: string;
+  order: ScreenerOrder;
+  filters: ScreenerPresetFilter[];
+  columns: string[];
+};
+
+export type ScreenerIndustry = { code: string; name: string; count: number };
+
+export type ScreenerMeta = {
+  version: string;
+  factors: ScreenerFactor[];
+  metrics: ScreenerMetric[];
+  groups: ScreenerGroup[];
+  presets: ScreenerPreset[];
+  industries: ScreenerIndustry[];
+};
+
+export type ScreenerEntry = {
+  rank: number;
+  symbol: string;
+  name: string;
+  market: "TW" | "TWO";
+  industry_code: string | null;
+  industry_name: string | null;
+  close: number;
+  change_pct: number | null;
+  avg_turnover_20d: number | null;
+  composite: number | null;
+  scores: Record<string, number | null>;
+  metrics: Record<string, number | boolean | string | null>;
+  highlights: string[];
+  /** "disposition" (處置) / "attention" (注意). */
+  flags: string[];
+};
+
+export type ScreenerResponse = {
+  version: string;
+  market: MarketScope;
+  as_of: string | null;
+  data_through: string | null;
+  flow_through: string | null;
+  preset: string | null;
+  sort: string;
+  order: ScreenerOrder;
+  universe: number;
+  matched: number;
+  limit: number;
+  offset: number;
+  snapshot_pending: boolean;
+  entries: ScreenerEntry[];
+};
