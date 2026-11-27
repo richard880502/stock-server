@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -139,6 +139,32 @@ class RankingEntry(BaseModel):
     value: float
     volume_lots: int
     turnover_value: float
+
+
+class MarketDataVersion(NamedTuple):
+    """Fingerprint of the whole-market tables: equal versions mean the same rows.
+
+    ``newest_date`` is the latest stored session (None when empty); ``fingerprint`` is
+    opaque but hashable and changes whenever a sync adds or updates the newest rows.
+    """
+
+    newest_date: date | None
+    fingerprint: tuple[Any, ...]
+
+
+class MarketRankingRow(BaseModel):
+    """One stock's ranking value (final units) with its newest session's fields."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    close: float
+    change: float
+    volume: int
+    turnover_value: float
+    value: float
 
 
 class MarketRanking(BaseModel):

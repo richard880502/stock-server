@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -21,10 +22,12 @@ from quant_signal.domain.models import (
     IntradaySnapshot,
     JobStatus,
     MarketDataStatus,
+    MarketDataVersion,
     MarketEnvironmentSnapshot,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
+    MarketRankingRow,
     MarketStockDay,
     NewsItem,
     SignalSnapshot,
@@ -34,6 +37,7 @@ from quant_signal.domain.models import (
     hide_late_label,
     taipei_day_end,
 )
+from quant_signal.domain.ranking import finalize_ranking_value, ranking_raw_value
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.memory_factors import MemoryFactorDataMixin
 from quant_signal.infrastructure.memory_holders import MemoryHoldersMixin
@@ -63,6 +67,10 @@ class MemoryQuantRepository(
         self.market_stock_days: dict[tuple[str, date, str], MarketStockDay] = {}
         self.market_industries: dict[str, MarketIndustry] = {}
         self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
+        # Bumped by every whole-market write; the data version the result caches key on.
+        self._market_rev = 0
+        self._newest_cache: tuple[int, date | None] = (-1, None)
+        self.cache_namespace = f"mem:{uuid4()}"
         # Test seams for the ingest-owned price layers (``quote_latest``, ``minute_bars``).
         self.quotes_latest: dict[str, LatestQuote] = {}
         self.minute_bars: dict[str, list[MinuteBar]] = {}
@@ -591,11 +599,13 @@ class MemoryQuantRepository(
     async def upsert_market_stock_days(self, rows: list[MarketStockDay]) -> int:
         for item in rows:
             self.market_stock_days[(item.symbol, item.trading_date, item.source)] = item
+        self._market_rev += 1
         return len(rows)
 
     async def upsert_market_industries(self, rows: list[MarketIndustry]) -> int:
         for item in rows:
             self.market_industries[item.symbol] = item
+        self._market_rev += 1
         return len(rows)
 
     async def list_market_industries(self) -> list[MarketIndustry]:
@@ -618,6 +628,7 @@ class MemoryQuantRepository(
         """Test seam: production rows come from ``quote_latest`` (ingest service)."""
         for item in rows:
             self.intraday_snapshots[(item.symbol, item.taken_at)] = item
+        self._market_rev += 1
         return len(rows)
 
     async def latest_intraday_snapshots(
@@ -645,7 +656,7 @@ class MemoryQuantRepository(
         )
         return [
             item
-            for item in self.market_stock_days.values()
+            for item in list(self.market_stock_days.values())
             if (not market or market == "ALL" or item.market == market)
             and (as_of is None or item.trading_date <= as_of)
             and (cutoff is None or item.available_at <= cutoff)
@@ -659,17 +670,20 @@ class MemoryQuantRepository(
         limit: int,
         require: str | None = None,
     ) -> list[date]:
-        rows = self._market_rows(market, as_of)
-        by_day: dict[date, list[MarketStockDay]] = {}
-        for item in rows:
-            by_day.setdefault(item.trading_date, []).append(item)
-        if require is not None:
-            by_day = {
-                day: group
-                for day, group in by_day.items()
-                if self._all_markets_reported(group, require)
-            }
-        return sorted(by_day, reverse=True)[:limit]
+        def compute() -> list[date]:
+            by_day: dict[date, list[MarketStockDay]] = {}
+            for item in self._market_rows(market, as_of):
+                by_day.setdefault(item.trading_date, []).append(item)
+            if require is not None:
+                by_day = {
+                    day: group
+                    for day, group in by_day.items()
+                    if self._all_markets_reported(group, require)
+                }
+            return sorted(by_day, reverse=True)[:limit]
+
+        # A scan of the whole table: off the loop, as the database would be.
+        return await asyncio.to_thread(compute)
 
     @staticmethod
     def _all_markets_reported(group: list[MarketStockDay], attr: str) -> bool:
@@ -715,6 +729,106 @@ class MemoryQuantRepository(
                 )
             )
         return result
+
+    async def market_ranking(
+        self,
+        metric: str,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None,
+        order: Literal["desc", "asc"],
+        limit: int,
+    ) -> list[MarketRankingRow]:
+        if not dates:
+            return []
+        wanted = set(dates)
+        latest = max(dates)
+        by_symbol: dict[str, list[MarketStockDay]] = {}
+        for item in self._market_rows(market, as_of):
+            if item.trading_date in wanted:
+                by_symbol.setdefault(item.symbol, []).append(item)
+        scored: list[tuple[float | int, MarketStockDay]] = []
+        for history in by_symbol.values():
+            history.sort(key=lambda item: item.trading_date)
+            if history[-1].trading_date != latest:
+                continue
+            raw = ranking_raw_value(metric, history)
+            if raw is not None:
+                scored.append((raw, history[-1]))
+        # Ties break on symbol, ascending, whichever the direction.
+        scored.sort(key=lambda pair: pair[1].symbol)
+        scored.sort(key=lambda pair: pair[0], reverse=order == "desc")
+        return [
+            MarketRankingRow(
+                symbol=newest.symbol,
+                name=newest.name,
+                market=newest.market,
+                close=newest.close,
+                change=newest.change,
+                volume=newest.volume,
+                turnover_value=newest.turnover_value,
+                value=finalize_ranking_value(metric, raw),
+            )
+            for raw, newest in scored[:limit]
+        ]
+
+    async def list_market_sector_days(
+        self, dates: list[date], *, as_of: date | None = None
+    ) -> list[tuple[Any, ...]]:
+        wanted = set(dates)
+        rows = list(self.market_stock_days.values())
+        cutoff = datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei")) if as_of else None
+
+        def build() -> list[tuple[Any, ...]]:
+            return [
+                (
+                    i.symbol,
+                    i.trading_date,
+                    i.name,
+                    i.market,
+                    i.close,
+                    i.change,
+                    i.volume,
+                    i.turnover_value,
+                    i.total_net,
+                    i.available_at,
+                )
+                for i in rows
+                if i.trading_date in wanted
+                and (as_of is None or i.trading_date <= as_of)
+                and (cutoff is None or i.available_at <= cutoff)
+            ]
+
+        return await asyncio.to_thread(build)
+
+    async def market_data_version(self) -> MarketDataVersion:
+        if self._newest_cache[0] != self._market_rev:
+            newest = max((key[1] for key in self.market_stock_days), default=None)
+            self._newest_cache = (self._market_rev, newest)
+        return MarketDataVersion(
+            newest_date=self._newest_cache[1],
+            fingerprint=(
+                self._market_rev,
+                len(self.market_stock_days),
+                len(self.market_industries),
+                len(self.intraday_snapshots),
+            ),
+        )
+
+    async def market_session_summary(self, market: str) -> tuple[int, date | None]:
+        days = {r.trading_date for r in self._market_rows(market, None)}
+        return len(days), max(days, default=None)
+
+    async def latest_market_observation_date(self, market: str, source: str) -> date | None:
+        return max(
+            (
+                o.trading_date
+                for o in self.market_observations.get(market.upper(), [])
+                if o.source == source
+            ),
+            default=None,
+        )
 
     async def market_data_status(self) -> list[MarketDataStatus]:
         result: list[MarketDataStatus] = []

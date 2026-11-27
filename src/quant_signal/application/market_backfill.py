@@ -76,14 +76,8 @@ class MarketBackfillService:
         else:
             state = "idle"  # work remains but nothing is scheduled to do it
 
-        dates = await self.repository.list_market_trading_dates(market, as_of=None, limit=1000)
-        observations = [
-            item
-            for item in await self.repository.list_market_observations(market)
-            if item.source == source
-        ]
-        latest_score = max((item.trading_date for item in observations), default=None)
-        newest_stored = dates[0] if dates else None
+        stored_sessions, newest_stored = await self.repository.market_session_summary(market)
+        latest_score = await self.repository.latest_market_observation_date(market, source)
         score_ready = bool(
             latest_score
             and newest_stored
@@ -99,7 +93,7 @@ class MarketBackfillService:
             percent=round(done / len(weekdays) * 100, 1) if weekdays else 100.0,
             rate_per_minute=round(rate, 1) if rate else None,
             eta_seconds=eta,
-            stored_sessions=len(dates),
+            stored_sessions=stored_sessions,
             sessions_needed_for_score=SESSIONS_NEEDED,
             latest_score_date=latest_score,
             score_ready=score_ready,
