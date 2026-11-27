@@ -94,6 +94,10 @@ async def run_forever() -> None:
     if settings.news_sync_enabled:
         # Own task: a slow or failing news fetch can never stall prices.
         jobs.append(asyncio.create_task(news_worker.run_forever(), name="news"))
+    if settings.paper_trading_enabled:
+        from quant_signal.workers import paper as paper_worker
+
+        jobs.append(asyncio.create_task(paper_worker.run_forever(settings), name="paper-matcher"))
     if quotes_ready(settings):
         jobs.append(asyncio.create_task(quotes.run(), name="shioaji-collector"))
     else:

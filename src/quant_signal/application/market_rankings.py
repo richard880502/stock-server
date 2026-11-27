@@ -76,9 +76,7 @@ class MarketRankingService:
         )
         awaiting: date | None = None
         if dates and require is not None:
-            newest = await self.repository.list_market_trading_dates(
-                scope, as_of=as_of, limit=1
-            )
+            newest = await self.repository.list_market_trading_dates(scope, as_of=as_of, limit=1)
             awaiting = newest[0] if newest and newest[0] > max(dates) else None
         if not dates:
             return MarketRanking(
@@ -169,9 +167,7 @@ class MarketRankingService:
         as_of: date | None = None,
     ) -> MarketFlowSeries:
         scope = None if market == "ALL" else market
-        dates = await self.repository.list_market_trading_dates(
-            scope, as_of=as_of, limit=days
-        )
+        dates = await self.repository.list_market_trading_dates(scope, as_of=as_of, limit=days)
         if not dates:
             return MarketFlowSeries(
                 market=market,

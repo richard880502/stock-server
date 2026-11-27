@@ -218,9 +218,7 @@ class MarketObservationSyncService:
         rows: list[tuple[str, float, float, int]],
         histories: dict[str, deque[float]],
     ) -> MarketObservation | None:
-        breadth = compute_breadth(
-            rows, histories, minimum_history=self.minimum_stock_history
-        )
+        breadth = compute_breadth(rows, histories, minimum_history=self.minimum_stock_history)
         if breadth is None:
             return None
         market = await self.provider.fetch_market_day(day)

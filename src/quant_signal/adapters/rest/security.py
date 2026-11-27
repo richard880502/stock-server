@@ -32,7 +32,7 @@ def _extract_raw_key(
     x_api_key: str | None,
 ) -> str | None:
     if authorization and authorization.lower().startswith("bearer "):
-        return authorization[len("bearer "):].strip()
+        return authorization[len("bearer ") :].strip()
     if x_api_key:
         return x_api_key.strip()
     return None

@@ -36,9 +36,7 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
         )
         if recovered:
             logger.warning("requeued %s sync jobs stuck in running", recovered)
-        await ensure_market_snapshots(
-            repository, lookback_days=settings.sync_market_lookback_days
-        )
+        await ensure_market_snapshots(repository, lookback_days=settings.sync_market_lookback_days)
         now = datetime.now(UTC)
         if now - _industry_attempt["at"] >= INDUSTRY_RETRY_AFTER:
             _industry_attempt["at"] = now

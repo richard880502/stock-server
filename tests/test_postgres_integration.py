@@ -544,3 +544,56 @@ async def test_every_orm_column_exists_in_the_migrated_database() -> None:
     finally:
         await engine.dispose()
     assert missing == [], f"ORM columns missing from the database: {missing}"
+
+
+async def test_paper_fill_cannot_be_booked_twice(sessions) -> None:
+    """Row lock + status check + unique constraints: only one of two bookings wins."""
+    from decimal import Decimal
+
+    from quant_signal.application.paper_jobs import ledger_entries
+    from quant_signal.domain.paper import PaperAccountRecord, PaperFillRecord, PaperOrderRecord
+
+    now = datetime.now(UTC)
+    user_id = uuid4()
+    async with sessions() as session:
+        from quant_signal.infrastructure.db.models import UserRow
+
+        session.add(UserRow(id=user_id, google_sub=f"zz-{uuid4().hex}", email="zz@example.com"))
+        await session.commit()
+        repo = PostgresQuantRepository(session)
+        account = PaperAccountRecord(
+            user_id=user_id, name="t", initial_cash=1_000_000, created_at=now
+        )
+        assert await repo.create_paper_account(account, max_accounts=3) == "created"
+        order = PaperOrderRecord(
+            account_id=account.id, symbol="ZZ1.TW", name="x", side="buy", order_type="market",
+            lots=1, session_date=now.date(), created_at=now, updated_at=now, reserved_cash=100_000,
+        )
+        await repo.add_paper_order(order)
+
+    def fill() -> PaperFillRecord:
+        return PaperFillRecord(
+            order_id=order.id, account_id=account.id, symbol="ZZ1.TW", side="buy", shares=1000,
+            price=Decimal("100"), amount=100_000, commission=142, tax=0,
+            filled_at=now, price_source="tick", price_time=now,
+        )
+
+    async def attempt() -> bool:
+        record = fill()
+        async with sessions() as session:
+            return await PostgresQuantRepository(session).apply_paper_fill(
+                record, ledger_entries(record, now), now=now
+            )
+
+    results = await asyncio.gather(attempt(), attempt(), attempt())
+    assert sorted(results) == [False, False, True]
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert len(await repo.list_paper_fills(account.id, epoch=0)) == 1
+        assert await repo.paper_cash(account.id, 0) == 1_000_000 - 100_142
+        stored = await repo.get_paper_order(order.id)
+        assert stored.status == "filled" and stored.reserved_cash == 0
+        # a cancel arriving after the fill is turned away
+        assert await repo.finish_paper_order(order.id, status="cancelled", now=now) is False
+        await session.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        await session.commit()

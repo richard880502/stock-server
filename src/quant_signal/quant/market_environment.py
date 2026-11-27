@@ -103,9 +103,7 @@ class MarketEnvironmentEngine:
         ratios: list[float] = []
         for item in observations[-5:]:
             directional = item.advancing_issues + item.declining_issues
-            ratios.append(
-                item.advancing_issues / directional * 100 if directional else 50
-            )
+            ratios.append(item.advancing_issues / directional * 100 if directional else 50)
         return _clamp(ratios[-1] * 0.6 + fmean(ratios) * 0.4)
 
     @staticmethod
@@ -132,17 +130,11 @@ class MarketEnvironmentEngine:
     @staticmethod
     def _institutional_flow(observations: list[MarketObservation]) -> float:
         cash_ratios = [
-            (
-                item.foreign_net_flow
-                + item.investment_trust_net_flow
-                + item.dealer_net_flow
-            )
+            (item.foreign_net_flow + item.investment_trust_net_flow + item.dealer_net_flow)
             / item.turnover_value
             for item in observations[-60:]
         ]
-        futures_positions = [
-            item.futures_net_open_interest for item in observations[-60:]
-        ]
+        futures_positions = [item.futures_net_open_interest for item in observations[-60:]]
         cash_z = _z_score(cash_ratios[-1], cash_ratios)
         futures_z = _z_score(futures_positions[-1], futures_positions)
         return _clamp(50 + cash_z * 12 * 0.7 + futures_z * 12 * 0.3)
@@ -180,13 +172,9 @@ class MarketEnvironmentEngine:
         latest = observations[-1]
         above_ma20 = latest.above_ma20_issues / latest.total_issues * 100
         five_day_prior = observations[-6]
-        prior_above_ma20 = (
-            five_day_prior.above_ma20_issues / five_day_prior.total_issues * 100
-        )
+        prior_above_ma20 = five_day_prior.above_ma20_issues / five_day_prior.total_issues * 100
         participation_change = above_ma20 - prior_above_ma20
-        index_is_high = latest.index_close >= max(
-            item.index_close for item in observations[-20:]
-        )
+        index_is_high = latest.index_close >= max(item.index_close for item in observations[-20:])
         if index_is_high and above_ma20 < 45:
             alerts.append(
                 Alert(
@@ -212,8 +200,7 @@ class MarketEnvironmentEngine:
             )
 
         advance_ratios = [
-            item.advancing_issues
-            / max(item.advancing_issues + item.declining_issues, 1)
+            item.advancing_issues / max(item.advancing_issues + item.declining_issues, 1)
             for item in observations[-3:]
         ]
         if fmean(advance_ratios) >= 0.65 and above_ma20 >= 55:
@@ -223,20 +210,14 @@ class MarketEnvironmentEngine:
                     severity=AlertSeverity.INFO,
                     title="多數成分股同步轉強，形成市場寬度推進",
                     evidence={
-                        "three_day_advance_ratio_pct": round(
-                            fmean(advance_ratios) * 100, 2
-                        ),
+                        "three_day_advance_ratio_pct": round(fmean(advance_ratios) * 100, 2),
                         "above_ma20_pct": round(above_ma20, 2),
                     },
                 )
             )
 
         cash_ratios = [
-            (
-                item.foreign_net_flow
-                + item.investment_trust_net_flow
-                + item.dealer_net_flow
-            )
+            (item.foreign_net_flow + item.investment_trust_net_flow + item.dealer_net_flow)
             / item.turnover_value
             for item in observations[-60:]
         ]
@@ -292,9 +273,7 @@ class MarketEnvironmentEngine:
         values = list(factors.model_dump().values())
         agreement = 1 - min(pstdev(values) / 50, 1)
         history = min(observations / 252, 1)
-        high_alerts = sum(
-            alert.severity == AlertSeverity.HIGH for alert in alerts
-        )
+        high_alerts = sum(alert.severity == AlertSeverity.HIGH for alert in alerts)
         return round(
             _clamp(agreement * 0.6 + history * 0.4 - high_alerts * 0.05, 0, 1),
             3,

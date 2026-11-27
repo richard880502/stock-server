@@ -36,14 +36,10 @@ class Settings(BaseSettings):
     # Taipei local times (24h, comma separated) after which the daily refresh is
     # queued. The second run picks up reports the exchanges publish late in the
     # evening (credit balances).
-    sync_daily_time: str = Field(
-        default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    sync_daily_time: str = Field(default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     # News (消息面) job in the ingest service: Taipei times, like sync_daily_time.
     news_sync_enabled: bool = True
-    news_sync_time: str = Field(
-        default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    news_sync_time: str = Field(default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     news_sync_max_symbols: int = Field(default=60, ge=0)
     # Seconds between per-company queries to Google News (be polite).
     news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
@@ -125,9 +121,7 @@ class Settings(BaseSettings):
     # Official 1-minute bars (Shioaji kbars) fill the minutes the live feed missed.
     quotes_backfill_enabled: bool = True
     # Taipei time after which the day's minutes are replaced with official kbars.
-    quotes_backfill_after_close: str = Field(
-        default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
-    )
+    quotes_backfill_after_close: str = Field(default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
     quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
     # After the close, collect the whole listed + OTC market (~2,000 symbols, watched
@@ -141,6 +135,13 @@ class Settings(BaseSettings):
     quotes_snapshot_minutes: int = Field(default=10, ge=0, le=60)
     # Keep this many months of 1-minute bars (0 keeps everything).
     minute_bars_retention_months: int = Field(default=0, ge=0, le=240)
+    # Paper trading (模擬交易): simulation only, never places a real order.
+    paper_trading_enabled: bool = True
+    # Seconds between matcher passes over working orders during the session.
+    paper_match_seconds: float = Field(default=3.0, gt=0)
+    # Ticks of slippage on every simulated fill (no order book to walk).
+    paper_slippage_ticks: int = Field(default=1, ge=0, le=5)
+    paper_max_accounts: int = Field(default=3, ge=1, le=20)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

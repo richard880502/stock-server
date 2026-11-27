@@ -177,11 +177,7 @@ class QuantSignalEngine:
         if not benchmark_bars:
             return 50
         benchmark = select_latest_records(
-            [
-                bar
-                for bar in benchmark_bars
-                if bar.available_at.date() <= as_of
-            ],
+            [bar for bar in benchmark_bars if bar.available_at.date() <= as_of],
             as_of=as_of,
         )
         if len(benchmark) < 21:

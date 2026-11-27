@@ -130,9 +130,7 @@ async def process_next_job(
 MARKET_CODES = ("TW", "TWO")
 
 
-async def enqueue_market_snapshots(
-    repository: QuantRepository, *, lookback_days: int
-) -> int:
+async def enqueue_market_snapshots(repository: QuantRepository, *, lookback_days: int) -> int:
     created = 0
     for market in MARKET_CODES:
         _, was_created = await repository.enqueue_sync_job(
@@ -156,9 +154,7 @@ async def request_symbol_sync(repository: QuantRepository, symbol: str) -> None:
         )
 
 
-async def ensure_market_snapshots(
-    repository: QuantRepository, *, lookback_days: int
-) -> int:
+async def ensure_market_snapshots(repository: QuantRepository, *, lookback_days: int) -> int:
     """Queue the first backfill when no whole-market data exists yet."""
     if await repository.list_market_trading_dates(None, as_of=None, limit=1):
         return 0
@@ -189,9 +185,7 @@ async def enqueue_daily_refresh(
             due.append(f"{local.date().isoformat()}@{stamp}")
     if not due:
         return 0
-    done = await repository.list_fetch_coverage(
-        SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", due
-    )
+    done = await repository.list_fetch_coverage(SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", due)
     todo = [period for period in due if period not in done]
     if not todo:
         return 0

@@ -58,9 +58,7 @@ async def refresh_industries(
     """
     moment = now or datetime.now(UTC)
     period = _week_period(moment)
-    done = await repository.list_fetch_coverage(
-        INDUSTRY_SOURCE, INDUSTRY_DATASET, "*", [period]
-    )
+    done = await repository.list_fetch_coverage(INDUSTRY_SOURCE, INDUSTRY_DATASET, "*", [period])
     if period in done:
         return 0
     twse_payload: list[Any] = await fetch_json_list(twse.client, TWSE_INDUSTRY_URL)

@@ -62,6 +62,7 @@ from quant_signal.infrastructure.db.models import (
     WatchlistItemRow,
 )
 from quant_signal.infrastructure.db.official_repository import OfficialDataRepositoryMixin
+from quant_signal.infrastructure.db.paper_repository import PaperRepositoryMixin
 from quant_signal.infrastructure.db.prices import (
     LatestQuote,
     MinuteBar,
@@ -73,7 +74,7 @@ KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
 LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
-class PostgresQuantRepository(OfficialDataRepositoryMixin):
+class PostgresQuantRepository(OfficialDataRepositoryMixin, PaperRepositoryMixin):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
@@ -826,25 +827,20 @@ class PostgresQuantRepository(OfficialDataRepositoryMixin):
             values = item.model_dump(mode="python", exclude={"symbol"})
             insert_statement = insert(NewsItemRow).values(instrument_id=instrument_id, **values)
             stmt_excluded = insert_statement.excluded
-            statement = (
-                insert_statement
-                .on_conflict_do_update(
-                    constraint="uq_news_item_version",
-                    set_={
-                        **{
-                            key: value
-                            for key, value in values.items()
-                            if key not in KEEP_FIRST_SEEN and key not in LABEL_FIELDS
-                        },
-                        # A refetch without a label must not erase an existing one.
-                        **{
-                            key: func.coalesce(
-                                getattr(stmt_excluded, key), getattr(NewsItemRow, key)
-                            )
-                            for key in LABEL_FIELDS
-                        },
+            statement = insert_statement.on_conflict_do_update(
+                constraint="uq_news_item_version",
+                set_={
+                    **{
+                        key: value
+                        for key, value in values.items()
+                        if key not in KEEP_FIRST_SEEN and key not in LABEL_FIELDS
                     },
-                )
+                    # A refetch without a label must not erase an existing one.
+                    **{
+                        key: func.coalesce(getattr(stmt_excluded, key), getattr(NewsItemRow, key))
+                        for key in LABEL_FIELDS
+                    },
+                },
             )
             result = await self.session.execute(statement)
             inserted += result.rowcount or 0

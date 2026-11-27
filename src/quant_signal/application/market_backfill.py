@@ -49,15 +49,9 @@ class MarketBackfillService:
             source, MARKET_STOCK_DATASET, market, [day.isoformat() for day in weekdays]
         )
         pending = [
-            day
-            for day in weekdays
-            if not _fetched_after(coverage.get(day.isoformat()), day)
+            day for day in weekdays if not _fetched_after(coverage.get(day.isoformat()), day)
         ]
-        recent = sum(
-            1
-            for entry in coverage.values()
-            if now - entry.fetched_at <= RATE_WINDOW
-        )
+        recent = sum(1 for entry in coverage.values() if now - entry.fetched_at <= RATE_WINDOW)
         jobs = [
             job
             for job in await self.repository.list_active_sync_jobs(SyncJobKind.MARKET)
@@ -85,9 +79,7 @@ class MarketBackfillService:
         latest_score = max((item.trading_date for item in observations), default=None)
         newest_stored = dates[0] if dates else None
         score_ready = bool(
-            latest_score
-            and newest_stored
-            and (newest_stored - latest_score).days <= 4
+            latest_score and newest_stored and (newest_stored - latest_score).days <= 4
         )
         done = len(weekdays) - len(pending)
         return MarketBackfillStatus(
@@ -104,4 +96,3 @@ class MarketBackfillService:
             latest_score_date=latest_score,
             score_ready=score_ready,
         )
-

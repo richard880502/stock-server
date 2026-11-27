@@ -97,12 +97,8 @@ def make_demo_market_observations(
         directional = total_issues - unchanged
         advancing = int(directional * advance_ratio)
         declining = directional - advancing
-        above20_ratio = float(
-            np.clip(0.5 + trend20 * 5 + rng.normal(0, 0.05), 0.12, 0.9)
-        )
-        above60_ratio = float(
-            np.clip(0.5 + trend60 * 4 + rng.normal(0, 0.045), 0.1, 0.9)
-        )
+        above20_ratio = float(np.clip(0.5 + trend20 * 5 + rng.normal(0, 0.05), 0.12, 0.9))
+        above60_ratio = float(np.clip(0.5 + trend60 * 4 + rng.normal(0, 0.045), 0.1, 0.9))
         high_pressure = max(trend60, 0) * 2 + max(market_shocks[index], 0) * 4
         low_pressure = max(-trend60, 0) * 2 + max(-market_shocks[index], 0) * 4
         new_highs = int(total_issues * np.clip(0.015 + high_pressure, 0.005, 0.14))
@@ -112,19 +108,11 @@ def make_demo_market_observations(
             np.clip(0.5 + market_shocks[index] * 15 + rng.normal(0, 0.04), 0.1, 0.9)
         )
         turnover = float(max(100_000_000_000, rng.normal(360_000_000_000, 55_000_000_000)))
-        foreign_flow = float(
-            market_shocks[index] * 900_000_000_000 + rng.normal(0, 4_500_000_000)
-        )
-        trust_flow = float(
-            market_shocks[index] * 120_000_000_000 + rng.normal(0, 900_000_000)
-        )
-        dealer_flow = float(
-            market_shocks[index] * 150_000_000_000 + rng.normal(0, 1_300_000_000)
-        )
+        foreign_flow = float(market_shocks[index] * 900_000_000_000 + rng.normal(0, 4_500_000_000))
+        trust_flow = float(market_shocks[index] * 120_000_000_000 + rng.normal(0, 900_000_000))
+        dealer_flow = float(market_shocks[index] * 150_000_000_000 + rng.normal(0, 1_300_000_000))
         futures_position = float(
-            futures_position * 0.92
-            + market_shocks[index] * 85_000
-            + rng.normal(0, 900)
+            futures_position * 0.92 + market_shocks[index] * 85_000 + rng.normal(0, 900)
         )
         margin_balance *= 1 + float(
             np.clip(market_shocks[index] * 0.08 + rng.normal(0, 0.001), -0.006, 0.006)

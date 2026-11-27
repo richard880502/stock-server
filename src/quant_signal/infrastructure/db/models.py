@@ -96,9 +96,7 @@ class InstrumentRow(Base):
     institutional_flows: Mapped[list[InstitutionalFlowRow]] = relationship(
         back_populates="instrument"
     )
-    branch_flows: Mapped[list[BrokerBranchFlowRow]] = relationship(
-        back_populates="instrument"
-    )
+    branch_flows: Mapped[list[BrokerBranchFlowRow]] = relationship(back_populates="instrument")
 
 
 class DailyBarRow(Base):
@@ -182,9 +180,7 @@ class InstitutionalFlowRow(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    instrument: Mapped[InstrumentRow] = relationship(
-        back_populates="institutional_flows"
-    )
+    instrument: Mapped[InstrumentRow] = relationship(back_populates="institutional_flows")
 
 
 class BrokerBranchFlowRow(Base):
@@ -604,3 +600,8 @@ class MonthlyRevenueRow(Base):
     cumulative_yoy_pct: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# Paper-trading tables live in their own module; importing it registers them on ``Base``
+# (alembic and the schema-drift test only import this module).
+from quant_signal.infrastructure.db import paper_models  # noqa: E402,F401

@@ -71,9 +71,7 @@ class ChipFlowEngine:
             if item.foreign_holding_ratio is not None
         ]
         holding_change = (
-            holding_points[-1] - holding_points[0]
-            if len(holding_points) >= 2
-            else None
+            holding_points[-1] - holding_points[0] if len(holding_points) >= 2 else None
         )
 
         branches = [
@@ -90,9 +88,7 @@ class ChipFlowEngine:
         )
 
         foreign_ratio = sum(item.foreign_net for item in latest_5) / max(volume_5d, 1)
-        trust_ratio = sum(item.investment_trust_net for item in latest_5) / max(
-            volume_5d, 1
-        )
+        trust_ratio = sum(item.investment_trust_net for item in latest_5) / max(volume_5d, 1)
         dealer_ratio = sum(item.dealer_net for item in latest_5) / max(volume_5d, 1)
         foreign_score = _clamp(50 + foreign_ratio * 500)
         trust_score = _clamp(50 + trust_ratio * 750)
@@ -103,10 +99,7 @@ class ChipFlowEngine:
             + _streak([item.investment_trust_net for item in history]) * 7
         )
         institutional_score = (
-            foreign_score * 0.42
-            + trust_score * 0.30
-            + dealer_score * 0.10
-            + persistence * 0.18
+            foreign_score * 0.42 + trust_score * 0.30 + dealer_score * 0.10 + persistence * 0.18
         )
         branch_score = self._branch_score(branch_metrics)
         score = (
@@ -117,16 +110,12 @@ class ChipFlowEngine:
 
         metrics = ChipFlowMetrics(
             foreign_net_5d=sum(item.foreign_net for item in latest_5),
-            investment_trust_net_5d=sum(
-                item.investment_trust_net for item in latest_5
-            ),
+            investment_trust_net_5d=sum(item.investment_trust_net for item in latest_5),
             dealer_net_5d=sum(item.dealer_net for item in latest_5),
             total_net_20d=sum(item.total_net for item in latest_20),
             flow_volume_ratio_5d=round(flow_volume_ratio, 6),
             foreign_streak=_streak([item.foreign_net for item in history]),
-            investment_trust_streak=_streak(
-                [item.investment_trust_net for item in history]
-            ),
+            investment_trust_streak=_streak([item.investment_trust_net for item in history]),
             foreign_holding_ratio=holding_points[-1] if holding_points else None,
             foreign_holding_change_5d=(
                 round(holding_change, 4) if holding_change is not None else None
@@ -147,9 +136,7 @@ class ChipFlowEngine:
             branch_observations=len(branches),
             branch_data_available=bool(branches),
             branch_data_status=(
-                "licensed_data_loaded"
-                if branches
-                else "not_licensed_or_not_imported"
+                "licensed_data_loaded" if branches else "not_licensed_or_not_imported"
             ),
             metrics=metrics,
             latest=history[-1],
@@ -183,10 +170,7 @@ class ChipFlowEngine:
             grouped[key]["sell"] += item.sell_shares
             grouped[key]["buy_amount"] += item.buy_amount
             grouped[key]["sell_amount"] += item.sell_amount
-            if (
-                item.day_trade_buy_shares is not None
-                and item.day_trade_sell_shares is not None
-            ):
+            if item.day_trade_buy_shares is not None and item.day_trade_sell_shares is not None:
                 day_trade += min(
                     item.day_trade_buy_shares,
                     item.day_trade_sell_shares,
@@ -204,18 +188,14 @@ class ChipFlowEngine:
         top_buy = sum(max(item[2], 0) for item in ranked[:5])
         top_sell = sum(abs(min(item[2], 0)) for item in ranked[-5:])
         net_buy_amount = sum(
-            values["buy_amount"] - values["sell_amount"]
-            for _, _, net, values in ranked
-            if net > 0
+            values["buy_amount"] - values["sell_amount"] for _, _, net, values in ranked if net > 0
         )
         net_buy_shares = sum(max(net, 0) for _, _, net, _ in ranked)
         win_rates = ChipFlowEngine._branch_win_rates(all_branches, bars)
 
         def ranking(item: tuple[str, str, int, dict[str, float]]) -> BranchRanking:
             code, name, net, values = item
-            amount = (
-                values["buy_amount"] if net >= 0 else values["sell_amount"]
-            )
+            amount = values["buy_amount"] if net >= 0 else values["sell_amount"]
             shares = values["buy"] if net >= 0 else values["sell"]
             return BranchRanking(
                 branch_code=code,
@@ -229,9 +209,7 @@ class ChipFlowEngine:
         top_sellers = [ranking(item) for item in reversed(ranked[-5:]) if item[2] < 0]
         return (
             {
-                "branch_buy_concentration_5d": round(top_buy / gross_buy, 4)
-                if gross_buy
-                else 0,
+                "branch_buy_concentration_5d": round(top_buy / gross_buy, 4) if gross_buy else 0,
                 "branch_sell_concentration_5d": round(top_sell / gross_sell, 4)
                 if gross_sell
                 else 0,

@@ -190,9 +190,7 @@ class SectorRotationService:
         returns: dict[str, dict[date, float]] = {}
         for symbol, days in by_symbol.items():
             returns[symbol] = {
-                day: value
-                for day, row in days.items()
-                if (value := _daily_return(row)) is not None
+                day: value for day, row in days.items() if (value := _daily_return(row)) is not None
             }
         return _Loaded(
             sessions=sessions,
@@ -253,9 +251,7 @@ class SectorRotationService:
         return series
 
     # ------------------------------------------------------------------- public
-    async def rotation(
-        self, *, window: int = 5, as_of: date | None = None
-    ) -> SectorRotation:
+    async def rotation(self, *, window: int = 5, as_of: date | None = None) -> SectorRotation:
         if window not in WINDOWS:
             raise ValueError(f"window must be one of {WINDOWS}")
         loaded = await self._load(as_of)
@@ -281,17 +277,13 @@ class SectorRotationService:
         window_days = sessions[-window:]
         latest = sessions[-1]
         market_daily_turnover = {
-            day: sum(
-                days[day].turnover_value for days in loaded.by_symbol.values() if day in days
-            )
+            day: sum(days[day].turnover_value for days in loaded.by_symbol.values() if day in days)
             for day in sessions
         }
         market_turnover = sum(market_daily_turnover[d] for d in window_days)
         market_series = self._daily_series(loaded, None)
         market_returns: dict[str, float | None] = {
-            str(w): (
-                (_chain(market_series[-w:])[-1] - 1) * 100 if len(sessions) >= w else None
-            )
+            str(w): ((_chain(market_series[-w:])[-1] - 1) * 100 if len(sessions) >= w else None)
             for w in WINDOWS
         }
         institutional_through = max(
