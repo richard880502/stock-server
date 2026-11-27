@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 import httpx
@@ -717,7 +718,9 @@ async def test_unclassified_rows_do_not_count_in_the_aggregate() -> None:
     labeled = _item("2330.TW", "利多", "https://a.test/l", now - timedelta(hours=1),
                     now - timedelta(hours=1))
     await repository.upsert_news_items([unlabeled, labeled])
-    snapshot = await NewsSentimentService(repository).analyze("2330.TW", as_of=now.date())
+    # as_of is a Taipei date; the UTC date is a day behind between 00:00 and 08:00 Taipei.
+    as_of = now.astimezone(ZoneInfo("Asia/Taipei")).date()
+    snapshot = await NewsSentimentService(repository).analyze("2330.TW", as_of=as_of)
     assert snapshot.article_count == 1
     assert snapshot.score == 75.0  # only the 0.5 item: (0.5 + 1) * 50
 
