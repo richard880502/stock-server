@@ -212,6 +212,17 @@ class MarketObservationSyncService:
             notes=notes,
         )
 
+    async def _foreign_futures_net_oi(self, day: date) -> float:
+        """Official foreign TX-equivalent net OI (TW only); 0 until TAIFEX data is stored.
+
+        ``refresh_observation_futures`` revises rows built before the data arrived.
+        """
+        lookup = getattr(self.repository, "foreign_tx_equiv_net_oi_on", None)
+        if self.market != "TW" or lookup is None:
+            return 0.0
+        value = await lookup(day)
+        return float(value) if value is not None else 0.0
+
     async def _observe(
         self,
         day: date,
@@ -226,6 +237,7 @@ class MarketObservationSyncService:
         market = await self.provider.fetch_market_day(day)
         if market is None or not market.capital_data_complete:
             return None
+        futures = await self._foreign_futures_net_oi(day)
         total = int(breadth["total"])
         advancing, declining = int(breadth["advancing"]), int(breadth["declining"])
         return MarketObservation(
@@ -246,7 +258,7 @@ class MarketObservationSyncService:
             foreign_net_flow=market.foreign_net_flow,
             investment_trust_net_flow=market.investment_trust_net_flow,
             dealer_net_flow=market.dealer_net_flow,
-            futures_net_open_interest=0,
+            futures_net_open_interest=futures,
             margin_balance=market.margin_balance,
             short_balance=market.short_balance,
             available_at=datetime.combine(day, time(0), tzinfo=UTC) + timedelta(hours=10),

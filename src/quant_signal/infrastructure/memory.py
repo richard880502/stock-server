@@ -39,6 +39,7 @@ from quant_signal.domain.models import (
 )
 from quant_signal.domain.ranking import finalize_ranking_value, ranking_raw_value
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
+from quant_signal.infrastructure.memory_derivatives import MemoryDerivativesMixin
 from quant_signal.infrastructure.memory_factors import MemoryFactorDataMixin
 from quant_signal.infrastructure.memory_fundamentals import MemoryFundamentalsMixin
 from quant_signal.infrastructure.memory_holders import MemoryHoldersMixin
@@ -52,6 +53,7 @@ class MemoryQuantRepository(
     MemoryHoldersMixin,
     MemoryShortDataMixin,
     MemoryFundamentalsMixin,
+    MemoryDerivativesMixin,
 ):
     """Test and demo repository with the same contract as PostgreSQL."""
 

@@ -48,6 +48,7 @@ from quant_signal.domain.ranking import (
     SHARE_COLUMNS,
     finalize_ranking_value,
 )
+from quant_signal.infrastructure.db.derivatives_repository import DerivativesRepositoryMixin
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
 from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
@@ -94,6 +95,7 @@ class PostgresQuantRepository(
     HoldersRepositoryMixin,
     ShortDataRepositoryMixin,
     FundamentalsRepositoryMixin,
+    DerivativesRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

@@ -777,3 +777,6 @@ class QuarterlyFinancialRow(Base):
     total_assets: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+from quant_signal.infrastructure.db import derivatives_models  # noqa: E402,F401
