@@ -11,6 +11,7 @@ from quant_signal.adapters.rest.main import app, get_repository
 from quant_signal.application import sync_jobs
 from quant_signal.application.data_sync import DataSyncReport
 from quant_signal.application.screener import (
+    PRESETS,
     ScreenerQueryError,
     ScreenerService,
     ScreenerSnapshotService,
@@ -20,13 +21,16 @@ from quant_signal.application.screener import (
 )
 from quant_signal.application.sync_jobs import process_next_job
 from quant_signal.domain.models import (
+    ForeignHolding,
     MarketIndustry,
     MarketStockDay,
     MonthlyRevenue,
     RiskFlag,
+    ShareholdingDistribution,
     SyncJobKind,
 )
 from quant_signal.infrastructure.memory import MemoryQuantRepository
+from quant_signal.quant import screener as math
 from quant_signal.quant.screener import VERSION
 
 SESSIONS = 40
@@ -515,7 +519,7 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "fundamental",
         "stability",
     }
-    assert factors["flow"]["inputs"][0] == {"key": "inst_flow_ratio_20d", "weight": 0.3}
+    assert factors["flow"]["inputs"][0] == {"key": "inst_flow_ratio_20d", "weight": 0.255}
     assert factors["flow"]["kind"] == "score" and factors["flow"]["group"] == "score"
     keys = {m["key"] for m in meta["metrics"]}
     assert {"inst_flow_ratio_20d", "trend_aligned", "cmf_20", "revenue_yoy_pct"} <= keys
@@ -525,11 +529,21 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "balanced",
         "money_flow",
         "quiet_accumulation",
+        "big_holder_increase",
         "momentum",
         "revenue_growth",
         "chip_transfer",
         "stable",
     ]
+    assert "holders" in [g["key"] for g in meta["groups"]]
+    assert {"key": "big_holder_pct_change", "weight": 0.25} in factors["accumulation"]["inputs"]
+    assert {"key": "retail_holders_change_pct", "weight": 0.1, "invert": True} in (
+        factors["accumulation"]["inputs"]
+    )
+    assert "big_holder_pct_change" in presets["quiet_accumulation"]["columns"]
+    assert all(
+        f["key"] != "big_holder_pct_change" for f in presets["quiet_accumulation"]["filters"]
+    )
     assert presets["balanced"]["filters"] == [{"key": "avg_turnover_20d", "min": 20000000}]
     for preset in presets.values():
         for column in preset["columns"]:
@@ -703,3 +717,115 @@ def test_migration_0016_matches_the_orm_table() -> None:
         index.name: ("market_factor_daily", tuple(c.name for c in index.columns))
         for index in orm.indexes
     }
+
+
+# ------------------------------------------------------------------- holder metrics
+
+
+def _tdcc(
+    symbol: str, data_date: date, pct400: float, retail: int, *, at: datetime
+) -> ShareholdingDistribution:
+    return ShareholdingDistribution(
+        symbol=symbol,
+        data_date=data_date,
+        total_holders=1000,
+        total_shares=10_000_000,
+        holders_ge400=10,
+        pct_ge400=pct400,
+        holders_ge1000=5,
+        pct_ge1000=pct400 / 2,
+        retail_holders=retail,
+        retail_pct=10.0,
+        source="test",
+        available_at=at,
+    )
+
+
+def _foreign(symbol: str, shares: int, pct: float, day: date = LAST) -> ForeignHolding:
+    return ForeignHolding(
+        symbol=symbol,
+        trading_date=day,
+        shares_outstanding=shares,
+        foreign_shares=int(shares * pct / 100),
+        foreign_holding_pct=pct,
+        source="test",
+        available_at=datetime.combine(day, time(11), tzinfo=UTC),
+    )
+
+
+async def _with_holders(repository: MemoryQuantRepository) -> MemoryQuantRepository:
+    week1, week2 = date(2026, 11, 13), date(2026, 11, 20)
+    seen = datetime(2026, 11, 21, tzinfo=UTC)
+    await repository.upsert_shareholding_distribution(
+        [
+            _tdcc("1101.TW", week1, 40.0, 1000, at=seen - timedelta(days=7)),
+            _tdcc("1101.TW", week2, 41.5, 970, at=seen),
+            # published after the snapshot date: must not be used
+            _tdcc("1101.TW", date(2026, 11, 27), 99.0, 1, at=datetime(2026, 11, 28, 2, tzinfo=UTC)),
+            _tdcc("2330.TW", week2, 70.0, 500, at=seen),  # a single week: no comparison
+        ]
+    )
+    await repository.upsert_foreign_holding(
+        [_foreign("1101.TW", 200_000_000, 42.3), _foreign("2330.TW", 0, 70.0)]
+    )
+    return repository
+
+
+async def test_snapshot_holder_metrics_are_point_in_time_and_hand_computed(repository) -> None:
+    await _with_holders(repository)
+    await _snapshots(repository).compute(LAST)
+    rows = {r.symbol: r for r in await repository.list_market_factors(LAST, VERSION)}
+
+    cement = rows["1101.TW"].metrics
+    assert cement["big_holder_pct"] == 41.5 and cement["whale_pct"] == 20.75
+    assert cement["big_holder_pct_change"] == pytest.approx(1.5)
+    assert cement["whale_pct_change"] == pytest.approx(0.75)
+    assert cement["retail_holders_change_pct"] == pytest.approx(-3.0)  # (970 - 1000) / 1000
+    assert cement["holders_weeks_span"] == 7
+    assert cement["holders_data_date"] == "2026-11-20"
+    assert cement["foreign_holding_pct"] == 42.3
+    close = rows["1101.TW"].close
+    assert cement["market_cap"] == pytest.approx(200_000_000 * close, rel=1e-4)
+    # 20 sessions x 1,000,000 shares / 200,000,000 shares
+    assert cement["turnover_rate_20d"] == pytest.approx(10.0)
+    # foreign + trust 200,000 each, total 400,000 shares/day over 20 days = 8,000,000 shares
+    assert cement["inst_flow_to_shares_20d"] == pytest.approx(4.0)
+    assert cement["inst_flow_to_shares_60d"] is None  # only 40 sessions of history
+    assert "400 張以上大戶持股 1 週增 1.5 個百分點" in math.build_highlights(cement, [], limit=20)
+
+    single = rows["2330.TW"].metrics
+    assert single["big_holder_pct"] == 70.0 and single["big_holder_pct_change"] is None
+    assert single["retail_holders_change_pct"] is None and single["holders_weeks_span"] is None
+    assert single["market_cap"] is None and single["turnover_rate_20d"] is None  # zero shares
+    assert single["inst_flow_to_shares_20d"] is None
+
+    bare = rows["6488.TWO"].metrics  # no TDCC row, no foreign row
+    for key in (
+        "big_holder_pct",
+        "whale_pct",
+        "big_holder_pct_change",
+        "retail_holders_change_pct",
+        "holders_data_date",
+        "foreign_holding_pct",
+        "market_cap",
+        "turnover_rate_20d",
+        "inst_flow_to_shares_20d",
+    ):
+        assert bare[key] is None
+    # (accumulation needs 60 sessions of flow; this fixture has 40 - covered in the math tests)
+    assert rows["6488.TWO"].scores["flow"] is not None
+
+
+async def test_big_holder_increase_preset(repository) -> None:
+    service = ScreenerService(repository)
+    await _computed(repository)
+    empty = await service.screen(preset="big_holder_increase")
+    assert empty.matched == 0 and empty.snapshot_pending is False  # no TDCC history yet
+
+    await _with_holders(repository)
+    await _computed(repository)
+    result = await service.screen(preset="big_holder_increase")
+    assert [e.symbol for e in result.entries] == ["1101.TW"]
+    assert result.entries[0].metrics["big_holder_pct_change"] == pytest.approx(1.5)
+    description = next(p for p in PRESETS if p["key"] == "big_holder_increase")["description"]
+    assert "週" in description and "2026-11-20" in description

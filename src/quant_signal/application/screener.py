@@ -90,6 +90,26 @@ PRESETS: list[dict[str, Any]] = [
             "ret_20d",
             "ret_60d",
             "cmf_20",
+            "big_holder_pct_change",
+        ],
+    },
+    {
+        "key": "big_holder_increase",
+        "label": "大戶增持",
+        "description": (
+            "400 張以上大戶持股比例較比較週上升，依增加幅度排序。集保股權分散表為週資料，"
+            "歷史自 2026-11-20 起才開始累積，第二週資料出現前此清單為空。"
+        ),
+        "sort": "big_holder_pct_change",
+        "order": "desc",
+        "filters": [{"key": "big_holder_pct_change", "min": 0.0001}, _LIQUID_1E7],
+        "columns": [
+            "big_holder_pct_change",
+            "big_holder_pct",
+            "whale_pct_change",
+            "retail_holders_change_pct",
+            "inst_flow_ratio_20d",
+            "accumulation",
         ],
     },
     {
@@ -167,6 +187,10 @@ MCP_DEFAULT_COLUMNS = [
     "trust_streak",
     "margin_change_20d_pct",
     "revenue_yoy_pct",
+    "big_holder_pct",
+    "big_holder_pct_change",
+    "foreign_holding_pct",
+    "market_cap",
 ]
 
 
@@ -275,6 +299,8 @@ class ScreenerSnapshotService:
         for flag in await repo.active_risk_flags(cutoff):
             risk.setdefault(flag.symbol, set()).add(flag.kind)
         flow_through = await repo.market_flow_through(trading_date)
+        holders = await repo.latest_shareholding_pairs(cutoff)
+        foreign = await repo.latest_foreign_holdings(cutoff)
 
         staged: list[tuple[str, str, str, float, dict[str, Any], list[str], date | None]] = []
         async for symbol, name, market, rows in repo.iter_market_histories(
@@ -284,7 +310,10 @@ class ScreenerSnapshotService:
                 continue  # not traded on the snapshot date
             through = flow_through.get(market)
             metrics = math.compute_metrics(
-                math.history_from_rows(symbol, name, market, rows), through
+                math.history_from_rows(symbol, name, market, rows),
+                through,
+                holders.get(symbol),
+                foreign.get(symbol),
             )
             if metrics is None:
                 continue

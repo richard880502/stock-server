@@ -23,9 +23,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from quant_signal.domain.models import ForeignHolding, ShareholdingPair
 
 VERSION = "screener_v1"
 SHARES_PER_LOT = 1000
@@ -33,6 +36,17 @@ MIN_SESSIONS = 20
 HISTORY_SESSIONS = 260
 TRADING_DAYS_PER_YEAR = 252
 HIGH_WINDOW = 250
+
+HOLDER_KEYS = (
+    "big_holder_pct",
+    "whale_pct",
+    "big_holder_pct_change",
+    "whale_pct_change",
+    "retail_holders_change_pct",
+    "holders_weeks_span",
+    "holders_data_date",
+    "foreign_holding_pct",
+)
 
 # --------------------------------------------------------------------- definitions
 
@@ -52,16 +66,19 @@ FAMILY_INPUTS: dict[str, list[tuple[str, float, Transform]]] = {
         ("ma120_gap_pct", 0.30, "id"),
     ],
     "flow": [
-        ("inst_flow_ratio_20d", 0.30, "id"),
-        ("inst_flow_ratio_60d", 0.25, "id"),
-        ("inst_buy_days_20d", 0.15, "id"),
-        ("cmf_20", 0.15, "id"),
-        ("margin_change_20d_pct", 0.15, "neg"),
+        ("inst_flow_ratio_20d", 0.255, "id"),
+        ("inst_flow_ratio_60d", 0.2125, "id"),
+        ("inst_buy_days_20d", 0.1275, "id"),
+        ("cmf_20", 0.1275, "id"),
+        ("margin_change_20d_pct", 0.1275, "neg"),
+        ("inst_flow_to_shares_20d", 0.15, "id"),
     ],
     "accumulation": [
-        ("inst_flow_ratio_60d", 0.45, "id"),
-        ("inst_buy_days_60d", 0.30, "id"),
-        ("ret_20d", 0.25, "neg_abs"),
+        ("inst_flow_ratio_60d", 0.2925, "id"),
+        ("inst_buy_days_60d", 0.195, "id"),
+        ("ret_20d", 0.1625, "neg_abs"),
+        ("big_holder_pct_change", 0.25, "id"),
+        ("retail_holders_change_pct", 0.10, "neg"),
     ],
     "fundamental": [
         ("revenue_yoy_pct", 0.60, "id"),
@@ -144,6 +161,24 @@ METRICS: tuple[MetricDef, ...] = (
         "近 5 日均量除以近 60 日均量",
         None,
     ),
+    _m(
+        "market_cap",
+        "市值",
+        "liquidity",
+        "元",
+        0,
+        "流通在外股數乘以最新收盤價（股數取自外資持股統計）",
+        None,
+    ),
+    _m(
+        "turnover_rate_20d",
+        "20 日週轉率",
+        "liquidity",
+        "%",
+        1,
+        "近 20 日成交股數合計除以流通在外股數",
+        None,
+    ),
     _m("sessions", "資料天數", "liquidity", "日", 0, "用於計算的歷史交易日數", None),
     _m("volatility_20d", "20 日波動率", "risk", "%", 1, "近 20 日日報酬標準差年化", False),
     _m("max_drawdown_60d", "60 日最大回檔", "risk", "%", 1, "近 60 日還原價相對前高的最大跌幅"),
@@ -207,6 +242,22 @@ METRICS: tuple[MetricDef, ...] = (
         0,
         "近 60 個有資料日中法人買超的比例",
     ),
+    _m(
+        "inst_flow_to_shares_20d",
+        "法人 20 日買超佔股本",
+        "flow",
+        "%",
+        2,
+        "三大法人 20 日淨買超股數除以流通在外股數",
+    ),
+    _m(
+        "inst_flow_to_shares_60d",
+        "法人 60 日買超佔股本",
+        "flow",
+        "%",
+        2,
+        "三大法人 60 日淨買超股數除以流通在外股數",
+    ),
     _m("cmf_20", "20 日 CMF 資金流", "flow", "", 2, "Chaikin Money Flow，-1 到 1，由價量推算"),
     _m(
         "up_volume_ratio_20d",
@@ -248,6 +299,77 @@ METRICS: tuple[MetricDef, ...] = (
     _m("revenue_yoy_pct", "營收年增率", "fundamental", "%", 1, "最新月營收年增率"),
     _m("revenue_mom_pct", "營收月增率", "fundamental", "%", 1, "最新月營收月增率"),
     _m("revenue_cum_yoy_pct", "累計營收年增率", "fundamental", "%", 1, "累計營收年增率"),
+    _m(
+        "big_holder_pct",
+        "400 張以上大戶持股",
+        "holders",
+        "%",
+        2,
+        "集保戶股權分散表中持股 400 張以上者的持股比例（週資料）",
+        None,
+    ),
+    _m(
+        "whale_pct",
+        "1,000 張以上大戶持股",
+        "holders",
+        "%",
+        2,
+        "集保戶股權分散表中持股 1,000 張以上者的持股比例（週資料）",
+        None,
+    ),
+    _m(
+        "big_holder_pct_change",
+        "400 張大戶持股變化",
+        "holders",
+        "個百分點",
+        2,
+        "400 張以上大戶持股比例相對比較週的變化",
+    ),
+    _m(
+        "whale_pct_change",
+        "1,000 張大戶持股變化",
+        "holders",
+        "個百分點",
+        2,
+        "1,000 張以上大戶持股比例相對比較週的變化",
+    ),
+    _m(
+        "retail_holders_change_pct",
+        "散戶人數變化",
+        "holders",
+        "%",
+        1,
+        "持股 10 張以下的股東人數相對比較週的變化（負值＝散戶人數減少）",
+        False,
+    ),
+    _m(
+        "holders_weeks_span",
+        "持股比較間隔",
+        "holders",
+        "日",
+        0,
+        "兩個集保週資料之間相隔的天數（即上述變化涵蓋的期間）",
+        None,
+    ),
+    _m(
+        "holders_data_date",
+        "集保資料日",
+        "holders",
+        "",
+        0,
+        "所使用的集保股權分散表資料日期",
+        None,
+        "text",
+    ),
+    _m(
+        "foreign_holding_pct",
+        "外資持股比例",
+        "holders",
+        "%",
+        2,
+        "外資及陸資持股佔流通在外股數的比例",
+        None,
+    ),
 )
 METRIC_BY_KEY = {metric.key: metric for metric in METRICS}
 NUMERIC_KEYS = frozenset(m.key for m in METRICS if m.kind == "number")
@@ -257,6 +379,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("score", "因子分數"),
     ("price", "價格動能"),
     ("flow", "資金流向"),
+    ("holders", "大戶籌碼"),
     ("credit", "信用交易"),
     ("fundamental", "營收"),
     ("risk", "風險"),
@@ -267,8 +390,11 @@ FACTOR_LABELS: dict[str, tuple[str, str]] = {
     "composite": ("綜合評分", "動能、趨勢、資金流向、營收與穩定度的加權百分位（缺項時重新配權）"),
     "momentum": ("價格動能", "20/60/120 日報酬與距 52 週高點的全市場百分位"),
     "trend": ("趨勢", "股價相對 20/60/120 日均線乖離的全市場百分位"),
-    "flow": ("資金流向", "法人買超佔成交量、買超日占比、CMF 與融資變化的全市場百分位"),
-    "accumulation": ("低調吸籌", "法人長期持續買超但股價尚未大幅波動的程度（百分位）"),
+    "flow": ("資金流向", "法人買超佔成交量與股本、買超日占比、CMF 與融資變化的全市場百分位"),
+    "accumulation": (
+        "低調吸籌",
+        "法人長期持續買超、大戶增持且散戶減少、但股價尚未大幅波動的程度（百分位；集保資料缺時重新配權）",
+    ),
     "fundamental": ("營收", "最新月營收年增率與累計年增率的全市場百分位"),
     "stability": ("穩定度", "低波動與較小回檔的全市場百分位"),
 }
@@ -480,10 +606,37 @@ def _credit_change_pct(
 # ----------------------------------------------------------------- per-stock metrics
 
 
-def compute_metrics(history: StockHistory, flow_through: date | None) -> dict[str, Any] | None:
+def holder_metrics(pair: ShareholdingPair | None, foreign: ForeignHolding | None) -> dict[str, Any]:
+    """TDCC concentration and foreign-holding metrics; ``None`` where an input is missing."""
+    out: dict[str, Any] = dict.fromkeys(HOLDER_KEYS)
+    if pair is not None:
+        latest, prior = pair.latest, pair.prior
+        out["big_holder_pct"] = latest.pct_ge400
+        out["whale_pct"] = latest.pct_ge1000
+        out["holders_data_date"] = latest.data_date.isoformat()
+        if prior is not None:
+            out["big_holder_pct_change"] = latest.pct_ge400 - prior.pct_ge400
+            out["whale_pct_change"] = latest.pct_ge1000 - prior.pct_ge1000
+            out["holders_weeks_span"] = (latest.data_date - prior.data_date).days
+            if prior.retail_holders > 0:
+                out["retail_holders_change_pct"] = (
+                    (latest.retail_holders - prior.retail_holders) / prior.retail_holders * 100.0
+                )
+    if foreign is not None:
+        out["foreign_holding_pct"] = foreign.foreign_holding_pct
+    return out
+
+
+def compute_metrics(
+    history: StockHistory,
+    flow_through: date | None,
+    holders: ShareholdingPair | None = None,
+    foreign: ForeignHolding | None = None,
+) -> dict[str, Any] | None:
     """All spec metrics for the newest session in ``history``; ``None`` if under 20 sessions.
 
     ``flow_through`` is the newest session (≤ the newest date) with institutional data.
+    ``holders`` / ``foreign`` are the point-in-time TDCC pair and foreign-holding row.
     """
     n = len(history.dates)
     if n < MIN_SESSIONS:
@@ -560,6 +713,16 @@ def compute_metrics(history: StockHistory, flow_through: date | None) -> dict[st
     net20 = m["total_net_20d"]
     m["chip_transfer_20d"] = None if net20 is None or margin is None else bool(net20 > 0 > margin)
 
+    m.update(holder_metrics(holders, foreign))
+    shares = foreign.shares_outstanding if foreign is not None else 0
+    m["market_cap"] = shares * float(close[-1]) if shares > 0 else None
+    m["turnover_rate_20d"] = float(np.sum(volume[tail])) / shares * 100.0 if shares > 0 else None
+    for window in (20, 60):
+        lots = m[f"total_net_{window}d"]
+        m[f"inst_flow_to_shares_{window}d"] = (
+            lots * SHARES_PER_LOT / shares * 100.0 if shares > 0 and lots is not None else None
+        )
+
     return {key: (_round(value) if isinstance(value, float) else value) for key, value in m.items()}
 
 
@@ -599,11 +762,11 @@ def _transform(value: Any, how: Transform) -> float | None:
 
 
 def family_score(percentiles: list[tuple[float | None, float]]) -> float | None:
-    """Weighted mean of the available percentiles; ``None`` if fewer than half are available."""
+    """Weighted mean of the available percentiles; ``None`` if they carry under half the weight."""
     available = [(p, w) for p, w in percentiles if p is not None]
-    if not available or len(available) * 2 < len(percentiles):
-        return None
     weight = sum(w for _, w in available)
+    if not available or weight < sum(w for _, w in percentiles) / 2 - 1e-9:
+        return None
     return sum(p * w for p, w in available) / weight
 
 
@@ -697,5 +860,21 @@ def build_highlights(metrics: dict[str, Any], flags: list[str], limit: int = 4) 
         add(0.35 + min(-cmf, 0.6) / 4, f"20 日 CMF 資金流 -{_num(cmf, 2)}")
     if val("trend_aligned") is True:
         add(0.45, "均線多頭排列")
+    span = val("holders_weeks_span")
+    span_text = f"{max(1, round(span / 7))} 週" if span else None
+    big = val("big_holder_pct_change")
+    if big is not None and span_text and abs(big) >= 0.5:
+        verb = "增" if big > 0 else "減"
+        add(
+            0.5 + min(abs(big), 5) / 10,
+            f"400 張以上大戶持股 {span_text}{verb} {_num(big)} 個百分點",
+        )
+    retail = val("retail_holders_change_pct")
+    if retail is not None and span_text and abs(retail) >= 3:
+        verb = "增" if retail > 0 else "減"
+        add(0.4 + min(abs(retail), 15) / 30, f"散戶人數 {span_text}{verb} {_num(retail)}%")
+    held = val("foreign_holding_pct")
+    if held is not None and held >= 30:
+        add(0.3 + min(held, 80) / 400, f"外資持股 {_num(held)}%")
     candidates.sort(key=lambda item: (-item[0], item[1]))
     return [text for _, _, text in candidates[:limit]]

@@ -89,9 +89,7 @@ async def get_data_status() -> dict[str, Any]:
 async def search_symbol(query: str) -> list[dict[str, Any]]:
     """Resolve a company name or partial ticker (e.g. "台積電" or "2330") to exact symbols."""
     async with session_factory() as session:
-        matches = await InstrumentSearchService(PostgresQuantRepository(session)).search(
-            query
-        )
+        matches = await InstrumentSearchService(PostgresQuantRepository(session)).search(query)
         return [instrument.model_dump(mode="json") for instrument in matches]
 
 
@@ -161,9 +159,7 @@ async def get_market_regime(
 ) -> dict[str, Any]:
     """Return breadth/capital regime; ^TWII is accepted as a TW compatibility alias."""
     market = "TW" if market_symbol.strip().upper() == "^TWII" else market_symbol
-    return _market_summary(
-        await _get_market_environment(market, as_of, strategy_version)
-    )
+    return _market_summary(await _get_market_environment(market, as_of, strategy_version))
 
 
 async def _get_market_environment(
@@ -172,9 +168,7 @@ async def _get_market_environment(
     strategy_version: str = "market_env_v1",
 ) -> dict[str, Any]:
     async with session_factory() as session:
-        snapshot = await MarketEnvironmentService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await MarketEnvironmentService(PostgresQuantRepository(session)).analyze(
             market.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -198,6 +192,7 @@ async def screen_market(
         "balanced",
         "money_flow",
         "quiet_accumulation",
+        "big_holder_increase",
         "momentum",
         "revenue_growth",
         "chip_transfer",
@@ -351,9 +346,7 @@ async def analyze_chip_flow(
 ) -> dict[str, Any]:
     """Analyze official institutional flows and optional licensed branch activity."""
     async with session_factory() as session:
-        snapshot = await ChipFlowService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await ChipFlowService(PostgresQuantRepository(session)).analyze(
             symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -369,9 +362,7 @@ async def analyze_news_sentiment(
 ) -> dict[str, Any]:
     """Aggregate point-in-time-classified news headlines into a sentiment score."""
     async with session_factory() as session:
-        snapshot = await NewsSentimentService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await NewsSentimentService(PostgresQuantRepository(session)).analyze(
             symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -380,9 +371,7 @@ async def analyze_news_sentiment(
 
 
 @mcp.tool()
-async def get_stock_events(
-    symbol: str, as_of: str | None = None, days: int = 30
-) -> dict[str, Any]:
+async def get_stock_events(symbol: str, as_of: str | None = None, days: int = 30) -> dict[str, Any]:
     """Official announcements (重大訊息, 除權息) with rule-based category/polarity, active
     disposition/attention flags and monthly-revenue metrics for one stock."""
     async with session_factory() as session:
@@ -569,7 +558,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 def _extract_raw_key(headers) -> str | None:
     authorization = headers.get("authorization")
     if authorization and authorization.lower().startswith("bearer "):
-        return authorization[len("bearer "):].strip()
+        return authorization[len("bearer ") :].strip()
     x_api_key = headers.get("x-api-key")
     return x_api_key.strip() if x_api_key else None
 

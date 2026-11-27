@@ -310,6 +310,47 @@ def test_family_score_needs_at_least_half_of_its_inputs() -> None:
     assert s.family_score([]) is None
 
 
+def test_family_score_needs_half_of_the_weight_not_half_of_the_inputs() -> None:
+    # one heavy input (0.6 of the weight) is enough even though 1 of 3 inputs is available
+    assert s.family_score([(80.0, 0.6), (None, 0.2), (None, 0.2)]) == 80.0
+    # two light inputs carrying only 0.4 are not
+    assert s.family_score([(80.0, 0.2), (60.0, 0.2), (None, 0.6)]) is None
+    assert s.family_score([(80.0, 0.5), (None, 0.5)]) == 80.0  # exactly half passes
+
+
+def test_new_holder_weights_and_scores_survive_missing_holder_inputs() -> None:
+    flow = {k: w for k, w, _ in s.FAMILY_INPUTS["flow"]}
+    assert flow["inst_flow_to_shares_20d"] == 0.15
+    assert flow["inst_flow_ratio_20d"] == pytest.approx(0.30 * 0.85)
+    acc = {k: (w, h) for k, w, h in s.FAMILY_INPUTS["accumulation"]}
+    assert acc["big_holder_pct_change"] == (0.25, "id")
+    assert acc["retail_holders_change_pct"] == (0.10, "neg")
+    assert acc["inst_flow_ratio_60d"][0] == pytest.approx(0.45 * 0.65)
+    metrics = [
+        {
+            "inst_flow_ratio_60d": 1.0,
+            "inst_buy_days_60d": 60.0,
+            "ret_20d": 1.0,
+            "inst_flow_ratio_20d": 1.0,
+            "inst_buy_days_20d": 60.0,
+            "cmf_20": 0.1,
+            "margin_change_20d_pct": 1.0,
+        },
+        {
+            "inst_flow_ratio_60d": 5.0,
+            "inst_buy_days_60d": 70.0,
+            "ret_20d": 2.0,
+            "inst_flow_ratio_20d": 5.0,
+            "inst_buy_days_20d": 70.0,
+            "cmf_20": 0.2,
+            "margin_change_20d_pct": -1.0,
+        },
+    ]  # no holder inputs anywhere
+    out = s.score_universe(metrics)
+    assert out[0][0]["accumulation"] is not None and out[1][0]["flow"] is not None
+    assert out[1][0]["accumulation"] > out[0][0]["accumulation"]
+
+
 def test_composite_renormalises_over_available_families() -> None:
     scores = {
         "momentum": 80.0,
@@ -420,3 +461,97 @@ def test_metric_catalogue_is_consistent() -> None:
             assert key in s.NUMERIC_KEYS
     groups = {key for key, _ in s.GROUPS}
     assert {metric.group for metric in s.METRICS} <= groups
+
+
+# ------------------------------------------------------------------- holder metrics
+
+
+def _pair(prior: bool = True):
+    from datetime import UTC, datetime
+
+    from quant_signal.domain.models import ShareholdingPair, ShareholdingSnapshot
+
+    def snap(day: date, pct400: float, pct1000: float, retail: int) -> ShareholdingSnapshot:
+        return ShareholdingSnapshot(
+            symbol="2330.TW",
+            data_date=day,
+            total_holders=1000,
+            total_shares=1_000_000,
+            holders_ge400=10,
+            pct_ge400=pct400,
+            holders_ge1000=5,
+            pct_ge1000=pct1000,
+            retail_holders=retail,
+            retail_pct=5.0,
+            source="t",
+            available_at=datetime(2026, 12, 1, tzinfo=UTC),
+        )
+
+    return ShareholdingPair(
+        latest=snap(date(2026, 11, 20), 45.1, 30.5, 969),
+        prior=snap(date(2026, 10, 23), 43.9, 30.0, 1000) if prior else None,
+    )
+
+
+def test_holder_metrics_hand_computed_and_none_cases() -> None:
+    m = s.holder_metrics(_pair(), None)
+    assert m["big_holder_pct"] == 45.1 and m["whale_pct"] == 30.5
+    assert m["big_holder_pct_change"] == pytest.approx(1.2)
+    assert m["whale_pct_change"] == pytest.approx(0.5)
+    assert m["retail_holders_change_pct"] == pytest.approx(-3.1)
+    assert m["holders_weeks_span"] == 28 and m["holders_data_date"] == "2026-11-20"
+    assert m["foreign_holding_pct"] is None
+    no_prior = s.holder_metrics(_pair(prior=False), None)
+    assert no_prior["big_holder_pct"] == 45.1
+    assert no_prior["big_holder_pct_change"] is None and no_prior["holders_weeks_span"] is None
+    assert set(s.holder_metrics(None, None).values()) == {None}
+
+
+def test_share_based_metrics_use_shares_outstanding() -> None:
+    from datetime import UTC, datetime
+
+    from quant_signal.domain.models import ForeignHolding
+
+    def held(shares: int) -> ForeignHolding:
+        return ForeignHolding(
+            symbol="X",
+            trading_date=date(2026, 11, 20),
+            shares_outstanding=shares,
+            foreign_shares=0,
+            foreign_holding_pct=42.3,
+            source="t",
+            available_at=datetime(2026, 11, 20, tzinfo=UTC),
+        )
+
+    history = _flow_history()  # close 100, volume 10,000, 19 lots net over 20 days
+    m = s.compute_metrics(history, history.dates[-1], None, held(1_000_000))
+    assert m is not None
+    assert m["market_cap"] == pytest.approx(1e8)
+    assert m["turnover_rate_20d"] == pytest.approx(20.0)  # 200,000 / 1,000,000
+    assert m["inst_flow_to_shares_20d"] == pytest.approx(1.9)  # 19,000 / 1,000,000
+    assert m["inst_flow_to_shares_60d"] is None and m["foreign_holding_pct"] == 42.3
+    zero = s.compute_metrics(history, history.dates[-1], None, held(0))
+    assert zero is not None
+    assert zero["market_cap"] is None and zero["turnover_rate_20d"] is None
+    assert zero["inst_flow_to_shares_20d"] is None
+    none = s.compute_metrics(history, history.dates[-1])
+    assert none is not None and none["market_cap"] is None
+
+
+def test_holder_highlights_state_the_real_span_without_advice() -> None:
+    base = {
+        "holders_weeks_span": 28,
+        "big_holder_pct_change": 1.2,
+        "retail_holders_change_pct": -3.1,
+    }
+    out = s.build_highlights({**base, "foreign_holding_pct": 42.3}, [])
+    assert "400 張以上大戶持股 4 週增 1.2 個百分點" in out
+    assert "散戶人數 4 週減 3.1%" in out and "外資持股 42.3%" in out
+    one_week = s.build_highlights({**base, "holders_weeks_span": 7}, [])
+    assert "400 張以上大戶持股 1 週增 1.2 個百分點" in one_week
+    assert s.build_highlights({"big_holder_pct_change": 1.2}, []) == []  # no span, no claim
+    assert s.build_highlights(
+        {**base, "big_holder_pct_change": 0.1, "holders_weeks_span": 7}, []
+    ) == ["散戶人數 1 週減 3.1%"]
+    for text in out:
+        assert not any(word in text for word in ADVICE)
