@@ -42,10 +42,14 @@ from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.memory_factors import MemoryFactorDataMixin
 from quant_signal.infrastructure.memory_holders import MemoryHoldersMixin
 from quant_signal.infrastructure.memory_official import MemoryOfficialDataMixin
+from quant_signal.infrastructure.memory_short_data import MemoryShortDataMixin
 
 
 class MemoryQuantRepository(
-    MemoryOfficialDataMixin, MemoryFactorDataMixin, MemoryHoldersMixin
+    MemoryOfficialDataMixin,
+    MemoryFactorDataMixin,
+    MemoryHoldersMixin,
+    MemoryShortDataMixin,
 ):
     """Test and demo repository with the same contract as PostgreSQL."""
 

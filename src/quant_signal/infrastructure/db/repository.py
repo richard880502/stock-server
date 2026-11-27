@@ -78,6 +78,7 @@ from quant_signal.infrastructure.db.prices import (
     read_latest,
     read_minutes,
 )
+from quant_signal.infrastructure.db.short_data_repository import ShortDataRepositoryMixin
 
 KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
 MARKET_EXCHANGES = ("TW", "TWO")
@@ -87,7 +88,10 @@ LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
 class PostgresQuantRepository(
-    OfficialDataRepositoryMixin, FactorDataRepositoryMixin, HoldersRepositoryMixin
+    OfficialDataRepositoryMixin,
+    FactorDataRepositoryMixin,
+    HoldersRepositoryMixin,
+    ShortDataRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

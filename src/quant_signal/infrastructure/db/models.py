@@ -665,3 +665,73 @@ class ForeignHoldingRow(Base):
     foreign_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
     foreign_holding_pct: Mapped[float] = mapped_column(Float, nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ShortLendingDailyRow(Base):
+    """Daily 借券賣出 balance per stock (shares); newer ``revision`` = re-published numbers."""
+
+    __tablename__ = "short_lending_daily"
+    __table_args__ = (Index("ix_short_lending_date", "trading_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    revision: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    sbl_prev_balance: Mapped[int | None] = mapped_column(BigInteger)
+    sbl_sold: Mapped[int | None] = mapped_column(BigInteger)
+    sbl_returned: Mapped[int | None] = mapped_column(BigInteger)
+    sbl_adjustment: Mapped[int | None] = mapped_column(BigInteger)
+    sbl_balance: Mapped[int | None] = mapped_column(BigInteger)
+    sbl_limit_next_day: Mapped[int | None] = mapped_column(BigInteger)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DayTradeDailyRow(Base):
+    """Daily 現股當沖 volume (shares) and amounts (NT$) per stock."""
+
+    __tablename__ = "day_trade_daily"
+    __table_args__ = (Index("ix_day_trade_date", "trading_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    revision: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    day_trade_volume: Mapped[int | None] = mapped_column(BigInteger)
+    day_trade_buy_amount: Mapped[int | None] = mapped_column(BigInteger)
+    day_trade_sell_amount: Mapped[int | None] = mapped_column(BigInteger)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InsiderHoldingMonthlyRow(Base):
+    """Monthly insider (directors, managers, large holders) holding and pledged shares."""
+
+    __tablename__ = "insider_holdings_monthly"
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    period: Mapped[str] = mapped_column(String(7), primary_key=True)
+    revision: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    insider_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    holding_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pledged_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pledge_ratio_pct: Mapped[float | None] = mapped_column(Float)
+    published_on: Mapped[date | None] = mapped_column(Date)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DividendEventRow(Base):
+    """Structured 除權除息預告 entries (upcoming schedule, amounts as the exchange states)."""
+
+    __tablename__ = "dividend_events"
+    __table_args__ = (Index("ix_dividend_events_ex_date", "ex_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ex_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), primary_key=True)
+    revision: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    cash_dividend_per_share: Mapped[float | None] = mapped_column(Float)
+    stock_dividend_per_share: Mapped[float | None] = mapped_column(Float)
+    cash_capital_increase_ratio: Mapped[float | None] = mapped_column(Float)
+    subscription_price: Mapped[float | None] = mapped_column(Float)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
