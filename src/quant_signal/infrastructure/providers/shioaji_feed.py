@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,6 +24,10 @@ _SYMBOL = re.compile(r"^[A-Z0-9]{1,16}(?:\.TW|\.TWO)?$")
 # Stable symbol -> (futures root, continuous near-month code). TXFR1 always points
 # at the current near-month TAIEX futures contract (its target_code, e.g. TXFL6).
 _FUTURES = {"TXF.TAIFEX": ("TXF", "TXFR1")}
+# Until the contract list is downloaded, the SDK's contract lookups block the CALLING
+# thread (time.sleep(0.3) up to 100 times per lookup). Login waits for the download
+# (in its worker thread) and every lookup runs off the event loop.
+_CONTRACTS_TIMEOUT_SECONDS = 120
 
 
 def _value(value: Any) -> Any:
@@ -117,6 +122,18 @@ def parse_snapshots(
     return quotes
 
 
+def _wait_for_contracts(api: Any, timeout_seconds: float) -> None:
+    """Block (in the login thread) until the SDK reports the contract list downloaded."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        status = getattr(api.Contracts, "status", None)
+        if str(getattr(status, "value", status)) == "Fetched":
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Shioaji contracts were not downloaded in time")
+        time.sleep(0.5)
+
+
 class ShioajiFeed:
     def __init__(
         self,
@@ -155,7 +172,9 @@ class ShioajiFeed:
                 api_key=self._settings.shioaji_api_key.get_secret_value(),
                 secret_key=self._settings.shioaji_secret_key.get_secret_value(),
                 subscribe_trade=False,
+                contracts_timeout=_CONTRACTS_TIMEOUT_SECONDS * 1000,
             )
+            _wait_for_contracts(api, _CONTRACTS_TIMEOUT_SECONDS)
         except Exception:
             if api is not None:
                 try:
@@ -189,6 +208,18 @@ class ShioajiFeed:
         ):
             raise ValueError("stock contract not found on TSE or OTC")
         return code, contract, (code,)
+
+    def _resolve_many(self, symbols: list[str]) -> tuple[list[Any], dict[str, str]]:
+        """Contracts for the symbols that resolve, and contract code -> symbol."""
+        contracts, codes = [], {}
+        for symbol in symbols:
+            try:
+                key, contract, _ = self._resolve(symbol)
+            except (ValueError, LookupError, KeyError):
+                continue
+            contracts.append(contract)
+            codes[str(getattr(contract, "code", key))] = symbol.strip().upper()
+        return contracts, codes
 
     def subscribe(self, symbol: str) -> None:
         if self._api is None:
@@ -243,7 +274,7 @@ class ShioajiFeed:
         if self._api is None:
             raise RuntimeError("Shioaji feed is not started")
         symbol = symbol.strip().upper()
-        _, contract, _ = self._resolve(symbol)
+        _, contract, _ = await asyncio.to_thread(self._resolve, symbol)
         first = start.astimezone(_TAIPEI).date()
         last = (end.astimezone(_TAIPEI) - timedelta(microseconds=1)).date()
         if last < first:
@@ -257,14 +288,7 @@ class ShioajiFeed:
             raise RuntimeError("Shioaji feed is not started")
         if len(symbols) > 500:
             raise ValueError("Shioaji snapshots take at most 500 contracts per call")
-        contracts, codes = [], {}
-        for symbol in symbols:
-            try:
-                key, contract, _ = self._resolve(symbol)
-            except (ValueError, LookupError, KeyError):
-                continue
-            contracts.append(contract)
-            codes[str(getattr(contract, "code", key))] = symbol.strip().upper()
+        contracts, codes = await asyncio.to_thread(self._resolve_many, symbols)
         if not contracts:
             return []
         result = await self._query("snapshots", contracts)
