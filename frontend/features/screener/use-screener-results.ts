@@ -42,7 +42,7 @@ export function useScreenerResults(
       try {
         const data = await loadRef.current(0, controller.signal);
         setState({ key, head: data, entries: data.entries, error: null });
-        if (data.snapshot_pending) timer = window.setTimeout(run, PENDING_POLL_MS);
+        if (data.snapshot_pending && !data.notice) timer = window.setTimeout(run, PENDING_POLL_MS);
       } catch (error) {
         if (controller.signal.aborted || isAbortError(error)) return;
         setState((previous) => ({

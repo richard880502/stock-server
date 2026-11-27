@@ -20,6 +20,8 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   const onSignalRoute = path === "";
   // The watchlist page has its own "add a stock" search; the analysis query bar does not apply.
   const onWatchlistRoute = path === "/watchlist";
+  // The screener always reads the latest data (its results header names the date), so it has no bar either.
+  const hideQueryBar = onWatchlistRoute || path === "/screener";
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   useCommandPaletteShortcut(openPalette);
@@ -57,7 +59,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   }, [queryExpanded]);
   // "/" focuses the symbol field; on phones the field must be expanded first.
   useEffect(() => {
-    if (onWatchlistRoute) return;
+    if (hideQueryBar) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
@@ -69,7 +71,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onWatchlistRoute]);
+  }, [hideQueryBar]);
 
   return (
     <div className="app">
@@ -79,12 +81,12 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       <header className="app-header">
         <div className="container">
           <Topbar onOpenPalette={openPalette} />
-          {!onWatchlistRoute && (
+          {!hideQueryBar && (
             <QuerySummary visible={compactShown} expanded={queryExpanded} onEdit={editQuery} />
           )}
         </div>
       </header>
-      {!onWatchlistRoute && (
+      {!hideQueryBar && (
         <div className="query-wrap" data-expanded={queryExpanded}>
           <div className="container">
             <QueryBar expanded={queryExpanded} />
@@ -93,7 +95,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       )}
 
       <main id="main" className="container page" tabIndex={-1}>
-        {syncWait && !onSignalRoute && !onWatchlistRoute && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
+        {syncWait && !onSignalRoute && !hideQueryBar && <SyncPendingNotice wait={syncWait} onCancel={cancelSync} />}
         {error && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={() => refresh()} />
         )}

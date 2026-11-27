@@ -1,9 +1,9 @@
 "use client";
 
-import { type KeyboardEvent, useRef } from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
 import type { ScreenerPreset } from "@/lib/api/types";
 
-/** 策略快選: one card per preset from the meta, single choice (radiogroup, arrows move and select). */
+/** 策略快選: one scrollable row of chips from the meta, single choice (radiogroup, arrows move and select). */
 export function PresetRow({
   presets,
   selected,
@@ -15,6 +15,15 @@ export function PresetRow({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const index = presets.findIndex((p) => p.key === selected);
+
+  // Keep the selected chip visible: on phones it can sit off-screen after load or a deep link.
+  useEffect(() => {
+    const chip = ref.current?.querySelectorAll<HTMLElement>("button")[index];
+    const row = ref.current;
+    if (!chip || !row) return;
+    const left = chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
+    row.scrollTo({ left: Math.max(0, left), behavior: "smooth" });
+  }, [index]);
 
   const onKeyDown = (event: KeyboardEvent) => {
     const last = presets.length - 1;
@@ -30,28 +39,26 @@ export function PresetRow({
     ref.current?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
   };
 
+  const description = presets[index]?.description;
   return (
     <section className="sc-presets-wrap" aria-labelledby="sc-presets-title">
-      <h2 id="sc-presets-title" className="field-label">策略快選</h2>
+      <h2 id="sc-presets-title" className="sr-only">策略快選</h2>
       <div ref={ref} className="sc-presets" role="radiogroup" aria-labelledby="sc-presets-title" onKeyDown={onKeyDown}>
-        {presets.map((preset, i) => {
-          const checked = preset.key === selected;
-          return (
-            <button
-              key={preset.key}
-              type="button"
-              role="radio"
-              aria-checked={checked}
-              tabIndex={checked || (index < 0 && i === 0) ? 0 : -1}
-              className="sc-preset"
-              onClick={() => onSelect(preset.key)}
-            >
-              <span className="sc-preset-label">{preset.label}</span>
-              <span className="sc-preset-desc">{preset.description}</span>
-            </button>
-          );
-        })}
+        {presets.map((preset, i) => (
+          <button
+            key={preset.key}
+            type="button"
+            role="radio"
+            aria-checked={preset.key === selected}
+            tabIndex={preset.key === selected || (index < 0 && i === 0) ? 0 : -1}
+            className="sc-preset"
+            onClick={() => onSelect(preset.key)}
+          >
+            {preset.label}
+          </button>
+        ))}
       </div>
+      {description && <p className="sc-preset-desc">{description}</p>}
     </section>
   );
 }

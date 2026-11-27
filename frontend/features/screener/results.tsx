@@ -60,24 +60,29 @@ function StockLabel({ entry, onSignal }: { entry: ScreenerEntry; onSignal: (symb
 function SortHeader({
   column,
   label,
+  fullLabel,
   sort,
   order,
   onSort,
 }: {
   column: Pick<ColumnDef, "key" | "higherIsBetter" | "description" | "sortable">;
   label: string;
+  /** Accessible / tooltip name when `label` is a shortened form. */
+  fullLabel?: string;
   sort: string;
   order: ScreenerOrder;
   onSort: ResultsProps["onSort"];
 }) {
   const active = sort === column.key;
-  if (!column.sortable) return <th scope="col">{label}</th>;
+  const title = [fullLabel && fullLabel !== label ? fullLabel : null, column.description || null].filter(Boolean).join("：") || undefined;
+  if (!column.sortable) return <th scope="col" title={title}>{label}</th>;
   return (
     <th scope="col" aria-sort={active ? (order === "desc" ? "descending" : "ascending") : "none"} className="sc-th-sortable">
       <button
         type="button"
         className="sc-sort-button"
-        title={column.description || undefined}
+        title={title}
+        aria-label={fullLabel && fullLabel !== label ? fullLabel : undefined}
         onClick={() => onSort(column.key, column.higherIsBetter)}
       >
         <span>{label}</span>
@@ -109,7 +114,7 @@ export function ResultsTable(props: ResultsProps) {
   const { entries, meta, columns, sort, order, expanded, refreshing, onToggle, onSort, onSignal, onBacktest } = props;
   const changeColumn = meta.metrics.some((m) => m.key === "change_pct") ? resolveColumn(meta, "change_pct") : null;
   const composite = resolveColumn(meta, "composite");
-  const span = 8 + columns.length;
+  const span = 7 + columns.length;
   return (
     <div className={`sc-table-wrap${refreshing ? " is-refreshing" : ""}`} aria-busy={refreshing}>
       <table className="sc-table">
@@ -127,9 +132,8 @@ export function ResultsTable(props: ResultsProps) {
             )}
             <SortHeader column={composite} label="綜合" sort={sort} order={order} onSort={onSort} />
             {columns.map((column) => (
-              <SortHeader key={column.key} column={column} label={column.label} sort={sort} order={order} onSort={onSort} />
+              <SortHeader key={column.key} column={column} label={column.short} fullLabel={column.label} sort={sort} order={order} onSort={onSort} />
             ))}
-            <th scope="col" className="sc-col-highlights">亮點</th>
             <th scope="col" className="sc-col-star"><span className="sr-only">自選股</span></th>
           </tr>
         </thead>
@@ -138,7 +142,7 @@ export function ResultsTable(props: ResultsProps) {
             const open = expanded.has(entry.symbol);
             return (
               <Fragment key={entry.symbol}>
-                <tr className={`sc-row${open ? " is-open" : ""}`}>
+                <tr className={`sc-row${open ? " is-open" : ""}${entry.highlights.length > 0 ? " has-highlights" : ""}`}>
                   <td className="sc-col-expand"><ExpandButton entry={entry} open={open} onToggle={onToggle} /></td>
                   <td className="sc-col-rank num">{entry.rank}</td>
                   <th scope="row" className="sc-col-stock"><StockLabel entry={entry} onSignal={onSignal} /></th>
@@ -154,9 +158,13 @@ export function ResultsTable(props: ResultsProps) {
                   {columns.map((column) => (
                     <td key={column.key}><ColumnValue entry={entry} column={column} /></td>
                   ))}
-                  <td className="sc-col-highlights"><HighlightChips highlights={entry.highlights} /></td>
                   <td className="sc-col-star"><WatchlistStar symbol={entry.symbol} variant="icon" /></td>
                 </tr>
+                {entry.highlights.length > 0 && (
+                  <tr className={`sc-highlight-row${open ? " is-open" : ""}`}>
+                    <td colSpan={span}><HighlightChips highlights={entry.highlights} /></td>
+                  </tr>
+                )}
                 {open && (
                   <tr className="sc-detail-row" id={`sc-detail-${entry.symbol}`}>
                     <td colSpan={span}>
@@ -195,7 +203,7 @@ export function ResultCards(props: ResultsProps) {
               </div>
               {lead.map((column) => (
                 <div key={column.key}>
-                  <dt>{column.label}</dt>
+                  <dt title={column.label}>{column.short}</dt>
                   <dd><ColumnValue entry={entry} column={column} /></dd>
                 </div>
               ))}

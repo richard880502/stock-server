@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { formatPrice, formatSigned } from "@/lib/format";
 import { Direction } from "@/components/direction";
 import type { ScreenerEntry } from "@/lib/api/types";
@@ -53,20 +54,33 @@ export function FlagBadges({ flags }: { flags: string[] }) {
   );
 }
 
-export function HighlightChips({ highlights, all = false }: { highlights: string[]; all?: boolean }) {
+/**
+ * Highlight chips on one line; what does not fit the first `visible` chips folds into a 「+n」 button
+ * that expands the rest on click/tap. `all` (the detail panel) shows everything wrapped.
+ */
+export function HighlightChips({ highlights, all = false, visible = 3 }: { highlights: string[]; all?: boolean; visible?: number }) {
+  const [open, setOpen] = useState(false);
   if (highlights.length === 0) return <span className="text-muted">—</span>;
-  const { shown, hidden } = splitHighlights(highlights, all ? highlights.length : 3);
-  const folded = highlights.slice(highlights.length - hidden);
+  const { shown, hidden } = splitHighlights(highlights, all || open ? highlights.length : visible);
+  const foldable = !all && highlights.length > visible;
   return (
-    <ul className="sc-highlights" aria-label="亮點">
+    <ul className={`sc-highlights${all || open ? " is-open" : ""}`} aria-label="亮點">
       {shown.map((text) => (
         <li key={text} className="sc-highlight">
           {text}
         </li>
       ))}
-      {hidden > 0 && (
-        <li className="sc-highlight more" title={folded.join("\n")} aria-label={`另有 ${hidden} 項：${folded.join("、")}`}>
-          +{hidden}
+      {foldable && (
+        <li>
+          <button
+            type="button"
+            className="sc-highlight more"
+            aria-expanded={open}
+            aria-label={open ? "收合亮點" : `另有 ${hidden} 項亮點，展開`}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? "收合" : `+${hidden}`}
+          </button>
         </li>
       )}
     </ul>

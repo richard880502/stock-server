@@ -18,9 +18,11 @@ import {
   clearFilters,
   type Effective,
   isNumberMetric,
+  isPending,
   PAGE_SIZE,
   resolveColumn,
   resolveEffective,
+  resultDates,
   type ScreenerState,
   selectPreset,
   toggleSort,
@@ -95,16 +97,20 @@ export function ScreenerView() {
   );
   const data = results.data;
   const entries = results.entries;
-  const pending = data?.snapshot_pending === true;
-  const lagging = data?.flow_through && data.data_through && data.flow_through < data.data_through;
+  const pending = isPending(data);
+  const dates = data ? resultDates(data) : null;
+  const notice = data?.notice ?? null;
   const empty = data !== null && entries.length === 0 && !pending && !results.loading;
   const refreshing = results.stale || (results.loading && entries.length > 0);
 
   return (
-    <>
+    <div className="sc-page">
       <div className="view-heading">
         <h1>選股</h1>
-        <p>從全市場約 2,000 檔裡，用量化因子與資金流向找出值得進一步研究的股票。排名是計算結果，不是買賣建議。</p>
+        <p>
+          <span className="sc-sub-long">從全市場約 2,000 檔裡，用量化因子與資金流向找出值得進一步研究的股票。排名是計算結果，不是買賣建議。</span>
+          <span className="sc-sub-short">用量化因子與資金流向篩出值得研究的股票。排名不是買賣建議。</span>
+        </p>
       </div>
 
       {meta && (
@@ -135,8 +141,8 @@ export function ScreenerView() {
           <header className="sc-results-head">
             <p className="sc-summary num">
               符合 <strong>{formatLots(data.matched)}</strong> 檔 / 全市場 {formatLots(data.universe)} 檔
-              {data.data_through && <> · 資料截止 {data.data_through}</>}
-              {data.flow_through && <> · 籌碼資料至 {data.flow_through}</>}
+              {dates?.dataThrough && <> · 資料截止 {dates.dataThrough}</>}
+              {dates?.flowThrough && <> · 籌碼資料至 {dates.flowThrough}</>}
             </p>
             {phone && meta && (
               <div className="sc-sort-select">
@@ -160,11 +166,17 @@ export function ScreenerView() {
             )}
           </header>
         )}
-        {data && lagging && !pending && (
+        {notice && (
+          <p className="callout info" role="status">
+            <InfoIcon size={16} />
+            <span>{notice}</span>
+          </p>
+        )}
+        {data && dates?.lagging && !pending && (
           <p className="callout info" role="status">
             <InfoIcon size={16} />
             <span>
-              {data.data_through} 的三大法人買賣超尚未公布，資金流向相關欄位目前計算到 {data.flow_through}。交易所通常在收盤後約 17:00 才公布，公布後重新整理即可納入。
+              {dates.dataThrough} 的三大法人買賣超尚未公布，資金流向相關欄位目前計算到 {dates.flowThrough}。交易所通常在收盤後約 17:00 才公布，公布後重新整理即可納入。
             </span>
           </p>
         )}
@@ -214,6 +226,6 @@ export function ScreenerView() {
         </p>
         <p>排名與亮點是量化研究參考，不構成投資建議。三大法人是公開的法人合計，並非個別券商分點。</p>
       </footer>
-    </>
+    </div>
   );
 }

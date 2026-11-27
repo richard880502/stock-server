@@ -7,10 +7,12 @@ import {
   formatFilterParam,
   formatScreenerValue,
   INITIAL_STATE,
+  isPending,
   parseFilterParam,
   parseScreenerParams,
   resolveColumn,
   resolveEffective,
+  resultDates,
   selectPreset,
   serializeScreenerParams,
   setFlag,
@@ -210,5 +212,34 @@ describe("columns and highlights", () => {
   it("folds highlights past three into a count", () => {
     expect(splitHighlights(["a", "b", "c", "d", "e"])).toEqual({ shown: ["a", "b", "c"], hidden: 2 });
     expect(splitHighlights([])).toEqual({ shown: [], hidden: 0 });
+  });
+});
+
+describe("short labels", () => {
+  it("uses the server's short label and falls back to the full label", () => {
+    expect(resolveColumn(META, "inst_flow_ratio_20d")).toMatchObject({ label: "法人 20 日買超佔成交量", short: "法人20日佔量" });
+    expect(resolveColumn(META, "foreign_streak").short).toBe("外資連買賣");
+    expect(resolveColumn(META, "flow").short).toBe("資金流向");
+    expect(resolveColumn(META, "composite").short).toBe("綜合");
+    const withShort = { ...META, factors: META.factors.map((f) => (f.key === "flow" ? { ...f, short: "資金" } : f)) };
+    expect(resolveColumn(withShort, "flow")).toMatchObject({ label: "資金流向", short: "資金" });
+  });
+});
+
+describe("results header dates", () => {
+  it("shows the flow date only when it differs from the data date", () => {
+    expect(resultDates({ data_through: "2026-11-27", flow_through: "2026-11-27" })).toEqual({ dataThrough: "2026-11-27", flowThrough: null, lagging: false });
+    expect(resultDates({ data_through: "2026-11-27", flow_through: "2026-11-26" })).toEqual({ dataThrough: "2026-11-27", flowThrough: "2026-11-26", lagging: true });
+    expect(resultDates({ data_through: "2026-11-27", flow_through: null }).flowThrough).toBeNull();
+  });
+});
+
+describe("pending vs notice", () => {
+  it("does not show the calculating state when the server sent a notice", () => {
+    expect(isPending({ snapshot_pending: true })).toBe(true);
+    expect(isPending({ snapshot_pending: true, notice: null })).toBe(true);
+    expect(isPending({ snapshot_pending: true, notice: "此日期超出保留範圍" })).toBe(false);
+    expect(isPending({ snapshot_pending: false, notice: null })).toBe(false);
+    expect(isPending(null)).toBe(false);
   });
 });

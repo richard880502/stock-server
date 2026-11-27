@@ -595,6 +595,8 @@ export type ScreenerFactorInput = {
 export type ScreenerFactor = {
   key: string;
   label: string;
+  /** Compact label for column headers and phone cards; fall back to `label` when absent. */
+  short?: string;
   kind: "score";
   group: string;
   unit: string;
@@ -606,6 +608,8 @@ export type ScreenerFactor = {
 export type ScreenerMetric = {
   key: string;
   label: string;
+  /** Compact label for column headers and phone cards; fall back to `label` when absent. */
+  short?: string;
   group: string;
   /** "%", "張", "元", "日", … ; booleans may use kind "bool" or unit "bool". */
   unit: string;
@@ -682,5 +686,7 @@ export type ScreenerResponse = {
   limit: number;
   offset: number;
   snapshot_pending: boolean;
+  /** Server explanation shown above the results (e.g. the date is outside the retained range). */
+  notice?: string | null;
   entries: ScreenerEntry[];
 };

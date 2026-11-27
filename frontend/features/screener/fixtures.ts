@@ -16,7 +16,7 @@ export const META: ScreenerMeta = {
     { key: "high_52w_gap_pct", label: "距 52 週高點", group: "price", unit: "%", decimals: 1, description: "", higher_is_better: true },
     { key: "trend_aligned", label: "多頭排列", group: "price", unit: "bool", decimals: null, description: "收盤 > MA20 > MA60 > MA120。", higher_is_better: true, kind: "bool" },
     { key: "total_net_20d", label: "法人 20 日合計買賣超", group: "flow", unit: "張", decimals: 0, description: "", higher_is_better: true },
-    { key: "inst_flow_ratio_20d", label: "法人 20 日買超佔成交量", group: "flow", unit: "%", decimals: 1, description: "", higher_is_better: true },
+    { key: "inst_flow_ratio_20d", label: "法人 20 日買超佔成交量", short: "法人20日佔量", group: "flow", unit: "%", decimals: 1, description: "", higher_is_better: true },
     { key: "inst_flow_ratio_60d", label: "法人 60 日買超佔成交量", group: "flow", unit: "%", decimals: 1, description: "", higher_is_better: true },
     { key: "inst_buy_days_20d", label: "法人 20 日買超天數占比", group: "flow", unit: "%", decimals: 0, description: "", higher_is_better: true },
     { key: "foreign_streak", label: "外資連買賣", group: "flow", unit: "日", decimals: 0, description: "", higher_is_better: true },

@@ -3,28 +3,31 @@ import type { ScreenerEntry, ScreenerMeta } from "@/lib/api/types";
 import { cellValue, formatScreenerValue, resolveColumn, toneOf } from "./screener-model";
 import { HighlightChips, ScoreBar } from "./screener-parts";
 
-/** How one score is built: its inputs and weights, straight from the meta (nothing hard-coded). */
+/** How one score is built: its inputs and weights from the meta, folded behind 「計算方式」. */
 function Composition({ meta, factorKey }: { meta: ScreenerMeta; factorKey: string }) {
   const factor = meta.factors.find((f) => f.key === factorKey);
   if (!factor || factor.inputs.length === 0) return null;
   return (
-    <p className="sc-composition">
-      {factor.description && <span>{factor.description} </span>}
-      <span>
-        由{" "}
-        {factor.inputs
-          .map((input) => {
-            const label = resolveColumn(meta, input.key.replace(/^-/, "")).label;
-            const invert = input.invert || input.key.startsWith("-");
-            const note = input.absolute
-              ? invert ? "（取絕對值，越小越好）" : "（取絕對值，越大越好）"
-              : invert ? "（越低越好）" : "";
-            return `${label}${note} ${Math.round(input.weight * 100)}%`;
-          })
-          .join("、")}{" "}
-        組成。
-      </span>
-    </p>
+    <details className="sc-recipe">
+      <summary>計算方式</summary>
+      {factor.description && <p>{factor.description}</p>}
+      <ul className="sc-recipe-list">
+        {factor.inputs.map((input) => {
+          const label = resolveColumn(meta, input.key.replace(/^-/, "")).label;
+          const invert = input.invert || input.key.startsWith("-");
+          const note = input.absolute
+            ? invert ? "取絕對值，越小越好" : "取絕對值，越大越好"
+            : invert ? "越低越好" : "";
+          return (
+            <li key={input.key} title={note || undefined}>
+              {label}
+              {note && <small>（{note}）</small>}
+              <span className="num"> · {Math.round(input.weight * 100)}%</span>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
   );
 }
 

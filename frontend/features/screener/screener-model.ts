@@ -368,6 +368,16 @@ export const FLAG_LABELS: Record<string, string> = {
 export const flagLabel = (flag: string): string => FLAG_LABELS[flag] ?? flag;
 
 /** First `visible` highlights plus how many are folded into the "+n" chip. */
+/** The 資料截止 / 籌碼資料至 pair for the results header: the flow date only shows when it differs. */
+export function resultDates(data: { data_through: string | null; flow_through: string | null }) {
+  const flowThrough = data.flow_through && data.flow_through !== data.data_through ? data.flow_through : null;
+  return { dataThrough: data.data_through, flowThrough, lagging: Boolean(flowThrough && data.data_through && flowThrough < data.data_through) };
+}
+
+/** "Calculating" state: the server has no snapshot yet and gave no notice that explains why. */
+export const isPending = (data: { snapshot_pending: boolean; notice?: string | null } | null) =>
+  data?.snapshot_pending === true && !data.notice;
+
 export function splitHighlights(highlights: string[], visible = 3) {
   return { shown: highlights.slice(0, visible), hidden: Math.max(0, highlights.length - visible) };
 }
@@ -377,6 +387,8 @@ export function splitHighlights(highlights: string[], visible = 3) {
 export type ColumnDef = {
   key: string;
   label: string;
+  /** Compact header / card title; equals `label` when the server sends no `short`. */
+  short: string;
   kind: "score" | "metric";
   unit: string;
   decimals: number | null;
@@ -392,6 +404,7 @@ export function resolveColumn(meta: ScreenerMeta | null, key: string): ColumnDef
     return {
       key,
       label: factor?.label ?? "綜合",
+      short: factor?.short ?? factor?.label ?? "綜合",
       kind: "score",
       unit: factor?.unit ?? "分",
       decimals: 0,
@@ -405,6 +418,7 @@ export function resolveColumn(meta: ScreenerMeta | null, key: string): ColumnDef
   return {
     key,
     label: metric?.label ?? key,
+    short: metric?.short ?? metric?.label ?? key,
     kind: "metric",
     unit: metric?.unit ?? "",
     decimals: metric?.decimals ?? null,
