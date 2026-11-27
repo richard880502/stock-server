@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
