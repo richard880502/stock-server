@@ -1105,6 +1105,27 @@ class MarketFactorSnapshot(BaseModel):
     available_at: datetime
 
 
+class MarketSession(BaseModel):
+    """One market's trading date as seen in ``market_stock_daily`` (screener bookkeeping)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trading_date: date
+    rows: int
+    reported: bool  # the institutional report for the session is published
+    available_at: datetime
+
+
+class MarketFactorState(BaseModel):
+    """What a stored factor snapshot was built from: per-market row counts and flow dates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    available_at: datetime
+    rows: dict[str, int]
+    flow_through: dict[str, date | None]
+
+
 class ShareholdingTier(BaseModel):
     """One TDCC holding tier (持股分級 1-16) as published: holders, shares, % of custody."""
 

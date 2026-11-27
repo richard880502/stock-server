@@ -229,7 +229,7 @@ async def test_scores_rank_the_accumulating_stock_above_the_selling_one(reposito
     assert rows["1101.TW"].composite > rows["2412.TW"].composite
     assert rows["1101.TW"].metrics["chip_transfer_20d"] is True
     assert rows["2412.TW"].metrics["chip_transfer_20d"] is False
-    assert "法人買、融資退（籌碼轉強）" in rows["1101.TW"].highlights
+    assert "法人買、融資退" in rows["1101.TW"].highlights
 
 
 async def test_compute_is_idempotent_and_replaces_the_date(repository) -> None:
@@ -478,7 +478,8 @@ async def test_unknown_keys_are_rejected(repository) -> None:
 async def test_no_snapshot_reports_pending_with_no_entries() -> None:
     result = await ScreenerService(MemoryQuantRepository()).screen()
     assert result.snapshot_pending is True and result.data_through is None
-    assert result.entries == [] and result.universe == 0
+    assert result.entries == [] and result.universe == 0 and result.notice is None
+    assert (await ScreenerService(MemoryQuantRepository()).screen(as_of=LAST)).notice is None
     factors = await ScreenerService(MemoryQuantRepository()).stock("2330.TW")
     assert factors.entry is None and factors.data_through is None
 
@@ -490,7 +491,11 @@ async def test_as_of_picks_the_latest_snapshot_on_or_before_it(repository) -> No
     reader = ScreenerService(repository)
     assert (await reader.screen(as_of=DAYS[-2])).data_through == DAYS[-3]
     assert (await reader.screen()).data_through == LAST
-    assert (await reader.screen(as_of=DAYS[0])).snapshot_pending is True
+    old = await reader.screen(as_of=DAYS[0])  # snapshots exist, none that old
+    assert old.snapshot_pending is False and old.data_through is None and old.entries == []
+    assert old.notice == "這個日期超出選股資料的保留範圍（最近 60 個交易日）"
+    assert (await reader.screen()).notice is None
+    assert (await reader.stock("2330", as_of=DAYS[0])).notice == old.notice
 
 
 async def test_stock_factors_returns_the_entry_or_null(repository) -> None:
@@ -657,6 +662,9 @@ async def test_rest_routes_return_the_contract_shapes(repository, client) -> Non
 async def test_rest_rejects_bad_input_with_422(repository, client) -> None:
     await _computed(repository)
     for params in (
+        {"f": "ret_20d:nan:2"},
+        {"f": "ret_20d:1:inf"},
+        {"f": "ret_20d:-Infinity:"},
         {"sort": "nope"},
         {"f": "nope:1:2"},
         {"f": "ret_20d:abc:2"},
@@ -829,3 +837,188 @@ async def test_big_holder_increase_preset(repository) -> None:
     assert result.entries[0].metrics["big_holder_pct_change"] == pytest.approx(1.5)
     description = next(p for p in PRESETS if p["key"] == "big_holder_increase")["description"]
     assert "週" in description and "2026-11-20" in description
+
+
+# ------------------------------------------------- review fixes: sessions, half markets, wording
+
+NEXT_DAY = date(2026, 11, 30)  # the Monday after LAST
+
+
+def _day_rows(symbols: list[str], day: date) -> list[MarketStockDay]:
+    return [row for symbol in symbols for row in _stock(symbol, days=[day])]
+
+
+async def _add_rows(repo: MemoryQuantRepository, rows: list[MarketStockDay]) -> None:
+    """A new session whose rows continue each stock's price path."""
+    await repo.upsert_market_stock_days(rows)
+
+
+async def test_thin_stock_is_measured_over_market_sessions(repository) -> None:
+    traded = [d for i, d in enumerate(DAYS) if (len(DAYS) - 1 - i) % 5 == 0]
+    await repository.upsert_market_stock_days(_stock("7777.TW", turnover=3e7, days=traded))
+    await repository.upsert_market_stock_days(_stock("7778.TW", turnover=3e7, days=DAYS[-25:]))
+    await _snapshots(repository).compute(LAST)
+    rows = {r.symbol: r for r in await repository.list_market_factors(LAST, VERSION)}
+    thin = rows["7777.TW"]
+    assert thin.avg_turnover_20d == pytest.approx(4 * 3e7 / 20)  # not 3e7
+    assert thin.metrics["traded_days_20d"] == 4
+    assert thin.metrics["sessions"] == len(DAYS) - traded_start(traded)
+    assert rows["7778.TW"].metrics["sessions"] == 25  # new listing: no padding before it
+    assert rows["1101.TW"].metrics["traded_days_20d"] == 20
+    # no-trade sessions carry the price and zero the return: no phantom volatility
+    assert thin.metrics["volatility_20d"] is not None
+
+
+def traded_start(traded: list[date]) -> int:
+    return DAYS.index(traded[0])
+
+
+async def test_no_trade_session_is_zero_flow_when_the_report_exists(repository) -> None:
+    traded = DAYS[-30::3]  # keep the last session; every third day
+    traded = [*traded, LAST] if LAST not in traded else traded
+    await repository.upsert_market_stock_days(_stock("7777.TW", net=1000, days=traded))
+    await _snapshots(repository).compute(LAST)
+    thin = {r.symbol: r for r in await repository.list_market_factors(LAST, VERSION)}["7777.TW"]
+    # 20 sessions: 7 reports of 2000 shares (total = 2 * net) -> 14 lots; gaps count as 0
+    reported_days = [d for d in DAYS[-20:] if d in traded]
+    assert thin.metrics["total_net_20d"] == pytest.approx(len(reported_days) * 2.0)
+    assert thin.metrics["inst_buy_days_20d"] == pytest.approx(len(reported_days) / 20 * 100)
+
+
+async def test_half_market_day_is_not_published_and_the_previous_snapshot_stays(
+    repository,
+) -> None:
+    service = _snapshots(repository)
+    await service.compute(LAST)
+    await _add_rows(repository, _day_rows(["1101.TW", "2330.TW", "2412.TW", "3008.TW"], NEXT_DAY))
+    assert await service.compute(NEXT_DAY) == 0  # TW only
+    assert (VERSION, NEXT_DAY) not in repository.market_factors
+    assert await repository.latest_market_factor_date(VERSION) == LAST
+    assert await service.refresh(recompute_latest=False) == []
+    assert await service.refresh() == []  # forced rebuild of the newest date still skips it
+    assert (await ScreenerService(repository).screen()).data_through == LAST
+
+    await _add_rows(repository, _day_rows(["6488.TWO", "8299.TWO"], NEXT_DAY))
+    assert await service.refresh(recompute_latest=False) == [NEXT_DAY]
+    assert len(await repository.list_market_factors(NEXT_DAY, VERSION)) == 6
+
+
+async def test_a_market_far_short_of_its_previous_session_is_incomplete(repository) -> None:
+    await _add_rows(repository, _day_rows(["1101.TW", "2330.TW", "2412.TW", "3008.TW"], NEXT_DAY))
+    await _add_rows(repository, _day_rows(["6488.TWO"], NEXT_DAY))  # 1 of 2 = 50% < 60%
+    assert await _snapshots(repository).compute(NEXT_DAY) == 0
+    await _add_rows(repository, _day_rows(["8299.TWO"], NEXT_DAY))
+    assert await _snapshots(repository).compute(NEXT_DAY) == 6
+
+
+async def test_stored_half_market_snapshot_is_deleted_on_refresh(repository) -> None:
+    service = _snapshots(repository)
+    await service.compute(LAST)
+    await _add_rows(repository, _day_rows(["1101.TW", "2330.TW"], NEXT_DAY))
+    legacy = [r for r in await repository.list_market_factors(LAST, VERSION) if r.market == "TW"]
+    await repository.replace_market_factors(
+        NEXT_DAY, VERSION, [r.model_copy(update={"trading_date": NEXT_DAY}) for r in legacy]
+    )
+    assert await repository.latest_market_factor_date(VERSION) == NEXT_DAY
+    assert await service.refresh(recompute_latest=False) == []
+    assert await repository.latest_market_factor_date(VERSION) == LAST
+
+
+async def test_snapshot_missing_a_market_is_rebuilt_when_the_source_has_it(repository) -> None:
+    await _snapshots(repository).compute(LAST)
+    legacy = [r for r in await repository.list_market_factors(LAST, VERSION) if r.market == "TW"]
+    await repository.replace_market_factors(LAST, VERSION, legacy)  # TWO rows are lost
+    restarted = _snapshots(repository, backfill_sessions=3)  # a fresh worker process
+    assert await restarted.refresh(recompute_latest=False) == [LAST]
+    assert {r.market for r in await repository.list_market_factors(LAST, VERSION)} == {"TW", "TWO"}
+    assert await restarted.refresh(recompute_latest=False) == []  # settled, no loop
+
+
+async def test_snapshot_older_than_its_source_rows_is_recomputed_once(repository) -> None:
+    early = datetime(2026, 11, 27, 9, tzinfo=UTC)  # rows are stamped 10:00 that day
+    service = _snapshots(repository, backfill_sessions=3, clock=lambda: early)
+    await service.compute(LAST)
+    fresh = _snapshots(repository, backfill_sessions=3, settled={})
+    assert await fresh.refresh(recompute_latest=False) == [LAST]
+    assert await fresh.refresh(recompute_latest=False) == []
+    # the snapshot is now newer than the rows: a new worker process leaves it alone
+    assert await _snapshots(repository, backfill_sessions=3).refresh(recompute_latest=False) == []
+
+
+async def test_a_date_that_computes_no_rows_is_skipped_and_not_retried() -> None:
+    repo = MemoryQuantRepository()
+    young = [*_stock("1101.TW", days=DAYS[-10:]), *_stock("6488.TWO", days=DAYS[-10:])]
+    await repo.upsert_market_stock_days(young)
+    settled: dict = {}
+    service = _snapshots(repo, settled=settled)
+    await _snapshots(repo).compute(LAST)
+    assert repo._factors() == {}
+    assert await repo.latest_market_factor_date(VERSION) is None
+    assert await repo.replace_market_factors(LAST, VERSION, []) == 0
+    assert repo._factors() == {}
+
+    calls: list[date] = []
+    original = ScreenerSnapshotService.compute
+
+    async def counting(self, trading_date):
+        calls.append(trading_date)
+        return await original(self, trading_date)
+
+    ScreenerSnapshotService.compute = counting  # type: ignore[method-assign]
+    try:
+        assert await service.refresh(recompute_latest=False) == []
+        assert await service.refresh(recompute_latest=False) == []
+        assert len(calls) == 5  # one pass over the backfill dates, none on the second refresh
+        await repo.upsert_market_stock_days(_stock("8888.TWO", days=DAYS[-10:]))
+        await service.refresh(recompute_latest=False)
+        assert LAST in calls[5:]  # source changed -> looked at again
+    finally:
+        ScreenerSnapshotService.compute = original  # type: ignore[method-assign]
+
+
+async def test_flow_through_reported_is_the_oldest_market_report(repository) -> None:
+    rows = [
+        r.model_copy(update={"foreign_net": None, "trust_net": None, "total_net": None})
+        for r in list(repository.market_stock_days.values())
+        if r.market == "TW" and r.trading_date == LAST
+    ]
+    await repository.upsert_market_stock_days(rows)
+    await _snapshots(repository).compute(LAST)
+    reader = ScreenerService(repository)
+    assert (await reader.screen()).flow_through == DAYS[-2]  # TW lags, TWO is current
+    assert (await reader.screen(market="TWO")).flow_through == LAST
+    assert (await reader.stock("0000.TW")).flow_through == DAYS[-2]
+
+
+async def test_meta_carries_short_labels_and_the_new_wording(repository) -> None:
+    await _computed(repository)
+    meta = await ScreenerService(repository).meta()
+    for item in [*meta["metrics"], *meta["factors"]]:
+        assert 0 < len(item["short"]) <= 8, item["key"]
+    metrics = {m["key"]: m for m in meta["metrics"]}
+    assert metrics["inst_buy_days_60d"]["short"] == "60日買超天數比"
+    assert metrics["traded_days_20d"]["label"] == "近 20 日有成交天數"
+    presets = {p["key"]: p for p in meta["presets"]}
+    assert presets["quiet_accumulation"]["label"] == "資金緩步流入"
+    factors = {f["key"]: f for f in meta["factors"]}
+    assert factors["accumulation"]["label"] == "緩步流入"
+    assert "吸籌" not in presets["quiet_accumulation"]["description"]
+
+
+async def test_mcp_screen_market_rejects_bad_filters_without_raising() -> None:
+    from quant_signal.adapters.mcp.server import screen_market
+
+    bad = (
+        [{"min": 1}],
+        [{"key": "ret_20d", "min": "abc"}],
+        [{"key": "ret_20d", "min": float("nan")}],
+        [{"key": "ret_20d", "max": float("inf")}],
+        [{"key": "trend_aligned", "equals": False}],
+        [{"key": "ret_20d"}],
+        ["ret_20d"],
+    )
+    for filters in bad:
+        result = await screen_market(filters=filters)
+        assert "error" in result and isinstance(result["error"], str), filters
+    assert "equals" in (await screen_market(filters=[{"key": "x", "equals": False}]))["error"]
+    assert "error" in await screen_market(as_of="not-a-date")

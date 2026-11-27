@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import re
 import secrets
 from collections.abc import AsyncIterator
@@ -176,6 +177,10 @@ async def get_repository() -> AsyncIterator[QuantRepository]:
 
 
 
+def _retention() -> int:
+    return get_settings().screener_retention_sessions
+
+
 def _parse_screener_filter(raw: str) -> ScreenFilter:
     """``key:min:max`` with either bound optional (``ret_20d:-8:8``, ``revenue_yoy_pct:20:``)."""
     parts = raw.split(":")
@@ -188,6 +193,10 @@ def _parse_screener_filter(raw: str) -> ScreenFilter:
         raise HTTPException(
             status_code=422, detail=f"invalid filter {raw!r}: bounds must be numbers"
         ) from None
+    if not all(bound is None or math.isfinite(bound) for bound in (low, high)):
+        raise HTTPException(
+            status_code=422, detail=f"invalid filter {raw!r}: bounds must be finite numbers"
+        )
     return ScreenFilter(key=parts[0].strip(), min=low, max=high)
 
 def password_login_ready(settings) -> bool:
@@ -624,7 +633,7 @@ def create_app() -> FastAPI:
     ) -> ScreenerResult:
         """Whole-market multi-factor screen over the latest stored daily snapshot."""
         try:
-            return await ScreenerService(repository).screen(
+            return await ScreenerService(repository, retention_sessions=_retention()).screen(
                 market=market,
                 as_of=as_of,
                 preset=preset,
@@ -648,7 +657,9 @@ def create_app() -> FastAPI:
         as_of: Annotated[date | None, Query()] = None,
     ) -> StockFactors:
         """One stock's factor row from the snapshot (``entry`` is null if not in it)."""
-        return await ScreenerService(repository).stock(symbol, as_of=as_of)
+        return await ScreenerService(repository, retention_sessions=_retention()).stock(
+            symbol, as_of=as_of
+        )
 
     @router.get("/market/backfill-status", response_model=list[MarketBackfillStatus])
     async def market_backfill_status(

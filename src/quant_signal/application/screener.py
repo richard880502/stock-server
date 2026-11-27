@@ -8,6 +8,7 @@ deterministic ranking of official data, not a recommendation.
 from __future__ import annotations
 
 import logging
+import math as stdmath
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -17,7 +18,12 @@ from pydantic import BaseModel
 from quant_signal.application.official_queries import as_of_cutoff
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.stocks import StockNotFound, normalize_listed_symbol
-from quant_signal.domain.models import MarketFactorSnapshot, SyncJobKind
+from quant_signal.domain.models import (
+    MarketFactorSnapshot,
+    MarketFactorState,
+    MarketSession,
+    SyncJobKind,
+)
 from quant_signal.quant import screener as math
 from quant_signal.quant.screener import (
     BOOL_KEYS,
@@ -30,6 +36,7 @@ from quant_signal.quant.screener import (
     METRICS,
     NUMERIC_KEYS,
     SCORE_KEYS,
+    SHORT_LABELS,
     VERSION,
 )
 
@@ -73,8 +80,11 @@ PRESETS: list[dict[str, Any]] = [
     },
     {
         "key": "quiet_accumulation",
-        "label": "低調吸籌",
-        "description": "法人 60 日持續買超、近 20 日股價漲跌幅在 ±8% 內，依低調吸籌分數排序。",
+        "label": "資金緩步流入",
+        "description": (
+            "法人近 60 個交易日有 55% 以上的日子淨買超、60 日合計淨買超，"
+            "且近 20 日股價漲跌幅在 ±8% 內，依緩步流入分數排序。"
+        ),
         "sort": "accumulation",
         "order": "desc",
         "filters": [
@@ -232,6 +242,7 @@ class ScreenerResult(BaseModel):
     limit: int
     offset: int
     snapshot_pending: bool
+    notice: str | None = None
     entries: list[ScreenerEntry]
 
 
@@ -242,6 +253,7 @@ class StockFactors(BaseModel):
     data_through: date | None
     flow_through: date | None
     universe: int
+    notice: str | None = None
     entry: ScreenerEntry | None
 
 
@@ -249,6 +261,52 @@ class ScreenFilter(BaseModel):
     key: str
     min: float | None = None
     max: float | None = None
+
+
+def finite_bound(value: Any, raw: str = "") -> float | None:
+    """A filter bound as a finite float (``None`` stays ``None``); anything else is an error."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ScreenerQueryError(f"filter bound must be a number: {raw or value!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ScreenerQueryError(f"filter bound must be a number: {raw or value!r}") from None
+    if not stdmath.isfinite(number):
+        raise ScreenerQueryError(f"filter bound must be finite: {raw or value!r}")
+    return number
+
+
+def parse_filter_specs(items: list[Any] | None) -> tuple[list[ScreenFilter], list[str]]:
+    """Validate MCP-style filters: ``{key, min?, max?}`` bounds and ``{key, equals: true}``.
+
+    Returns ``(numeric bounds, boolean flag keys)``; raises :class:`ScreenerQueryError`
+    with a readable message for anything malformed (``equals: false`` included).
+    """
+    numeric: list[ScreenFilter] = []
+    flags: list[str] = []
+    for index, item in enumerate(items or []):
+        if not isinstance(item, dict):
+            raise ScreenerQueryError(f"filter #{index + 1} must be an object with a key")
+        key = item.get("key")
+        if not isinstance(key, str) or not key.strip():
+            raise ScreenerQueryError(f"filter #{index + 1} is missing its key")
+        key = key.strip()
+        if "equals" in item:
+            if item["equals"] is not True:
+                raise ScreenerQueryError(
+                    f"filter {key}: only equals=true is supported; "
+                    "omit the filter instead of using equals=false"
+                )
+            flags.append(key)
+            continue
+        low = finite_bound(item.get("min"))
+        high = finite_bound(item.get("max"))
+        if low is None and high is None:
+            raise ScreenerQueryError(f"filter {key} needs min, max or equals=true")
+        numeric.append(ScreenFilter(key=key, min=low, max=high))
+    return numeric, flags
 
 
 def _entry(row: MarketFactorSnapshot, rank: int | None = None) -> ScreenerEntry:
@@ -273,6 +331,79 @@ def _entry(row: MarketFactorSnapshot, rank: int | None = None) -> ScreenerEntry:
 # ------------------------------------------------------------------- snapshot job
 
 
+COMPLETE_RATIO = 0.6  # a market day needs this share of the previous session's rows
+MARKETS = ("TW", "TWO")
+
+
+def _session(
+    calendar: dict[str, list[MarketSession]], market: str, day: date
+) -> tuple[MarketSession | None, MarketSession | None]:
+    """``(session on day, the market's previous session)``."""
+    previous: MarketSession | None = None
+    for item in calendar.get(market, []):
+        if item.trading_date == day:
+            return item, previous
+        if item.trading_date < day:
+            previous = item
+    return None, previous
+
+
+def market_day_complete(calendar: dict[str, list[MarketSession]], day: date) -> bool:
+    """Both markets have rows on ``day`` and each has at least 60% of its previous session."""
+    for market in MARKETS:
+        current, previous = _session(calendar, market, day)
+        if current is None or current.rows <= 0:
+            return False
+        if previous is not None and current.rows < COMPLETE_RATIO * previous.rows:
+            return False
+    return True
+
+
+def _source_flow(calendar: dict[str, list[MarketSession]], market: str, day: date) -> date | None:
+    reported = [
+        item.trading_date
+        for item in calendar.get(market, [])
+        if item.reported and item.trading_date <= day
+    ]
+    return max(reported, default=None)
+
+
+def _signature(calendar: dict[str, list[MarketSession]], day: date) -> tuple:
+    parts = []
+    for market in MARKETS:
+        current, _ = _session(calendar, market, day)
+        parts.append(
+            (
+                market,
+                current.rows if current else 0,
+                current.available_at if current else None,
+                _source_flow(calendar, market, day),
+            )
+        )
+    return tuple(parts)
+
+
+def _is_stale(
+    calendar: dict[str, list[MarketSession]], day: date, state: MarketFactorState
+) -> bool:
+    """The source changed after the snapshot was written (see ``refresh``)."""
+    for market in MARKETS:
+        current, _ = _session(calendar, market, day)
+        if current is None:
+            continue
+        built = state.rows.get(market, 0)
+        if current.available_at > state.available_at:
+            return True
+        # Young listings are legitimately absent from a snapshot, so allow a small gap.
+        if built == 0 or current.rows - built > max(10, 0.02 * current.rows):
+            return True
+        source_flow = _source_flow(calendar, market, day)
+        built_flow = state.flow_through.get(market)
+        if source_flow is not None and (built_flow is None or source_flow > built_flow):
+            return True
+    return False
+
+
 class ScreenerSnapshotService:
     """Computes and stores the factor snapshot. Run by the sync worker only."""
 
@@ -283,15 +414,38 @@ class ScreenerSnapshotService:
         retention_sessions: int = 60,
         backfill_sessions: int = 5,
         clock: Callable[[], datetime] | None = None,
+        settled: dict[date, tuple[tuple, bool]] | None = None,
     ) -> None:
         self.repository = repository
         self.retention = retention_sessions
         self.backfill = backfill_sessions
         self._clock = clock or (lambda: datetime.now(UTC))
+        # date -> source signature already computed (published or empty); the upkeep does
+        # not redo a date until its source rows change. Callers that outlive one call
+        # (the worker) pass their own dict.
+        self._settled = settled if settled is not None else {}
 
     async def compute(self, trading_date: date) -> int:
-        """(Re)build the snapshot for ``trading_date`` from history up to that date."""
+        """(Re)build the snapshot for ``trading_date``; returns the rows written.
+
+        Returns 0 and writes nothing when the date is not publishable: a market is
+        missing or far short of its previous session (a snapshot already stored for it
+        is deleted), or no stock qualifies.
+        """
         repo = self.repository
+        calendar = await repo.market_session_calendar(trading_date, HISTORY_SESSIONS)
+        if not market_day_complete(calendar, trading_date):
+            removed = await repo.delete_market_factors(trading_date, VERSION)
+            logger.info(
+                "screener: %s not published, a market's rows are missing or incomplete%s",
+                trading_date,
+                " (stored snapshot removed)" if removed else "",
+            )
+            return 0
+        sessions = {m: [i.trading_date for i in items] for m, items in calendar.items()}
+        reported = {
+            m: {i.trading_date for i in items if i.reported} for m, items in calendar.items()
+        }
         cutoff = as_of_cutoff(trading_date)
         industries = {item.symbol: item for item in await repo.list_market_industries()}
         revenue = {item.symbol: item for item in await repo.latest_monthly_revenue(cutoff)}
@@ -308,6 +462,8 @@ class ScreenerSnapshotService:
         ):
             if not rows or rows[-1][0] != trading_date:
                 continue  # not traded on the snapshot date
+            close = rows[-1][1]
+            rows = math.align_rows(rows, sessions.get(market, []), reported.get(market, set()))
             through = flow_through.get(market)
             metrics = math.compute_metrics(
                 math.history_from_rows(symbol, name, market, rows),
@@ -323,7 +479,13 @@ class ScreenerSnapshotService:
             metrics["revenue_mom_pct"] = item.mom_pct if item else None
             metrics["revenue_cum_yoy_pct"] = item.cumulative_yoy_pct if item else None
             flags = sorted(risk.get(symbol, ()))
-            staged.append((symbol, name, market, rows[-1][1], metrics, flags, through))
+            staged.append((symbol, name, market, close, metrics, flags, through))
+
+        signature = _signature(calendar, trading_date)
+        if not staged:
+            self._settled[trading_date] = (signature, False)
+            logger.info("screener: %s computed no rows, nothing stored", trading_date)
+            return 0
 
         scored = math.score_universe([item[4] for item in staged])
         now = self._clock()
@@ -355,27 +517,46 @@ class ScreenerSnapshotService:
             )
         written = await repo.replace_market_factors(trading_date, VERSION, snapshots)
         await repo.prune_market_factors(VERSION, self.retention)
+        self._settled[trading_date] = (signature, True)
         return written
 
     async def refresh(self, *, recompute_latest: bool = True) -> list[date]:
-        """Catch up on missing dates and (optionally) rebuild the newest one.
+        """Catch up on missing dates, repair stale ones and (optionally) rebuild the newest.
 
-        First run builds the last ``backfill_sessions`` dates; afterwards only dates newer
-        than the newest snapshot. Returns the dates computed, oldest first.
+        Targets among the newest ``backfill_sessions`` dates: dates newer than the newest
+        snapshot; dates whose snapshot fails the both-markets-complete rule (``compute``
+        deletes it); dates whose source rows changed after the snapshot was written
+        (newer ``available_at``, per-market row counts or institutional report dates that
+        differ); and the newest date when ``recompute_latest``. A date already computed
+        for the same source rows is not retried. Returns the dates published, oldest first.
         """
-        dates = await self.repository.list_market_trading_dates(
-            None, as_of=None, limit=self.backfill
-        )
+        repo = self.repository
+        dates = await repo.list_market_trading_dates(None, as_of=None, limit=self.backfill)
         if not dates:
             return []
-        newest = await self.repository.latest_market_factor_date(VERSION)
-        targets = {d for d in dates if newest is None or d > newest}
+        newest = await repo.latest_market_factor_date(VERSION)
+        calendar = await repo.market_session_calendar(dates[0], HISTORY_SESSIONS)
+        states = await repo.market_factor_state(VERSION, dates)
+        targets: set[date] = set()
+        for day in dates:
+            state = states.get(day)
+            signature = _signature(calendar, day)
+            seen = self._settled.get(day)
+            fresh = seen is not None and seen[0] == signature
+            if state is None:
+                empty_before = seen == (signature, False)
+                if (newest is None or day > newest) and not empty_before:
+                    targets.add(day)
+            elif not market_day_complete(calendar, day):
+                targets.add(day)
+            elif not fresh and _is_stale(calendar, day, state):
+                targets.add(day)
         if recompute_latest:
             targets.add(dates[0])
         done: list[date] = []
         for day in sorted(targets):
-            await self.compute(day)
-            done.append(day)
+            if await self.compute(day):
+                done.append(day)
         return done
 
 
@@ -386,6 +567,7 @@ async def refresh_screener(
     retention_sessions: int,
     backfill_sessions: int,
     recompute_latest: bool = True,
+    settled: dict[date, tuple[tuple, bool]] | None = None,
 ) -> list[date]:
     """Worker entry point: never raises, so a factor failure cannot fail a sync job."""
     if not enabled:
@@ -395,6 +577,7 @@ async def refresh_screener(
             repository,
             retention_sessions=retention_sessions,
             backfill_sessions=backfill_sessions,
+            settled=settled,
         ).refresh(recompute_latest=recompute_latest)
     except Exception:
         logger.exception("screener snapshot refresh failed")
@@ -423,6 +606,7 @@ def screener_meta_factors() -> list[dict[str, Any]]:
             {
                 "key": key,
                 "label": label,
+                "short": SHORT_LABELS[key],
                 "kind": "score",
                 "group": "score",
                 "unit": "分",
@@ -439,6 +623,7 @@ def screener_meta_metrics() -> list[dict[str, Any]]:
         {
             "key": m.key,
             "label": m.label,
+            "short": SHORT_LABELS[m.key],
             "group": m.group,
             "unit": m.unit,
             "decimals": m.decimals,
@@ -453,8 +638,15 @@ def screener_meta_metrics() -> list[dict[str, Any]]:
 class ScreenerService:
     """Reads one snapshot date and filters / sorts / paginates it in Python."""
 
-    def __init__(self, repository: QuantRepository) -> None:
+    def __init__(self, repository: QuantRepository, *, retention_sessions: int = 60) -> None:
         self.repository = repository
+        self.retention = retention_sessions
+
+    async def _out_of_range(self, as_of: date | None) -> str | None:
+        """A notice when snapshots exist but none is on or before ``as_of``."""
+        if as_of is None or await self.repository.latest_market_factor_date(VERSION) is None:
+            return None
+        return f"這個日期超出選股資料的保留範圍（最近 {self.retention} 個交易日）"
 
     async def _load(self, as_of: date | None) -> tuple[date | None, list[MarketFactorSnapshot]]:
         day = await self.repository.latest_market_factor_date(VERSION, as_of)
@@ -535,6 +727,7 @@ class ScreenerService:
 
         day, rows = await self._load(as_of)
         if day is None:
+            notice = await self._out_of_range(as_of)
             return ScreenerResult(
                 market=market,
                 as_of=as_of,
@@ -547,7 +740,8 @@ class ScreenerService:
                 matched=0,
                 limit=limit,
                 offset=offset,
-                snapshot_pending=True,
+                snapshot_pending=notice is None,
+                notice=notice,
                 entries=[],
             )
         if market != "ALL":
@@ -590,7 +784,7 @@ class ScreenerService:
             market=market,
             as_of=as_of or day,
             data_through=day,
-            flow_through=max(flow_dates, default=None),
+            flow_through=min(flow_dates, default=None),
             preset=preset,
             sort=sort_key,
             order=direction,
@@ -608,6 +802,7 @@ class ScreenerService:
         except StockNotFound:
             symbol = raw_symbol.strip().upper()
         day, rows = await self._load(as_of)
+        notice = await self._out_of_range(as_of) if day is None else None
         flow_dates = [row.flow_through for row in rows if row.flow_through]
         target = next((row for row in rows if row.symbol == symbol), None)
         entry = None
@@ -622,8 +817,9 @@ class ScreenerService:
             symbol=symbol,
             as_of=as_of or day,
             data_through=day,
-            flow_through=target.flow_through if target else max(flow_dates, default=None),
+            flow_through=target.flow_through if target else min(flow_dates, default=None),
             universe=len(rows),
+            notice=notice,
             entry=entry,
         )
 

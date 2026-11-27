@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from quant_signal.application.holders_data import refresh_holders_data
 from quant_signal.application.market_industry import refresh_industries
@@ -30,6 +30,8 @@ _official_attempts: dict[str, datetime] = {}
 # Upkeep catch-up of the factor snapshot is checked at most this often.
 SCREENER_UPKEEP_EVERY = timedelta(minutes=10)
 _screener_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
+# Dates already computed for their current source rows, so upkeep does not redo them.
+_screener_settled: dict[date, tuple[tuple, bool]] = {}
 
 
 async def _refresh_screener(repository: QuantRepository, *, recompute_latest: bool) -> None:
@@ -40,6 +42,7 @@ async def _refresh_screener(repository: QuantRepository, *, recompute_latest: bo
         retention_sessions=settings.screener_retention_sessions,
         backfill_sessions=settings.screener_backfill_sessions,
         recompute_latest=recompute_latest,
+        settled=_screener_settled,
     )
     if done:
         logger.info("screener snapshot computed for %s", ", ".join(d.isoformat() for d in done))
@@ -49,6 +52,8 @@ async def _after_market_sync(repository: QuantRepository) -> None:
     # Flow and credit reports arrive after the quotes, so every market sync rebuilds the
     # newest date.
     await _refresh_screener(repository, recompute_latest=True)
+
+
 _holders_attempts: dict[str, datetime] = {}
 
 
@@ -62,9 +67,7 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
         )
         if recovered:
             logger.warning("requeued %s sync jobs stuck in running", recovered)
-        await ensure_market_snapshots(
-            repository, lookback_days=settings.sync_market_lookback_days
-        )
+        await ensure_market_snapshots(repository, lookback_days=settings.sync_market_lookback_days)
         now = datetime.now(UTC)
         if now - _industry_attempt["at"] >= INDUSTRY_RETRY_AFTER:
             _industry_attempt["at"] = now

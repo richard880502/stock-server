@@ -6,7 +6,12 @@ from collections.abc import AsyncIterator
 from datetime import date
 from typing import Any
 
-from quant_signal.domain.models import MarketFactorSnapshot, MarketStockDay
+from quant_signal.domain.models import (
+    MarketFactorSnapshot,
+    MarketFactorState,
+    MarketSession,
+    MarketStockDay,
+)
 
 
 class MemoryFactorDataMixin:
@@ -25,6 +30,58 @@ class MemoryFactorDataMixin:
             if item.market not in result or item.trading_date > result[item.market]:
                 result[item.market] = item.trading_date
         return result
+
+    async def market_session_calendar(
+        self, end: date, sessions: int
+    ) -> dict[str, list[MarketSession]]:
+        days = sorted(
+            {i.trading_date for i in self.market_stock_days.values() if i.trading_date <= end}
+        )
+        if not days:
+            return {}
+        oldest = days[-sessions:][0]
+        grouped: dict[tuple[str, date], list[MarketStockDay]] = {}
+        for item in self.market_stock_days.values():
+            if oldest <= item.trading_date <= end:
+                grouped.setdefault((item.market, item.trading_date), []).append(item)
+        out: dict[str, list[MarketSession]] = {}
+        for (market, day), items in sorted(grouped.items()):
+            out.setdefault(market, []).append(
+                MarketSession(
+                    trading_date=day,
+                    rows=len({i.symbol for i in items}),
+                    reported=any(i.foreign_net is not None for i in items),
+                    available_at=max(i.available_at for i in items),
+                )
+            )
+        return out
+
+    async def market_factor_state(
+        self, version: str, dates: list[date]
+    ) -> dict[date, MarketFactorState]:
+        out: dict[date, MarketFactorState] = {}
+        for day in dates:
+            rows = self._factors().get((version, day))
+            if not rows:
+                continue
+            counts: dict[str, int] = {}
+            flows: dict[str, date | None] = {}
+            for row in rows:
+                counts[row.market] = counts.get(row.market, 0) + 1
+                current = flows.get(row.market)
+                if row.flow_through and (current is None or row.flow_through > current):
+                    flows[row.market] = row.flow_through
+                else:
+                    flows[row.market] = current
+            out[day] = MarketFactorState(
+                available_at=max(row.available_at for row in rows),
+                rows=counts,
+                flow_through=flows,
+            )
+        return out
+
+    async def delete_market_factors(self, trading_date: date, version: str) -> int:
+        return len(self._factors().pop((version, trading_date), []))
 
     async def iter_market_histories(
         self, end: date, sessions: int
@@ -67,6 +124,9 @@ class MemoryFactorDataMixin:
     async def replace_market_factors(
         self, trading_date: date, version: str, rows: list[MarketFactorSnapshot]
     ) -> int:
+        if not rows:  # same as the Postgres twin: nothing to keep for this date
+            self._factors().pop((version, trading_date), None)
+            return 0
         self._factors()[(version, trading_date)] = list(rows)
         return len(rows)
 

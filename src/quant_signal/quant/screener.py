@@ -139,7 +139,7 @@ METRICS: tuple[MetricDef, ...] = (
         "price",
         "%",
         1,
-        "還原收盤價相對近 250 個交易日最高價的差距（不大於 0）",
+        "還原收盤價相對近 250 個交易日最高還原收盤價的差距（不大於 0）",
     ),
     _m(
         "trend_aligned",
@@ -180,6 +180,15 @@ METRICS: tuple[MetricDef, ...] = (
         None,
     ),
     _m("sessions", "資料天數", "liquidity", "日", 0, "用於計算的歷史交易日數", None),
+    _m(
+        "traded_days_20d",
+        "近 20 日有成交天數",
+        "liquidity",
+        "日",
+        0,
+        "最近 20 個市場交易日中，該股實際有成交（成交量大於 0）的天數",
+        None,
+    ),
     _m("volatility_20d", "20 日波動率", "risk", "%", 1, "近 20 日日報酬標準差年化", False),
     _m("max_drawdown_60d", "60 日最大回檔", "risk", "%", 1, "近 60 日還原價相對前高的最大跌幅"),
     _m("foreign_net_5d", "外資 5 日買賣超", "flow", "張", 0, "外資近 5 個有資料日淨買超"),
@@ -392,11 +401,79 @@ FACTOR_LABELS: dict[str, tuple[str, str]] = {
     "trend": ("趨勢", "股價相對 20/60/120 日均線乖離的全市場百分位"),
     "flow": ("資金流向", "法人買超佔成交量與股本、買超日占比、CMF 與融資變化的全市場百分位"),
     "accumulation": (
-        "低調吸籌",
-        "法人長期持續買超、大戶增持且散戶減少、但股價尚未大幅波動的程度（百分位；集保資料缺時重新配權）",
+        "緩步流入",
+        "近 60 個交易日法人多數日子淨買超、400 張以上大戶持股比例上升、近 20 日股價漲跌幅不大的程度"
+        "（百分位；集保資料缺時重新配權）",
     ),
     "fundamental": ("營收", "最新月營收年增率與累計年增率的全市場百分位"),
     "stability": ("穩定度", "低波動與較小回檔的全市場百分位"),
+}
+
+# Compact column headers (at most 8 full-width characters) for narrow tables; ``label`` stays
+# the full name. Every metric key and every score key (plus ``composite``) has one.
+SHORT_LABELS: dict[str, str] = {
+    "composite": "綜合評分",
+    "momentum": "價格動能",
+    "trend": "趨勢",
+    "flow": "資金流向",
+    "accumulation": "緩步流入",
+    "fundamental": "營收",
+    "stability": "穩定度",
+    "change_pct": "單日漲跌",
+    "ret_5d": "5日報酬",
+    "ret_20d": "20日報酬",
+    "ret_60d": "60日報酬",
+    "ret_120d": "120日報酬",
+    "ma20_gap_pct": "距20日均線",
+    "ma60_gap_pct": "距60日均線",
+    "ma120_gap_pct": "距120日均線",
+    "high_52w_gap_pct": "距52週高點",
+    "trend_aligned": "均線多頭",
+    "avg_turnover_20d": "20日均成交值",
+    "volume_ratio_5_60": "5/60量比",
+    "market_cap": "市值",
+    "turnover_rate_20d": "20日週轉率",
+    "sessions": "資料天數",
+    "traded_days_20d": "20日成交日",
+    "volatility_20d": "20日波動率",
+    "max_drawdown_60d": "60日最大回檔",
+    "foreign_net_5d": "外資5日買賣",
+    "foreign_net_20d": "外資20日買賣",
+    "foreign_net_60d": "外資60日買賣",
+    "trust_net_5d": "投信5日買賣",
+    "trust_net_20d": "投信20日買賣",
+    "trust_net_60d": "投信60日買賣",
+    "dealer_net_20d": "自營20日買賣",
+    "total_net_5d": "法人5日買賣",
+    "total_net_20d": "法人20日買賣",
+    "total_net_60d": "法人60日買賣",
+    "inst_flow_ratio_20d": "法人20日佔量",
+    "inst_flow_ratio_60d": "法人60日佔量",
+    "foreign_flow_ratio_20d": "外資20日佔量",
+    "trust_flow_ratio_20d": "投信20日佔量",
+    "foreign_streak": "外資連買賣",
+    "trust_streak": "投信連買賣",
+    "inst_buy_days_20d": "20日買超天數比",
+    "inst_buy_days_60d": "60日買超天數比",
+    "inst_flow_to_shares_20d": "法人20日佔股本",
+    "inst_flow_to_shares_60d": "法人60日佔股本",
+    "cmf_20": "20日CMF",
+    "up_volume_ratio_20d": "20日上漲量比",
+    "margin_change_20d_pct": "融資20日變化",
+    "short_change_20d_pct": "融券20日變化",
+    "chip_transfer_20d": "法人買融資退",
+    "revenue_period": "營收月份",
+    "revenue_yoy_pct": "營收年增",
+    "revenue_mom_pct": "營收月增",
+    "revenue_cum_yoy_pct": "累計營收年增",
+    "big_holder_pct": "400張大戶持股",
+    "whale_pct": "千張大戶持股",
+    "big_holder_pct_change": "大戶持股變化",
+    "whale_pct_change": "千張大戶變化",
+    "retail_holders_change_pct": "散戶人數變化",
+    "holders_weeks_span": "比較間隔",
+    "holders_data_date": "集保資料日",
+    "foreign_holding_pct": "外資持股",
 }
 
 # ------------------------------------------------------------------------- input
@@ -457,6 +534,54 @@ def history_from_rows(symbol: str, name: str, market: str, rows: list[tuple]) ->
         short_balance=_arr(columns[13]),
         short_change=_arr(columns[14]),
     )
+
+
+def align_rows(
+    rows: list[tuple], sessions: list[date], reported: set[date] | frozenset[date]
+) -> list[tuple]:
+    """Align one stock's traded rows to its market's session calendar.
+
+    The data sources drop no-trade rows, so the rows alone would make "20 sessions" mean
+    "20 traded days". From the stock's first row onward every market session gets a row:
+    a missing one is a no-trade day (volume and turnover 0, price carried forward, zero
+    change, credit balances carried with a zero change, institutional nets 0 when the
+    market's report exists for that session and unknown otherwise). Nothing is padded
+    before the first row, so new listings stay short.
+    """
+    if not rows:
+        return []
+    by_date = {row[0]: row for row in rows}
+    first = rows[0][0]
+    out: list[tuple] = []
+    previous: tuple | None = None
+    for day in sorted(set(sessions) | set(by_date)):
+        if day < first:
+            continue
+        row = by_date.get(day)
+        if row is None:
+            assert previous is not None  # the first session is the first row itself
+            price = previous[1]
+            net = 0 if day in reported else None
+            row = (
+                day,
+                price,
+                0.0,
+                price,
+                price,
+                0,
+                0.0,
+                net,
+                net,
+                net,
+                net,
+                previous[11],
+                None if previous[11] is None else 0,
+                previous[13],
+                None if previous[13] is None else 0,
+            )
+        out.append(row)
+        previous = row
+    return out
 
 
 # -------------------------------------------------------------------- price maths
@@ -522,15 +647,24 @@ def _volatility(returns: np.ndarray, window: int) -> float | None:
 
 
 def chaikin_money_flow(
-    high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    volume: np.ndarray,
+    change: np.ndarray | None = None,
 ) -> float | None:
-    """Sum of money-flow volume over sum of volume (inputs are the window itself)."""
+    """Sum of money-flow volume over sum of volume (inputs are the window itself).
+
+    A bar with no range (high == low, e.g. locked limit up/down) uses the sign of its
+    price ``change`` as the multiplier (+1 up, -1 down, 0 flat) instead of 0.
+    """
     total = float(np.sum(volume))
     if total <= 0:
         return None
     span = high - low
+    locked = np.sign(np.nan_to_num(change)) if change is not None else np.zeros_like(span)
     with np.errstate(divide="ignore", invalid="ignore"):
-        multiplier = np.where(span > 0, ((close - low) - (high - close)) / span, 0.0)
+        multiplier = np.where(span > 0, ((close - low) - (high - close)) / span, locked)
     return float(np.sum(multiplier * volume)) / total
 
 
@@ -538,9 +672,18 @@ def chaikin_money_flow(
 
 
 def _flow_window(values: np.ndarray, end: int, size: int) -> np.ndarray | None:
-    """Slice of ``size`` sessions ending at index ``end`` (inclusive)."""
+    """Slice of ``size`` sessions ending at index ``end`` (inclusive).
+
+    When the newest report is not out yet (``end`` is before the last session) a stock
+    that does have ``size`` sessions gets the shorter window ending at ``end``; callers
+    still require half of ``size`` reported sessions inside it.
+    """
     start = end + 1 - size
-    return values[start : end + 1] if start >= 0 else None
+    if start >= 0:
+        return values[start : end + 1]
+    if len(values) >= size and end >= 0:
+        return values[: end + 1]
+    return None
 
 
 def _flow_sum_lots(values: np.ndarray, end: int, size: int) -> float | None:
@@ -667,6 +810,7 @@ def compute_metrics(
     avg60 = float(np.mean(volume[-60:])) if n >= 60 else 0.0
     m["volume_ratio_5_60"] = float(np.mean(volume[-5:])) / avg60 if avg60 > 0 else None
     m["sessions"] = n
+    m["traded_days_20d"] = int(np.sum(volume[-20:] > 0))
     m["volatility_20d"] = _volatility(returns, 20)
     m["max_drawdown_60d"] = _max_drawdown(adjusted, 60)
 
@@ -696,7 +840,7 @@ def compute_metrics(
 
     tail = slice(-20, None)
     m["cmf_20"] = chaikin_money_flow(
-        history.high[tail], history.low[tail], close[tail], volume[tail]
+        history.high[tail], history.low[tail], close[tail], volume[tail], history.change[tail]
     )
     traded = float(np.sum(volume[tail]))
     up = float(np.sum(volume[tail][history.change[tail] > 0]))
@@ -822,7 +966,7 @@ def build_highlights(metrics: dict[str, Any], flags: list[str], limit: int = 4) 
     elif "attention" in flags:
         add(0.7, "注意股")
     if val("chip_transfer_20d") is True:
-        add(0.95, "法人買、融資退（籌碼轉強）")
+        add(0.95, "法人買、融資退")
     for key, who in (("trust_streak", "投信"), ("foreign_streak", "外資")):
         streak = val(key)
         if streak is not None and streak >= 3:
@@ -841,7 +985,10 @@ def build_highlights(metrics: dict[str, Any], flags: list[str], limit: int = 4) 
         add(0.3 + min(margin, 30) / 60, f"融資 20 日增 {_num(margin)}%")
     yoy = val("revenue_yoy_pct")
     if yoy is not None and yoy >= 20:
-        add(0.3 + min(yoy, 100) / 200, f"營收年增 {_num(yoy)}%")
+        if yoy >= 1000:
+            add(0.3 + 0.5, f"營收年增逾 {math.floor(yoy / 100)} 倍")
+        else:
+            add(0.3 + min(yoy, 100) / 200, f"營收年增 {_num(yoy)}%")
     elif yoy is not None and yoy <= -20:
         add(0.3 + min(-yoy, 100) / 200, f"營收年減 {_num(yoy)}%")
     gap = val("high_52w_gap_pct")

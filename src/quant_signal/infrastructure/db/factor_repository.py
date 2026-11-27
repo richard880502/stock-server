@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from quant_signal.domain.models import MarketFactorSnapshot
+from quant_signal.domain.models import MarketFactorSnapshot, MarketFactorState, MarketSession
 from quant_signal.infrastructure.db.models import MarketFactorDailyRow, MarketStockDayRow
 
 CHUNK = 400
@@ -49,6 +49,90 @@ class FactorDataRepositoryMixin:
         )
         return {market: day for market, day in (await self.session.execute(statement)).all()}
 
+    async def _window_start(self, end: date, sessions: int) -> date | None:
+        dates = (
+            select(MarketStockDayRow.trading_date)
+            .where(MarketStockDayRow.trading_date <= end)
+            .group_by(MarketStockDayRow.trading_date)
+            .order_by(MarketStockDayRow.trading_date.desc())
+            .limit(sessions)
+        )
+        statement = select(func.min(dates.subquery().c.trading_date))
+        return (await self.session.execute(statement)).scalar()
+
+    async def market_session_calendar(
+        self, end: date, sessions: int
+    ) -> dict[str, list[MarketSession]]:
+        """Per market, its trading dates in the last ``sessions`` dates ≤ ``end`` (oldest first).
+
+        Each carries the number of distinct stocks quoted, whether the institutional
+        report is published and the newest ``available_at`` of its rows.
+        """
+        oldest = await self._window_start(end, sessions)
+        if oldest is None:
+            return {}
+        statement = (
+            select(
+                MarketStockDayRow.market,
+                MarketStockDayRow.trading_date,
+                func.count(func.distinct(MarketStockDayRow.symbol)),
+                func.bool_or(MarketStockDayRow.foreign_net.is_not(None)),
+                func.max(MarketStockDayRow.available_at),
+            )
+            .where(MarketStockDayRow.trading_date >= oldest, MarketStockDayRow.trading_date <= end)
+            .group_by(MarketStockDayRow.market, MarketStockDayRow.trading_date)
+            .order_by(MarketStockDayRow.market, MarketStockDayRow.trading_date)
+        )
+        out: dict[str, list[MarketSession]] = {}
+        for market, day, rows, reported, at in (await self.session.execute(statement)).all():
+            out.setdefault(market, []).append(
+                MarketSession(trading_date=day, rows=rows, reported=bool(reported), available_at=at)
+            )
+        return out
+
+    async def market_factor_state(
+        self, version: str, dates: list[date]
+    ) -> dict[date, MarketFactorState]:
+        """Per stored snapshot date: when it was built and its per-market rows / flow dates."""
+        if not dates:
+            return {}
+        statement = (
+            select(
+                MarketFactorDailyRow.trading_date,
+                MarketFactorDailyRow.market,
+                func.count(),
+                func.max(MarketFactorDailyRow.available_at),
+                func.max(MarketFactorDailyRow.flow_through),
+            )
+            .where(
+                MarketFactorDailyRow.version == version,
+                MarketFactorDailyRow.trading_date.in_(dates),
+            )
+            .group_by(MarketFactorDailyRow.trading_date, MarketFactorDailyRow.market)
+        )
+        built: dict[date, dict[str, Any]] = {}
+        for day, market, count, at, flow in (await self.session.execute(statement)).all():
+            entry = built.setdefault(day, {"at": at, "rows": {}, "flow": {}})
+            entry["at"] = max(entry["at"], at)
+            entry["rows"][market] = count
+            entry["flow"][market] = flow
+        return {
+            day: MarketFactorState(
+                available_at=entry["at"], rows=entry["rows"], flow_through=entry["flow"]
+            )
+            for day, entry in built.items()
+        }
+
+    async def delete_market_factors(self, trading_date: date, version: str) -> int:
+        result = await self.session.execute(
+            delete(MarketFactorDailyRow).where(
+                MarketFactorDailyRow.trading_date == trading_date,
+                MarketFactorDailyRow.version == version,
+            )
+        )
+        await self.session.commit()
+        return result.rowcount or 0
+
     async def iter_market_histories(
         self, end: date, sessions: int
     ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]:
@@ -58,16 +142,7 @@ class FactorDataRepositoryMixin:
         symbol at a time from a server-side cursor, so the ~500k rows are never held
         together. Do not use the session for anything else until the iterator is drained.
         """
-        dates = (
-            select(MarketStockDayRow.trading_date)
-            .where(MarketStockDayRow.trading_date <= end)
-            .group_by(MarketStockDayRow.trading_date)
-            .order_by(MarketStockDayRow.trading_date.desc())
-            .limit(sessions)
-        )
-        oldest = (
-            await self.session.execute(select(func.min(dates.subquery().c.trading_date)))
-        ).scalar()
+        oldest = await self._window_start(end, sessions)
         if oldest is None:
             return
         statement = (

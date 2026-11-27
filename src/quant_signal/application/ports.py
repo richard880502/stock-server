@@ -23,9 +23,11 @@ from quant_signal.domain.models import (
     MarketEnvironmentSnapshot,
     MarketEvent,
     MarketFactorSnapshot,
+    MarketFactorState,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
+    MarketSession,
     MarketStockDay,
     MonthlyRevenue,
     NewsItem,
@@ -292,6 +294,16 @@ class QuantRepository(Protocol):
     def iter_market_histories(
         self, end: date, sessions: int
     ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]: ...
+
+    async def market_session_calendar(
+        self, end: date, sessions: int
+    ) -> dict[str, list[MarketSession]]: ...
+
+    async def market_factor_state(
+        self, version: str, dates: list[date]
+    ) -> dict[date, MarketFactorState]: ...
+
+    async def delete_market_factors(self, trading_date: date, version: str) -> int: ...
 
     async def replace_market_factors(
         self, trading_date: date, version: str, rows: list[MarketFactorSnapshot]

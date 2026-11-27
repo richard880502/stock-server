@@ -434,7 +434,7 @@ def test_highlights_pick_the_strongest_signals_with_real_numbers() -> None:
     }
     out = s.build_highlights(metrics, [])
     assert len(out) == 4
-    assert out[0] == "法人買、融資退（籌碼轉強）"
+    assert out[0] == "法人買、融資退"
     assert "投信連買 8 日" in out
     assert "外資連賣 12 日" in out  # negative facts are surfaced too
     assert "法人 20 日買超佔成交量 6.2%" in out
@@ -555,3 +555,102 @@ def test_holder_highlights_state_the_real_span_without_advice() -> None:
     ) == ["散戶人數 1 週減 3.1%"]
     for text in out:
         assert not any(word in text for word in ADVICE)
+
+
+# --------------------------------------------------------- sessions, locked bars, wording
+
+
+def _row(day, close=100.0, *, volume=1000, net=0.0, margin=None, short=None):
+    return (
+        day,
+        close,
+        0.0,
+        close,
+        close,
+        volume,
+        volume * close,
+        net,
+        net,
+        net,
+        net,
+        margin,
+        0,
+        short,
+        0,
+    )
+
+
+def test_align_rows_fills_no_trade_sessions_from_the_first_row_only() -> None:
+    days = _days(8)
+    rows = [_row(days[2], 50.0, net=7.0, margin=900, short=40), _row(days[5], 55.0, net=3.0)]
+    reported = {days[3], days[6]}
+    out = s.align_rows(rows, days, reported)
+    assert [r[0] for r in out] == days[2:]  # nothing before the first appearance
+    gap = out[1]  # days[3]: no row, report exists -> zero flow, price carried
+    assert gap[1:7] == (50.0, 0.0, 50.0, 50.0, 0, 0.0)
+    assert gap[7:11] == (0, 0, 0, 0)
+    assert gap[11:] == (900, 0, 40, 0)  # credit balance carried, change 0
+    unknown = out[2]  # days[4]: no row, no report -> unknown flow
+    assert unknown[7:11] == (None, None, None, None)
+    assert out[3] == rows[1]  # real rows are untouched
+    assert out[4][1] == 55.0 and out[4][5] == 0  # carried from the latest close
+    assert s.align_rows([], days, reported) == []
+
+
+def test_thin_stock_windows_count_market_sessions_not_traded_days() -> None:
+    days = _days(40)
+    traded = {d for i, d in enumerate(days) if (len(days) - 1 - i) % 5 == 0}
+    rows = [_row(d, 100.0, volume=300_000) for d in days if d in traded]
+    aligned = s.align_rows(rows, days[rows and days.index(rows[0][0]) :], set(days))
+    m = s.compute_metrics(s.history_from_rows("X.TW", "x", "TW", aligned), days[-1])
+    assert m is not None
+    assert m["avg_turnover_20d"] == pytest.approx(4 * 30_000_000 / 20)  # not 30M
+    assert m["traded_days_20d"] == 4
+    assert m["sessions"] == len(aligned)
+    # without alignment the same rows would read as 20 liquid days
+    raw = s.compute_metrics(s.history_from_rows("X.TW", "x", "TW", rows), days[-1])
+    assert raw is None or raw["avg_turnover_20d"] != m["avg_turnover_20d"]
+
+
+def test_flow_window_survives_a_missing_newest_report() -> None:
+    history = _history([100.0] * 20, total=[1000.0] * 20)
+    m = s.compute_metrics(history, history.dates[-2])  # newest report not out yet
+    assert m is not None
+    assert m["total_net_20d"] == pytest.approx(19.0)  # 19 reported sessions >= ceil(20 / 2)
+    assert m["inst_buy_days_20d"] == pytest.approx(100.0)
+    assert m["inst_flow_ratio_20d"] == pytest.approx(10.0)
+    assert m["total_net_60d"] is None  # still too young for 60 sessions
+    thin = _history([100.0] * 20, total=[None] * 12 + [1000.0] * 7 + [None])
+    assert s.compute_metrics(thin, thin.dates[-2])["total_net_20d"] is None  # type: ignore[index]
+
+
+def test_cmf_uses_the_price_direction_on_locked_bars() -> None:
+    flat = np.array([10.0, 10.0])
+    volume = np.array([100.0, 100.0])
+    up = s.chaikin_money_flow(flat, flat, flat, volume, np.array([0.5, 0.5]))
+    down = s.chaikin_money_flow(flat, flat, flat, volume, np.array([-0.5, -0.5]))
+    still = s.chaikin_money_flow(flat, flat, flat, volume, np.array([0.0, 0.0]))
+    assert (up, down, still) == (pytest.approx(1.0), pytest.approx(-1.0), pytest.approx(0.0))
+    assert s.chaikin_money_flow(flat, flat, flat, volume) == pytest.approx(0.0)
+    closes = [100.0 + i for i in range(25)]
+    m = s.compute_metrics(_history(closes), None)  # high == low every day, rising
+    assert m is not None and m["cmf_20"] == pytest.approx(1.0)
+
+
+def test_wording_states_facts_and_big_revenue_growth_is_spelled_in_multiples() -> None:
+    assert s.build_highlights({"chip_transfer_20d": True}, []) == ["法人買、融資退"]
+    assert s.build_highlights({"revenue_yoy_pct": 1000.0}, []) == ["營收年增逾 10 倍"]
+    assert s.build_highlights({"revenue_yoy_pct": 25_340.5}, []) == ["營收年增逾 253 倍"]
+    assert s.build_highlights({"revenue_yoy_pct": 999.0}, []) == ["營收年增 999.0%"]
+    assert s.FACTOR_LABELS["accumulation"][0] == "緩步流入"
+    assert "250" in s.METRIC_BY_KEY["high_52w_gap_pct"].description
+    assert "收盤價" in s.METRIC_BY_KEY["high_52w_gap_pct"].description
+
+
+def test_every_metric_and_factor_has_a_short_label() -> None:
+    wanted = {m.key for m in s.METRICS} | set(s.SCORE_KEYS) | {"composite"}
+    assert set(s.SHORT_LABELS) == wanted
+    assert all(0 < len(text) <= 8 for text in s.SHORT_LABELS.values())
+    assert s.SHORT_LABELS["inst_flow_ratio_20d"] == "法人20日佔量"
+    assert s.METRIC_BY_KEY["traded_days_20d"].label == "近 20 日有成交天數"
+    assert s.METRIC_BY_KEY["traded_days_20d"].group == "liquidity"

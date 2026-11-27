@@ -25,8 +25,8 @@ from quant_signal.application.screener import (
     PRESET_BY_KEY,
     ScreenerQueryError,
     ScreenerService,
-    ScreenFilter,
     analyst_view,
+    parse_filter_specs,
 )
 from quant_signal.application.services import (
     BacktestJobService,
@@ -214,25 +214,27 @@ async def screen_market(
     recommendations. Scores are 0-100 percentiles within the snapshot. ``preset`` picks
     a ready-made screen (its filters and sort are defaults). ``filters`` is a list of
     ``{"key": "ret_20d", "min": -8, "max": 8}`` bounds (either optional) or
-    ``{"key": "trend_aligned", "equals": true}`` for boolean metrics; ``sort`` is a score
+    ``{"key": "trend_aligned", "equals": true}`` for boolean metrics (``equals: false`` and
+    non-numeric or non-finite bounds are rejected with an ``error`` field); ``sort`` is a score
     (composite, momentum, trend, flow, accumulation, fundamental, stability) or a numeric
     metric key. 處置股 are excluded. Money-flow values are in lots (張). An empty result
     with snapshot_pending=true means no snapshot has been computed yet.
     """
-    numeric: list[ScreenFilter] = []
-    flags: list[str] = []
-    for item in filters or []:
-        if item.get("equals") is True:
-            flags.append(str(item["key"]))
-        else:
-            numeric.append(
-                ScreenFilter(key=str(item["key"]), min=item.get("min"), max=item.get("max"))
-            )
+    try:
+        numeric, flags = parse_filter_specs(filters)
+        as_of_date = date.fromisoformat(as_of) if as_of else None
+    except ScreenerQueryError as exc:
+        return {"error": str(exc)}
+    except ValueError:
+        return {"error": f"as_of must be an ISO date (YYYY-MM-DD): {as_of!r}"}
     async with session_factory() as session:
         try:
-            result = await ScreenerService(PostgresQuantRepository(session)).screen(
+            result = await ScreenerService(
+                PostgresQuantRepository(session),
+                retention_sessions=get_settings().screener_retention_sessions,
+            ).screen(
                 market=market,
-                as_of=date.fromisoformat(as_of) if as_of else None,
+                as_of=as_of_date,
                 preset=preset,
                 sort=sort,
                 order=order,
