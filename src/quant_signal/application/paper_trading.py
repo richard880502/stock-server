@@ -451,8 +451,9 @@ class PaperService:
             queued=queued,
         )
         if view is None or not view.known:
+            symbol = request.symbol.strip().upper()
             result.reject_reason = (
-                f"找不到股票 {request.symbol.strip().upper()}（目前只支援上市櫃普通股，ETF 尚未收錄）"
+                f"找不到股票 {symbol}（目前只支援上市櫃普通股，ETF 尚未收錄）"
             )
             return result
         etf = symbol_is_etf(symbol)
