@@ -1,5 +1,7 @@
+import asyncio
 import json
 import sys
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from quant_signal.adapters.rest.main import create_app
 from quant_signal.application.quote_cache import parse_symbols
+from quant_signal.infrastructure.providers import shioaji_feed
 from quant_signal.infrastructure.providers.shioaji_feed import ShioajiFeed
 from quant_signal.settings import get_settings
 from quant_signal.workers.quotes import MinuteBuffer
@@ -102,7 +105,7 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
     login = {}
     api = SimpleNamespace(
         quote=callbacks,
-        Contracts=SimpleNamespace(Stocks={"2330": contract}),
+        Contracts=SimpleNamespace(Stocks={"2330": contract}, status="Fetched"),
         login=lambda **kwargs: login.update(kwargs),
         logout=lambda: None,
     )
@@ -143,6 +146,80 @@ def test_sdk_callback_is_json_safe_and_filters_trial_odd_lot_and_wrong_market(mo
     assert "day_high" not in events[0] and "day_low" not in events[0]
     assert json.loads(json.dumps(events[0]))["price"] == 100
     feed.close()
+
+
+def _fake_sdk(monkeypatch, api):
+    monkeypatch.setitem(
+        sys.modules,
+        "shioaji",
+        SimpleNamespace(
+            Shioaji=lambda **kwargs: api,
+            constant=SimpleNamespace(
+                QuoteType=SimpleNamespace(Tick="tick"), QuoteVersion=SimpleNamespace(v1="v1")
+            ),
+        ),
+    )
+
+
+def test_login_waits_for_contracts_and_fails_closed_when_they_never_arrive(monkeypatch):
+    # The SDK's contract lookups sleep in the calling thread until the download ends,
+    # so login must not return before it (and must fail rather than hand out a feed
+    # whose every lookup can block for 30 seconds).
+    login, logouts = {}, []
+    api = SimpleNamespace(
+        quote=SimpleNamespace(
+            set_on_tick_stk_v1_callback=lambda callback: None,
+            set_on_tick_fop_v1_callback=lambda callback: None,
+            set_event_callback=lambda callback: None,
+        ),
+        Contracts=SimpleNamespace(Stocks={}, status="Fetching"),
+        login=lambda **kwargs: login.update(kwargs),
+        logout=lambda: logouts.append(True),
+    )
+    _fake_sdk(monkeypatch, api)
+    monkeypatch.setattr(shioaji_feed, "_CONTRACTS_TIMEOUT_SECONDS", 0.6)
+    feed = ShioajiFeed(get_settings(), lambda event: None, lambda: None)
+    with pytest.raises(RuntimeError):
+        feed.start()
+    assert login["contracts_timeout"] == 600
+    assert logouts == [True]
+    assert feed._api is None
+
+
+class _ThreadRecordingStocks(dict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.threads = []
+
+    def __getitem__(self, key):
+        self.threads.append(threading.get_ident())
+        return super().__getitem__(key)
+
+
+def test_snapshot_and_kbars_contract_lookups_run_off_the_event_loop():
+    stocks = _ThreadRecordingStocks({"2330": SimpleNamespace(exchange="TSE", code="2330")})
+    feed = ShioajiFeed(get_settings(), lambda event: None, lambda: None)
+    feed._api = SimpleNamespace(Contracts=SimpleNamespace(Stocks=stocks))
+    sent = []
+
+    async def fake_query(kind, *args, **kwargs):
+        sent.append((kind, args))
+        return []
+
+    feed._query = fake_query
+
+    async def run():
+        loop_thread = threading.get_ident()
+        assert await feed.snapshot_quotes(["2330.TW", "9999.TWO"]) == []
+        start = datetime(2026, 11, 27, 1, 0, tzinfo=UTC)
+        await feed.minute_bars("2330.TW", start, start.replace(hour=2))
+        return loop_thread
+
+    loop_thread = asyncio.run(run())
+    assert stocks.threads and loop_thread not in stocks.threads
+    assert [kind for kind, _ in sent] == ["snapshots", "kbars"]
+    # Unknown symbols are skipped, not sent.
+    assert len(sent[0][1][0]) == 1
 
 
 def test_quote_health_probes_distinguish_standby_from_stuck_collector():

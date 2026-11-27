@@ -148,7 +148,9 @@ def fake_sdk(monkeypatch, *, kbars_result=None):
     api = SimpleNamespace(
         quote=quote,
         Contracts=SimpleNamespace(
-            Stocks={"2330": stock}, Futures=SimpleNamespace(TXF=SimpleNamespace(TXFR1=future))
+            Stocks={"2330": stock},
+            Futures=SimpleNamespace(TXF=SimpleNamespace(TXFR1=future)),
+            status="Fetched",
         ),
         login=lambda **kwargs: None,
         logout=lambda: None,
