@@ -19,7 +19,8 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   const path = (usePathname() ?? "/").replace(/\/+$/, "");
   const onSignalRoute = path === "";
   // The watchlist page has its own "add a stock" search; the analysis query bar does not apply.
-  const onWatchlistRoute = path === "/watchlist";
+  // The paper-trading page has its own stock picker in the order ticket.
+  const onWatchlistRoute = path === "/watchlist" || path === "/paper";
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   useCommandPaletteShortcut(openPalette);

@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { Direction } from "@/components/direction";
 import type { Signal } from "@/lib/api/types";
 import { actionCopy, actionTone } from "@/lib/copy";
+import { paperLink } from "@/features/paper/paper-math";
 import { directionOf, formatLots, formatPrice, formatSigned, formatSignedPct } from "@/lib/format";
 import type { LiveQuote } from "@/lib/live-quotes";
 import { useNow } from "./rail-now";
@@ -40,6 +42,9 @@ export function QuoteHeader({
           <span className="quote-code">{symbol.replace(/\.TWO?$/, "")}</span>
           {name && <span className="quote-label">{name}</span>}
         </h2>
+        <Link href={paperLink(symbol, "buy")} className="button small quote-paper-link" title="到模擬交易下單，不會送出真實委託">
+          模擬買進
+        </Link>
         {signal && (
           <span className={`rail-badge tone-${actionTone[signal.action]}`} title={`確定性訊號（${signal.as_of}）`}>
             {actionCopy[signal.action].label} {signal.score.toFixed(0)}
