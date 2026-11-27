@@ -37,7 +37,11 @@ from quant_signal.application.llm_analysis import (
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.market_sectors import SectorRotationService, SortKey
-from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
+from quant_signal.application.official_queries import (
+    MarketRiskFlagService,
+    StockEventsService,
+    StockHoldersService,
+)
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
     BacktestJobService,
@@ -93,6 +97,7 @@ from quant_signal.domain.models import (
     SectorStocks,
     SignalSnapshot,
     StockEvents,
+    StockHolders,
     StockOverview,
     Watchlist,
 )
@@ -610,6 +615,22 @@ def create_app() -> FastAPI:
         try:
             return await StockEventsService(repository).get(
                 symbol, as_of=as_of or date.today(), days=days
+            )
+        except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/stocks/{symbol}/holders", response_model=StockHolders)
+    async def stock_holders(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+        weeks: Annotated[int, Query(ge=1, le=260)] = 26,
+    ) -> StockHolders:
+        """Weekly big-holder concentration (TDCC, >=400 / >=1,000 lots) plus the latest
+        shares outstanding and foreign holding, point-in-time as of ``as_of``."""
+        try:
+            return await StockHoldersService(repository).get(
+                symbol, as_of=as_of or date.today(), weeks=weeks
             )
         except StockNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

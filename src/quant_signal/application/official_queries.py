@@ -9,9 +9,11 @@ from quant_signal.application.ports import QuantRepository
 from quant_signal.application.stocks import normalize_listed_symbol
 from quant_signal.domain.models import (
     ClassifiedEvent,
+    HolderPoint,
     MarketEvent,
     MarketRiskFlags,
     StockEvents,
+    StockHolders,
 )
 from quant_signal.quant.event_classifier import classify_material
 from quant_signal.quant.revenue import revenue_metrics
@@ -73,3 +75,36 @@ class MarketRiskFlagService:
     async def get(self, *, as_of: date) -> MarketRiskFlags:
         flags = await self.repository.active_risk_flags(as_of_cutoff(as_of))
         return MarketRiskFlags(as_of=as_of, count=len(flags), flags=flags)
+
+
+HOLDERS_NOTE = (
+    "集保戶股權分散表（每週五基準，週末公布）自本系統啟用日起累積；"
+    "≥400 張/≥1,000 張為持股超過 40 萬/100 萬股之人數與占集保庫存比例，散戶為 10 張以下。"
+    "外資持股與發行股數為最新一個交易日。"
+)
+
+
+class StockHoldersService:
+    def __init__(self, repository: QuantRepository) -> None:
+        self.repository = repository
+
+    async def get(self, raw_symbol: str, *, as_of: date, weeks: int = 26) -> StockHolders:
+        symbol = await normalize_listed_symbol(self.repository, raw_symbol)
+        cutoff = as_of_cutoff(as_of)
+        history = await self.repository.shareholding_history(symbol, cutoff, weeks)
+        foreign = await self.repository.latest_foreign_holding(symbol, cutoff)
+        return StockHolders(
+            symbol=symbol,
+            as_of=as_of,
+            series=[
+                HolderPoint.model_validate(
+                    {name: getattr(row, name) for name in HolderPoint.model_fields}
+                )
+                for row in history
+            ],
+            shares_outstanding=foreign.shares_outstanding if foreign else None,
+            foreign_shares=foreign.foreign_shares if foreign else None,
+            foreign_holding_pct=foreign.foreign_holding_pct if foreign else None,
+            foreign_data_date=foreign.trading_date if foreign else None,
+            note=HOLDERS_NOTE,
+        )

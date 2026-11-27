@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+from quant_signal.application.holders_data import refresh_holders_data
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
 from quant_signal.application.sync_jobs import (
@@ -24,6 +25,7 @@ INDUSTRY_RETRY_AFTER = timedelta(hours=1)
 _industry_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 # Dataset -> last failed attempt for the official events refresh (see application/official_events).
 _official_attempts: dict[str, datetime] = {}
+_holders_attempts: dict[str, datetime] = {}
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -61,6 +63,22 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
             except Exception:
                 # Events are a side feed; never let them stall the price sync.
                 logger.exception("official events refresh failed")
+        if settings.holders_tdcc_enabled or settings.holders_foreign_enabled:
+            try:
+                await refresh_holders_data(
+                    repository,
+                    twse,
+                    tpex,
+                    now=now,
+                    attempts=_holders_attempts,
+                    tdcc_enabled=settings.holders_tdcc_enabled,
+                    foreign_enabled=settings.holders_foreign_enabled,
+                    foreign_window=settings.holders_foreign_days,
+                    retry_after=timedelta(minutes=settings.holders_retry_minutes),
+                )
+            except Exception:
+                # Holder data is a side feed; never let it stall the price sync.
+                logger.exception("holders data refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),
