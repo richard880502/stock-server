@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     official_events_enabled: bool = True
     official_events_material_minutes: int = Field(default=30, ge=5, le=240)
     official_events_retry_minutes: float = Field(default=10.0, gt=0)
+    # Whole-market multi-factor screener snapshot (computed by the sync worker, never per request).
+    screener_enabled: bool = True
+    screener_retention_sessions: int = Field(default=60, ge=1)
+    screener_backfill_sessions: int = Field(default=5, ge=1)
     kronos_url: str | None = None
     kronos_api_key: SecretStr = SecretStr("")
     log_level: str = "INFO"

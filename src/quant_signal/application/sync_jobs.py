@@ -9,6 +9,7 @@ throttle is shared by every job.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 
 from quant_signal.application.data_sync import (
@@ -93,8 +94,13 @@ async def process_next_job(
     *,
     max_attempts: int,
     today: date | None = None,
+    after_market_sync: Callable[[QuantRepository], Awaitable[object]] | None = None,
 ) -> bool | None:
-    """Run one queued job. ``None``: queue empty; ``True``/``False``: ok/failed."""
+    """Run one queued job. ``None``: queue empty; ``True``/``False``: ok/failed.
+
+    ``after_market_sync`` runs once the last queued MARKET job has completed (e.g. the
+    factor snapshot). It must not raise; if it does anyway the job still counts as done.
+    """
     job = await repository.claim_next_sync_job()
     if job is None:
         return None
@@ -124,6 +130,15 @@ async def process_next_job(
         + report.institutional_flows_inserted
         + report.market_observations_inserted,
     )
+    if (
+        after_market_sync is not None
+        and job.kind is SyncJobKind.MARKET
+        and not await repository.has_active_sync_job(SyncJobKind.MARKET)
+    ):
+        try:
+            await after_market_sync(repository)
+        except Exception:
+            logger.exception("post-market-sync hook failed")
     return True
 
 

@@ -1076,3 +1076,30 @@ class MarketRiskFlags(BaseModel):
     as_of: date
     count: int
     flags: list[RiskFlag]
+
+
+class MarketFactorSnapshot(BaseModel):
+    """One stock's multi-factor row for a trading date (see ``quant/screener.py``).
+
+    ``metrics`` is an open dict so new factors can be added without a migration.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    trading_date: date
+    version: str
+    name: str
+    market: Literal["TW", "TWO"]
+    industry_code: str | None = None
+    industry_name: str | None = None
+    close: float
+    change_pct: float | None = None
+    avg_turnover_20d: float | None = None
+    composite: float | None = None
+    scores: dict[str, float | None] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    highlights: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    flow_through: date | None = None
+    available_at: datetime

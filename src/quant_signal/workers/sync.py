@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
+from quant_signal.application.ports import QuantRepository
+from quant_signal.application.screener import refresh_screener
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
     ensure_market_snapshots,
@@ -24,6 +26,28 @@ INDUSTRY_RETRY_AFTER = timedelta(hours=1)
 _industry_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 # Dataset -> last failed attempt for the official events refresh (see application/official_events).
 _official_attempts: dict[str, datetime] = {}
+# Upkeep catch-up of the factor snapshot is checked at most this often.
+SCREENER_UPKEEP_EVERY = timedelta(minutes=10)
+_screener_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
+
+
+async def _refresh_screener(repository: QuantRepository, *, recompute_latest: bool) -> None:
+    settings = get_settings()
+    done = await refresh_screener(
+        repository,
+        enabled=settings.screener_enabled,
+        retention_sessions=settings.screener_retention_sessions,
+        backfill_sessions=settings.screener_backfill_sessions,
+        recompute_latest=recompute_latest,
+    )
+    if done:
+        logger.info("screener snapshot computed for %s", ", ".join(d.isoformat() for d in done))
+
+
+async def _after_market_sync(repository: QuantRepository) -> None:
+    # Flow and credit reports arrive after the quotes, so every market sync rebuilds the
+    # newest date.
+    await _refresh_screener(repository, recompute_latest=True)
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -68,12 +92,18 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
             lookback_days=settings.sync_lookback_days,
             market_lookback_days=settings.sync_market_lookback_days,
         )
-        return await process_next_job(
+        outcome = await process_next_job(
             repository,
             twse,
             tpex,
             max_attempts=settings.sync_max_attempts,
+            after_market_sync=_after_market_sync,
         )
+        if outcome is None and now - _screener_attempt["at"] >= SCREENER_UPKEEP_EVERY:
+            # Idle: catch up on any date the snapshot is missing (first run, downtime).
+            _screener_attempt["at"] = now
+            await _refresh_screener(repository, recompute_latest=False)
+        return outcome
 
 
 async def run_forever() -> None:
