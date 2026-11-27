@@ -20,6 +20,14 @@ from quant_signal.application.llm_analysis import (
 )
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
+from quant_signal.application.screener import (
+    MCP_DEFAULT_COLUMNS,
+    PRESET_BY_KEY,
+    ScreenerQueryError,
+    ScreenerService,
+    analyst_view,
+    parse_filter_specs,
+)
 from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
@@ -81,9 +89,7 @@ async def get_data_status() -> dict[str, Any]:
 async def search_symbol(query: str) -> list[dict[str, Any]]:
     """Resolve a company name or partial ticker (e.g. "台積電" or "2330") to exact symbols."""
     async with session_factory() as session:
-        matches = await InstrumentSearchService(PostgresQuantRepository(session)).search(
-            query
-        )
+        matches = await InstrumentSearchService(PostgresQuantRepository(session)).search(query)
         return [instrument.model_dump(mode="json") for instrument in matches]
 
 
@@ -153,9 +159,7 @@ async def get_market_regime(
 ) -> dict[str, Any]:
     """Return breadth/capital regime; ^TWII is accepted as a TW compatibility alias."""
     market = "TW" if market_symbol.strip().upper() == "^TWII" else market_symbol
-    return _market_summary(
-        await _get_market_environment(market, as_of, strategy_version)
-    )
+    return _market_summary(await _get_market_environment(market, as_of, strategy_version))
 
 
 async def _get_market_environment(
@@ -164,9 +168,7 @@ async def _get_market_environment(
     strategy_version: str = "market_env_v1",
 ) -> dict[str, Any]:
     async with session_factory() as session:
-        snapshot = await MarketEnvironmentService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await MarketEnvironmentService(PostgresQuantRepository(session)).analyze(
             market.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -182,6 +184,69 @@ async def get_market_environment(
 ) -> dict[str, Any]:
     """Return the complete point-in-time market breadth and capital environment."""
     return await _get_market_environment(market, as_of, strategy_version)
+
+
+@mcp.tool()
+async def screen_market(
+    preset: Literal[
+        "balanced",
+        "money_flow",
+        "quiet_accumulation",
+        "big_holder_increase",
+        "momentum",
+        "revenue_growth",
+        "chip_transfer",
+        "stable",
+    ]
+    | None = None,
+    market: Literal["ALL", "TW", "TWO"] = "ALL",
+    sort: str | None = None,
+    order: Literal["desc", "asc"] = "desc",
+    filters: list[dict[str, Any]] | None = None,
+    industries: list[str] | None = None,
+    limit: int = 20,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """Screen every listed and OTC Taiwan stock on a daily multi-factor snapshot.
+
+    Results are deterministic rankings of official historical data (price momentum,
+    institutional money flow, credit balances, monthly revenue, risk), not
+    recommendations. Scores are 0-100 percentiles within the snapshot. ``preset`` picks
+    a ready-made screen (its filters and sort are defaults). ``filters`` is a list of
+    ``{"key": "ret_20d", "min": -8, "max": 8}`` bounds (either optional) or
+    ``{"key": "trend_aligned", "equals": true}`` for boolean metrics (``equals: false`` and
+    non-numeric or non-finite bounds are rejected with an ``error`` field); ``sort`` is a score
+    (composite, momentum, trend, flow, accumulation, fundamental, stability) or a numeric
+    metric key. 處置股 are excluded. Money-flow values are in lots (張). An empty result
+    with snapshot_pending=true means no snapshot has been computed yet.
+    """
+    try:
+        numeric, flags = parse_filter_specs(filters)
+        as_of_date = date.fromisoformat(as_of) if as_of else None
+    except ScreenerQueryError as exc:
+        return {"error": str(exc)}
+    except ValueError:
+        return {"error": f"as_of must be an ISO date (YYYY-MM-DD): {as_of!r}"}
+    async with session_factory() as session:
+        try:
+            result = await ScreenerService(
+                PostgresQuantRepository(session),
+                retention_sessions=get_settings().screener_retention_sessions,
+            ).screen(
+                market=market,
+                as_of=as_of_date,
+                preset=preset,
+                sort=sort,
+                order=order,
+                filters=numeric,
+                flags=flags,
+                industries=industries,
+                limit=max(1, min(limit, 50)),
+            )
+        except ScreenerQueryError as exc:
+            return {"error": str(exc)}
+        columns = [*(PRESET_BY_KEY[preset]["columns"] if preset else []), *MCP_DEFAULT_COLUMNS]
+        return analyst_view(result, columns)
 
 
 @mcp.tool()
@@ -283,9 +348,7 @@ async def analyze_chip_flow(
 ) -> dict[str, Any]:
     """Analyze official institutional flows and optional licensed branch activity."""
     async with session_factory() as session:
-        snapshot = await ChipFlowService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await ChipFlowService(PostgresQuantRepository(session)).analyze(
             symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -301,9 +364,7 @@ async def analyze_news_sentiment(
 ) -> dict[str, Any]:
     """Aggregate point-in-time-classified news headlines into a sentiment score."""
     async with session_factory() as session:
-        snapshot = await NewsSentimentService(
-            PostgresQuantRepository(session)
-        ).analyze(
+        snapshot = await NewsSentimentService(PostgresQuantRepository(session)).analyze(
             symbol.strip().upper(),
             as_of=_resolve_as_of(as_of),
             strategy_version=strategy_version,
@@ -312,9 +373,7 @@ async def analyze_news_sentiment(
 
 
 @mcp.tool()
-async def get_stock_events(
-    symbol: str, as_of: str | None = None, days: int = 30
-) -> dict[str, Any]:
+async def get_stock_events(symbol: str, as_of: str | None = None, days: int = 30) -> dict[str, Any]:
     """Official announcements (重大訊息, 除權息) with rule-based category/polarity, active
     disposition/attention flags and monthly-revenue metrics for one stock."""
     async with session_factory() as session:
@@ -501,7 +560,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 def _extract_raw_key(headers) -> str | None:
     authorization = headers.get("authorization")
     if authorization and authorization.lower().startswith("bearer "):
-        return authorization[len("bearer "):].strip()
+        return authorization[len("bearer ") :].strip()
     x_api_key = headers.get("x-api-key")
     return x_api_key.strip() if x_api_key else None
 

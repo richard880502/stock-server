@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import re
 import secrets
 from collections.abc import AsyncIterator
@@ -37,8 +38,19 @@ from quant_signal.application.llm_analysis import (
 from quant_signal.application.market_backfill import MarketBackfillService
 from quant_signal.application.market_rankings import MarketRankingService
 from quant_signal.application.market_sectors import SectorRotationService, SortKey
-from quant_signal.application.official_queries import MarketRiskFlagService, StockEventsService
+from quant_signal.application.official_queries import (
+    MarketRiskFlagService,
+    StockEventsService,
+    StockHoldersService,
+)
 from quant_signal.application.ports import QuantRepository
+from quant_signal.application.screener import (
+    ScreenerQueryError,
+    ScreenerResult,
+    ScreenerService,
+    ScreenFilter,
+    StockFactors,
+)
 from quant_signal.application.services import (
     BacktestJobService,
     ChipFlowService,
@@ -93,6 +105,7 @@ from quant_signal.domain.models import (
     SectorStocks,
     SignalSnapshot,
     StockEvents,
+    StockHolders,
     StockOverview,
     Watchlist,
 )
@@ -162,6 +175,29 @@ async def get_repository() -> AsyncIterator[QuantRepository]:
     async with session_factory() as session:
         yield PostgresQuantRepository(session)
 
+
+
+def _retention() -> int:
+    return get_settings().screener_retention_sessions
+
+
+def _parse_screener_filter(raw: str) -> ScreenFilter:
+    """``key:min:max`` with either bound optional (``ret_20d:-8:8``, ``revenue_yoy_pct:20:``)."""
+    parts = raw.split(":")
+    if len(parts) != 3 or not parts[0]:
+        raise HTTPException(status_code=422, detail=f"invalid filter {raw!r}: use key:min:max")
+    try:
+        low = float(parts[1]) if parts[1].strip() else None
+        high = float(parts[2]) if parts[2].strip() else None
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"invalid filter {raw!r}: bounds must be numbers"
+        ) from None
+    if not all(bound is None or math.isfinite(bound) for bound in (low, high)):
+        raise HTTPException(
+            status_code=422, detail=f"invalid filter {raw!r}: bounds must be finite numbers"
+        )
+    return ScreenFilter(key=parts[0].strip(), min=low, max=high)
 
 def password_login_ready(settings) -> bool:
     """Password login is usable only with both a password and an API key to hand out."""
@@ -572,6 +608,59 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @router.get("/market/screener/meta")
+    async def market_screener_meta(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+    ) -> dict:
+        """Factor, metric, preset and industry catalogue for the screener UI."""
+        return await ScreenerService(repository).meta()
+
+    @router.get("/market/screener", response_model=ScreenerResult)
+    async def market_screener(
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        market: Literal["ALL", "TW", "TWO"] = "ALL",
+        as_of: Annotated[date | None, Query()] = None,
+        preset: Annotated[str | None, Query()] = None,
+        sort: Annotated[str | None, Query()] = None,
+        order: Literal["desc", "asc"] | None = None,
+        f: Annotated[list[str] | None, Query(description="key:min:max, repeatable")] = None,
+        flag: Annotated[list[str] | None, Query()] = None,
+        industry: Annotated[list[str] | None, Query()] = None,
+        exclude_risk: bool = True,
+        q: Annotated[str | None, Query(max_length=40)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> ScreenerResult:
+        """Whole-market multi-factor screen over the latest stored daily snapshot."""
+        try:
+            return await ScreenerService(repository, retention_sessions=_retention()).screen(
+                market=market,
+                as_of=as_of,
+                preset=preset,
+                sort=sort,
+                order=order,
+                filters=[_parse_screener_filter(item) for item in f or []],
+                flags=flag,
+                industries=industry,
+                exclude_risk=exclude_risk,
+                q=q,
+                limit=limit,
+                offset=offset,
+            )
+        except ScreenerQueryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @router.get("/stocks/{symbol}/factors", response_model=StockFactors)
+    async def stock_factors(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+    ) -> StockFactors:
+        """One stock's factor row from the snapshot (``entry`` is null if not in it)."""
+        return await ScreenerService(repository, retention_sessions=_retention()).stock(
+            symbol, as_of=as_of
+        )
+
     @router.get("/market/backfill-status", response_model=list[MarketBackfillStatus])
     async def market_backfill_status(
         repository: Annotated[QuantRepository, Depends(get_repository)],
@@ -610,6 +699,22 @@ def create_app() -> FastAPI:
         try:
             return await StockEventsService(repository).get(
                 symbol, as_of=as_of or date.today(), days=days
+            )
+        except StockNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/stocks/{symbol}/holders", response_model=StockHolders)
+    async def stock_holders(
+        symbol: str,
+        repository: Annotated[QuantRepository, Depends(get_repository)],
+        as_of: Annotated[date | None, Query()] = None,
+        weeks: Annotated[int, Query(ge=1, le=260)] = 26,
+    ) -> StockHolders:
+        """Weekly big-holder concentration (TDCC, >=400 / >=1,000 lots) plus the latest
+        shares outstanding and foreign holding, point-in-time as of ``as_of``."""
+        try:
+            return await StockHoldersService(repository).get(
+                symbol, as_of=as_of or date.today(), weeks=weeks
             )
         except StockNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

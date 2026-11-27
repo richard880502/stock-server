@@ -604,3 +604,64 @@ class MonthlyRevenueRow(Base):
     cumulative_yoy_pct: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MarketFactorDailyRow(Base):
+    """Whole-market multi-factor snapshot, one row per stock, date and version."""
+
+    __tablename__ = "market_factor_daily"
+    __table_args__ = (Index("ix_market_factor_daily_date_version", "trading_date", "version"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    version: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    market: Mapped[str] = mapped_column(String(8), nullable=False)
+    industry_code: Mapped[str | None] = mapped_column(String(8))
+    industry_name: Mapped[str | None] = mapped_column(String(64))
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    change_pct: Mapped[float | None] = mapped_column(Float)
+    avg_turnover_20d: Mapped[float | None] = mapped_column(Float)
+    composite: Mapped[float | None] = mapped_column(Float)
+    scores: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    highlights: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    flags: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    flow_through: Mapped[date | None] = mapped_column(Date)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ShareholdingDistributionRow(Base):
+    """Weekly TDCC shareholding distribution; raw tiers kept as JSONB."""
+
+    __tablename__ = "shareholding_distribution_weekly"
+    __table_args__ = (Index("ix_shareholding_weekly_date", "data_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    data_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    total_holders: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    holders_ge400: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pct_ge400: Mapped[float] = mapped_column(Float, nullable=False)
+    holders_ge1000: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pct_ge1000: Mapped[float] = mapped_column(Float, nullable=False)
+    retail_holders: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    retail_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    tiers: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ForeignHoldingRow(Base):
+    """Daily shares outstanding and foreign holding from TWSE / TPEx."""
+
+    __tablename__ = "foreign_holding_daily"
+    __table_args__ = (Index("ix_foreign_holding_date", "trading_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    shares_outstanding: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    foreign_shares: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    foreign_holding_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

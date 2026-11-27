@@ -48,6 +48,7 @@ async def sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
         await session.execute(text("DELETE FROM market_stock_daily WHERE symbol LIKE 'ZZ%'"))
         await session.execute(text("DELETE FROM users WHERE google_sub LIKE 'zz-%'"))
         await session.execute(text("DELETE FROM market_industries WHERE symbol LIKE 'ZZ%'"))
+        await session.execute(text("DELETE FROM market_factor_daily WHERE symbol LIKE 'ZZ%'"))
         await session.execute(
             text("DELETE FROM quote_latest WHERE symbol LIKE 'ZZ%'")
         )
@@ -544,3 +545,57 @@ async def test_every_orm_column_exists_in_the_migrated_database() -> None:
     finally:
         await engine.dispose()
     assert missing == [], f"ORM columns missing from the database: {missing}"
+
+
+async def test_factor_snapshot_storage_and_history_stream(sessions) -> None:
+    from quant_signal.domain.models import MarketFactorSnapshot
+
+    a, b = _symbol(), _symbol()
+    days = [Z1 + timedelta(days=i) for i in range(5)]
+    rows = [_market_row(sym, day, close=100.0 + i) for sym in (a, b) for i, day in enumerate(days)]
+    rows.append(_market_row(b, days[0] - timedelta(days=30)))  # outside the 3-session window
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        await repo.upsert_market_stock_days(rows)
+
+        end = days[-1]
+        streamed = {}
+        async for symbol, name, market, history in repo.iter_market_histories(end, 3):
+            if symbol in (a, b):
+                streamed[symbol] = (name, market, history)
+        assert set(streamed) == {a, b}
+        name, market, history = streamed[a]
+        assert market == "TW" and [row[0] for row in history] == days[-3:]
+        assert history[-1][1] == 104.0 and len(history[-1]) == 15
+        assert (await repo.market_flow_through(end))["TW"] >= end
+
+        def snapshot(symbol: str, day: date) -> MarketFactorSnapshot:
+            return MarketFactorSnapshot(
+                symbol=symbol,
+                trading_date=day,
+                version="zz_test",
+                name=symbol,
+                market="TW",
+                close=100.0,
+                composite=55.5,
+                scores={"flow": 70.0, "trend": None},
+                metrics={"ret_20d": 1.5, "trend_aligned": True, "revenue_period": None},
+                highlights=["投信連買 3 日"],
+                flags=[],
+                available_at=datetime.combine(day, time(12), tzinfo=UTC),
+            )
+
+        for day in days[:3]:
+            assert await repo.replace_market_factors(day, "zz_test", [snapshot(a, day)]) == 1
+        # replacing a date is idempotent
+        assert await repo.replace_market_factors(days[2], "zz_test", [snapshot(a, days[2])]) == 1
+        loaded = await repo.list_market_factors(days[2], "zz_test")
+        assert [r.symbol for r in loaded] == [a]
+        assert loaded[0].scores == {"flow": 70.0, "trend": None}
+        assert loaded[0].metrics["trend_aligned"] is True
+        assert loaded[0].highlights == ["投信連買 3 日"]
+        assert await repo.latest_market_factor_date("zz_test") == days[2]
+        assert await repo.latest_market_factor_date("zz_test", as_of=days[1]) == days[1]
+        assert await repo.prune_market_factors("zz_test", 2) == 1
+        assert await repo.list_market_factors(days[0], "zz_test") == []
+        assert await repo.prune_market_factors("zz_test", 2) == 0

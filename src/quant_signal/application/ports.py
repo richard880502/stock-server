@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date, datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from quant_signal.domain.models import (
@@ -14,19 +15,25 @@ from quant_signal.domain.models import (
     ChipFlowSnapshot,
     DataStatus,
     FetchCoverage,
+    ForeignHolding,
     InstitutionalFlow,
     Instrument,
     IntradaySnapshot,
     MarketDataStatus,
     MarketEnvironmentSnapshot,
     MarketEvent,
+    MarketFactorSnapshot,
+    MarketFactorState,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
+    MarketSession,
     MarketStockDay,
     MonthlyRevenue,
     NewsItem,
     RiskFlag,
+    ShareholdingDistribution,
+    ShareholdingPair,
     SignalSnapshot,
     SyncJob,
     SyncJobKind,
@@ -211,6 +218,24 @@ class QuantRepository(Protocol):
 
     async def latest_monthly_revenue(self, as_of: datetime) -> list[MonthlyRevenue]: ...
 
+    async def upsert_shareholding_distribution(
+        self, rows: list[ShareholdingDistribution]
+    ) -> int: ...
+
+    async def upsert_foreign_holding(self, rows: list[ForeignHolding]) -> int: ...
+
+    async def latest_shareholding_pairs(self, as_of: datetime) -> dict[str, ShareholdingPair]: ...
+
+    async def latest_foreign_holdings(self, as_of: datetime) -> dict[str, ForeignHolding]: ...
+
+    async def latest_foreign_holding(
+        self, symbol: str, as_of: datetime
+    ) -> ForeignHolding | None: ...
+
+    async def shareholding_history(
+        self, symbol: str, as_of: datetime, weeks: int = 26
+    ) -> list[ShareholdingDistribution]: ...
+
     async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
 
     async def list_minute_bars(
@@ -263,3 +288,33 @@ class QuantRepository(Protocol):
     ) -> Literal["added", "exists", "full"]: ...
 
     async def remove_watchlist_item(self, user_id: UUID, symbol: str) -> bool: ...
+
+    async def market_flow_through(self, end: date) -> dict[str, date]: ...
+
+    def iter_market_histories(
+        self, end: date, sessions: int
+    ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]: ...
+
+    async def market_session_calendar(
+        self, end: date, sessions: int
+    ) -> dict[str, list[MarketSession]]: ...
+
+    async def market_factor_state(
+        self, version: str, dates: list[date]
+    ) -> dict[date, MarketFactorState]: ...
+
+    async def delete_market_factors(self, trading_date: date, version: str) -> int: ...
+
+    async def replace_market_factors(
+        self, trading_date: date, version: str, rows: list[MarketFactorSnapshot]
+    ) -> int: ...
+
+    async def prune_market_factors(self, version: str, keep: int) -> int: ...
+
+    async def latest_market_factor_date(
+        self, version: str, as_of: date | None = None
+    ) -> date | None: ...
+
+    async def list_market_factors(
+        self, trading_date: date, version: str
+    ) -> list[MarketFactorSnapshot]: ...

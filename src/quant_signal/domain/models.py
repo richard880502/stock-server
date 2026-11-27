@@ -1076,3 +1076,155 @@ class MarketRiskFlags(BaseModel):
     as_of: date
     count: int
     flags: list[RiskFlag]
+
+
+class MarketFactorSnapshot(BaseModel):
+    """One stock's multi-factor row for a trading date (see ``quant/screener.py``).
+
+    ``metrics`` is an open dict so new factors can be added without a migration.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    trading_date: date
+    version: str
+    name: str
+    market: Literal["TW", "TWO"]
+    industry_code: str | None = None
+    industry_name: str | None = None
+    close: float
+    change_pct: float | None = None
+    avg_turnover_20d: float | None = None
+    composite: float | None = None
+    scores: dict[str, float | None] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    highlights: list[str] = Field(default_factory=list)
+    flags: list[str] = Field(default_factory=list)
+    flow_through: date | None = None
+    available_at: datetime
+
+
+class MarketSession(BaseModel):
+    """One market's trading date as seen in ``market_stock_daily`` (screener bookkeeping)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trading_date: date
+    rows: int
+    reported: bool  # the institutional report for the session is published
+    available_at: datetime
+
+
+class MarketFactorState(BaseModel):
+    """What a stored factor snapshot was built from: per-market row counts and flow dates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    available_at: datetime
+    rows: dict[str, int]
+    flow_through: dict[str, date | None]
+
+
+class ShareholdingTier(BaseModel):
+    """One TDCC holding tier (持股分級 1-16) as published: holders, shares, % of custody."""
+
+    model_config = ConfigDict(frozen=True)
+
+    level: int = Field(ge=1, le=16)
+    holders: int
+    shares: int
+    pct: float
+
+
+class ShareholdingSnapshot(BaseModel):
+    """Lean weekly TDCC concentration numbers (no raw tiers), for whole-market reads.
+
+    ``*_ge400`` means holders above 400,000 shares (TDCC levels 12-15, i.e. more than
+    400 lots); ``*_ge1000`` is level 15 only (more than 1,000,000 shares); ``retail_*``
+    is levels 1-3 (10,000 shares / 10 lots or fewer). Percentages are of the shares
+    held in TDCC custody, computed from share counts.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    data_date: date
+    total_holders: int
+    total_shares: int
+    holders_ge400: int
+    pct_ge400: float
+    holders_ge1000: int
+    pct_ge1000: float
+    retail_holders: int
+    retail_pct: float
+    source: str
+    available_at: datetime
+
+    @model_validator(mode="after")
+    def _aware(self) -> ShareholdingSnapshot:
+        _require_aware(self.available_at)
+        return self
+
+
+class ShareholdingDistribution(ShareholdingSnapshot):
+    """A weekly TDCC shareholding distribution with the raw tiers kept."""
+
+    tiers: list[ShareholdingTier] = Field(default_factory=list)
+
+    def snapshot(self) -> ShareholdingSnapshot:
+        return ShareholdingSnapshot.model_validate(
+            {name: getattr(self, name) for name in ShareholdingSnapshot.model_fields}
+        )
+
+
+class ShareholdingPair(BaseModel):
+    """Latest weekly row plus the comparison row (>= 4 weeks older, else the previous)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    latest: ShareholdingSnapshot
+    prior: ShareholdingSnapshot | None = None
+
+
+class ForeignHolding(BaseModel):
+    """Shares outstanding and foreign (外資及陸資) holding for one stock and day."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    trading_date: date
+    shares_outstanding: int
+    foreign_shares: int
+    foreign_holding_pct: float
+    source: str
+    available_at: datetime
+
+    @model_validator(mode="after")
+    def _aware(self) -> ForeignHolding:
+        _require_aware(self.available_at)
+        return self
+
+
+class HolderPoint(BaseModel):
+    data_date: date
+    pct_ge400: float
+    pct_ge1000: float
+    holders_ge400: int
+    holders_ge1000: int
+    retail_holders: int
+    retail_pct: float
+    total_holders: int
+    total_shares: int
+    available_at: datetime
+
+
+class StockHolders(BaseModel):
+    symbol: str
+    as_of: date
+    series: list[HolderPoint]
+    shares_outstanding: int | None = None
+    foreign_shares: int | None = None
+    foreign_holding_pct: float | None = None
+    foreign_data_date: date | None = None
+    note: str

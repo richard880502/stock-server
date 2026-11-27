@@ -11,6 +11,7 @@ import "./styles/views.css";
 import "./styles/market.css";
 import "./styles/sectors.css";
 import "./styles/stock.css";
+import "./styles/screener.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(
