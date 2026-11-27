@@ -15,7 +15,19 @@ from quant_signal.domain.derivatives import (
     StockFuturesDay,
     VixDay,
 )
+from quant_signal.infrastructure.column_limits import enforce_column_limits
+from quant_signal.infrastructure.db import derivatives_models as orm
 from quant_signal.infrastructure.derivatives_queries import DerivativesQueryMixin
+
+_ORM = {
+    "fut": orm.FuturesInstitutionalRow,
+    "pc": orm.OptionsPcRatioRow,
+    "opt": orm.OptionsInstitutionalRow,
+    "large": orm.FuturesLargeTradersRow,
+    "ssf": orm.StockFuturesRow,
+    "levels": orm.OptionsOiLevelRow,
+    "vix": orm.VixRow,
+}
 
 
 class MemoryDerivativesMixin(DerivativesQueryMixin):
@@ -29,6 +41,7 @@ class MemoryDerivativesMixin(DerivativesQueryMixin):
         written = 0
         for row in rows:
             if key(row) not in store:  # published rows are final
+                enforce_column_limits(_ORM[name], row.model_dump())
                 store[key(row)] = row
                 written += 1
         return written

@@ -15,14 +15,14 @@ WINDOW_COVERAGE = 0.8  # a 5/20-session average needs this share of the window p
 def pct(part: float | None, whole: float | None) -> float | None:
     if part is None or whole is None or whole <= 0:
         return None
-    return part / whole * 100.0
+    return round(part / whole * 100.0, 2)
 
 
 def change_pct(now: float | None, before: float | None) -> float | None:
     """Percent change of a balance; None when the earlier balance is missing or zero."""
     if now is None or before is None or before <= 0:
         return None
-    return (now - before) / before * 100.0
+    return round((now - before) / before * 100.0, 2)
 
 
 def balance_change_pct(
@@ -55,7 +55,7 @@ def days_to_cover(balance: int | None, avg_volume: float | None) -> float | None
     """SBL balance (shares) divided by the 20-session average daily volume (shares)."""
     if balance is None or not avg_volume or avg_volume <= 0:
         return None
-    return balance / avg_volume
+    return round(balance / avg_volume, 4)
 
 
 def window_ratio_pct(

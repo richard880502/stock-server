@@ -456,6 +456,8 @@ class ContractMonth:
     volume: int
     settlement: float | None
     open_interest: int | None
+    # False for a month that only has after-hours rows (no 一般 row, so no OI to expect).
+    regular_session: bool = True
 
 
 def parse_futures_daily(text: str, codes: set[str]) -> list[ContractMonth]:
@@ -472,13 +474,17 @@ def parse_futures_daily(text: str, codes: set[str]) -> list[ContractMonth]:
         day = _day(row[0])
         if code not in codes or day is None or "/" in month or not re.fullmatch(r"\d{6}", month):
             continue
-        item = merged.setdefault((day, code, month), {"volume": 0, "settlement": None, "oi": None})
+        item = merged.setdefault(
+            (day, code, month),
+            {"volume": 0, "settlement": None, "oi": None, "regular": False},
+        )
         item["volume"] += _int(row[9]) or 0
         if row[17].strip() == "一般":
+            item["regular"] = True
             item["settlement"] = _float(row[10])
             item["oi"] = _int(row[11])
     return [
-        ContractMonth(day, code, month, v["volume"], v["settlement"], v["oi"])
+        ContractMonth(day, code, month, v["volume"], v["settlement"], v["oi"], v["regular"])
         for (day, code, month), v in sorted(merged.items())
     ]
 
@@ -509,8 +515,13 @@ def build_stock_futures_days(
     out: list[StockFuturesDay] = []
     for (symbol, day), items in sorted(groups.items()):
         unit = standard.get(symbol) or max(specs[i.code].shares_per_contract for i in items)
-        oi_shares = sum(
-            int((i.open_interest or 0) * specs[i.code].shares_per_contract) for i in items
+        # A regular-session row whose open interest is still "-" makes the total unknown
+        # (None), never a smaller number or zero.
+        oi_known = all(i.open_interest is not None for i in items if i.regular_session)
+        oi_shares = (
+            sum(int((i.open_interest or 0) * specs[i.code].shares_per_contract) for i in items)
+            if oi_known
+            else None
         )
         volume_shares = sum(int(i.volume * specs[i.code].shares_per_contract) for i in items)
         near_month = near_settlement = near_volume = near_oi = None
@@ -527,16 +538,20 @@ def build_stock_futures_days(
             near_volume = (
                 sum(i.volume * specs[i.code].shares_per_contract for i in near_items) / unit
             )
-            near_oi = (
-                sum((i.open_interest or 0) * specs[i.code].shares_per_contract for i in near_items)
-                / unit
-            )
+            if all(i.open_interest is not None for i in near_items if i.regular_session):
+                near_oi = (
+                    sum(
+                        (i.open_interest or 0) * specs[i.code].shares_per_contract
+                        for i in near_items
+                    )
+                    / unit
+                )
         out.append(
             StockFuturesDay(
                 symbol=symbol,
                 trading_date=day,
                 underlying_code=specs[items[0].code].underlying_code,
-                total_open_interest=oi_shares / unit,
+                total_open_interest=None if oi_shares is None else oi_shares / unit,
                 total_volume=volume_shares / unit,
                 open_interest_shares=oi_shares,
                 volume_shares=volume_shares,
@@ -585,6 +600,11 @@ def parse_vix(text: str) -> list[VixDay]:
 # --- HTTP client --------------------------------------------------------------------------
 
 
+class TaifexBlocked(RuntimeError):
+    """TAIFEX refused or could not be reached (non-200 / redirect to /404.htm / timeout):
+    the caller must stop sending requests for this tick."""
+
+
 class TaifexClient:
     """Shared, throttled client for TAIFEX downloads (one instance per worker)."""
 
@@ -631,9 +651,9 @@ class TaifexClient:
                 else await self.client.get(url)
             )
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"TAIFEX request failed: {url}: {exc!r}") from exc
+            raise TaifexBlocked(f"TAIFEX request failed: {url}: {exc!r}") from exc
         if response.status_code != 200:
-            raise RuntimeError(
+            raise TaifexBlocked(
                 f"TAIFEX answered {response.status_code} for {url} "
                 f"(location={response.headers.get('location')})"
             )

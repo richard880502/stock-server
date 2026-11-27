@@ -22,7 +22,7 @@ from quant_signal.application import short_data as sched
 from quant_signal.application.short_data_queries import StockShortInterestService
 from quant_signal.application.stocks import StockNotFound
 from quant_signal.domain.models import ForeignHolding, MarketStockDay
-from quant_signal.domain.short_data import DayTradeDay, ShortLendingDay
+from quant_signal.domain.short_data import DayTradeDay, DividendEvent, ShortLendingDay
 from quant_signal.infrastructure.db.models import Base
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 from quant_signal.infrastructure.providers import short_data as src
@@ -166,7 +166,9 @@ SESSIONS = [date(2026, 10, 1) + timedelta(days=i) for i in range(30)]
 def test_balance_change_and_zero_base() -> None:
     balances = {d: 100 + i for i, d in enumerate(SESSIONS)}
     last = SESSIONS[-1]
-    assert calc.balance_change_pct(balances, SESSIONS, last, 5) == pytest.approx(5 / 124 * 100)
+    assert calc.balance_change_pct(balances, SESSIONS, last, 5) == pytest.approx(
+        5 / 124 * 100, abs=0.005
+    )
     assert calc.balance_change_pct(balances, SESSIONS, SESSIONS[2], 5) is None  # not enough history
     zero = {SESSIONS[-6]: 0, last: 50}
     assert calc.balance_change_pct(zero, SESSIONS, last, 5) is None  # zero base -> None, not inf
@@ -187,7 +189,7 @@ def test_window_ratio_is_volume_weighted_and_needs_coverage() -> None:
     shares = {d: 100 for d in SESSIONS}
     shares[SESSIONS[-1]] = 1500
     assert calc.window_ratio_pct(shares, volumes, SESSIONS, SESSIONS[-1], 5) == pytest.approx(
-        (400 + 1500) / (4000 + 3000) * 100
+        (400 + 1500) / (4000 + 3000) * 100, abs=0.005
     )
     sparse = {SESSIONS[-1]: 100, SESSIONS[-2]: 100}
     assert calc.window_ratio_pct(sparse, volumes, SESSIONS, SESSIONS[-1], 5) is None
@@ -406,6 +408,17 @@ def fast(monkeypatch):
         monkeypatch.setattr(sched, name, 1)
 
 
+async def covered(repo, kind: str, periods: list[str]) -> dict[tuple[str, str], object]:
+    """Coverage rows per (source, period): sources are recorded one by one, never per day."""
+    found: dict[tuple[str, str], object] = {}
+    for name in ("sbl_twse", "sbl_tpex", "dt_twse"):
+        for period, entry in (
+            await repo.list_fetch_coverage(sched.SOURCE, f"{kind}_{name}", "*", periods)
+        ).items():
+            found[(name, period)] = entry
+    return found
+
+
 def taipei(day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 11, day, hour, minute, tzinfo=UTC) - timedelta(hours=8)
 
@@ -468,10 +481,11 @@ async def test_evening_refresh_stores_today_and_is_idempotent_per_slot() -> None
     }
     assert all(r.available_at == now and r.trading_date == date(2026, 11, 27) for r in sbl_rows)
     # the two earlier days answered with another date's rows -> recorded empty (holiday-like)
-    cover = await repo.list_fetch_coverage(
-        sched.SOURCE, "daily", "*", [f"2026-11-{d}@2026-11-27-b" for d in (25, 26, 27)]
-    )
-    assert len(cover) == 3 and cover["2026-11-25@2026-11-27-b"].status == "empty"
+    cover = await covered(repo, "daily", [f"202611{d}@1127b" for d in (25, 26, 27)])
+    assert all(len(period) <= 16 for _, period in cover)  # fetch_coverage.period is varchar(16)
+    assert len(cover) == 9  # three sources (TWSE/TPEx SBL, TWSE day trade) per day
+    assert cover[("sbl_tpex", "20261125@1127b")].status == "empty"  # holiday-like: all empty
+    assert cover[("sbl_twse", "20261127@1127b")].status == "ok"
 
     ex.requests.clear()
     again = await sched.refresh_short_data(
@@ -530,10 +544,9 @@ async def test_backfill_is_gradual_and_off_session() -> None:
         backfill_per_tick=2,
         request_interval=0,
     )
-    cover = await repo.list_fetch_coverage(
-        sched.SOURCE, "backfill", "*", [f"bf:2026-11-{d}" for d in (24, 23, 20, 19, 18)]
-    )
-    assert set(cover) == {"bf:2026-11-24", "bf:2026-11-23"}
+    wanted = [f"bf:2026-11-{d}" for d in (24, 23, 20, 19, 18)]
+    cover = await covered(repo, "backfill", wanted)
+    assert {period for _, period in cover} == {"bf:2026-11-24", "bf:2026-11-23"}
     await sched.refresh_short_data(
         repo,
         ex,
@@ -544,10 +557,8 @@ async def test_backfill_is_gradual_and_off_session() -> None:
         backfill_per_tick=2,
         request_interval=0,
     )
-    cover = await repo.list_fetch_coverage(
-        sched.SOURCE, "backfill", "*", [f"bf:2026-11-{d}" for d in (24, 23, 20, 19, 18)]
-    )
-    assert len(cover) == 4
+    cover = await covered(repo, "backfill", wanted)
+    assert len({period for _, period in cover}) == 4
     # during the trading session nothing is backfilled
     before = ex.requests[SBL_KEY]
     await sched.refresh_short_data(
@@ -781,3 +792,333 @@ def test_migration_matches_orm() -> None:
     assert recorder.indexes == orm_indexes
     module.downgrade()
     assert set(recorder.dropped) == set(TABLES) and recorder.indexes == {}
+
+
+# --- data-integrity fixes ------------------------------------------------------------------
+
+
+async def test_coverage_periods_fit_the_varchar_column_and_memory_enforces_it() -> None:
+    from quant_signal.domain.models import FetchCoverage
+
+    repo = MemoryQuantRepository()
+    too_long = FetchCoverage(
+        source=sched.SOURCE,
+        dataset="daily",
+        symbol="*",
+        period="2026-11-25@2026-11-27-c",  # 23 characters: the key that broke in Postgres
+        status="ok",
+        row_count=1,
+        fetched_at=FETCHED,
+    )
+    with pytest.raises(ValueError, match="varchar"):
+        await repo.record_fetch_coverage([too_long])
+    # every other length-limited column is checked the same way
+    with pytest.raises(ValueError, match="varchar"):
+        await repo.upsert_short_lending(
+            [
+                ShortLendingDay(
+                    symbol="X" * 40,
+                    trading_date=date(2026, 11, 27),
+                    source="twse_twt93u",
+                    sbl_sold=1,
+                    sbl_returned=0,
+                    sbl_balance=1,
+                    available_at=FETCHED,
+                )
+            ]
+        )
+    # the evening slot records its three days with keys that fit
+    ex = FakeExchanges()
+    await sched.refresh_short_data(
+        repo, ex, ex, now=taipei(27, 22, 40), attempts={}, backfill_sessions=0, request_interval=0
+    )
+    assert all(len(period) <= 16 for (_, _, _, period) in repo.fetch_coverage)
+    keys = [p for (_, dataset, _, p) in repo.fetch_coverage if dataset.startswith("daily_")]
+    assert len(keys) == 9
+    assert "20261125@1127c" in keys
+
+
+async def test_a_day_is_not_done_while_one_exchange_has_not_published() -> None:
+    """TWSE has rows, TPEx has not published its table yet: TPEx stays open (item 4)."""
+    repo = MemoryQuantRepository()
+    published = {"tpex": False}
+
+    class Late(FakeExchanges):
+        def _handle(self, request):
+            if "margin_sbl" in request.url.path and not published["tpex"]:
+                return httpx.Response(200, json={"stat": "ok", "tables": []})
+            return super()._handle(request)
+
+    late = Late()
+    attempts: dict[str, datetime] = {}
+    now = taipei(27, 21)
+    await sched.refresh_short_data(
+        repo, late, late, now=now, attempts=attempts, backfill_sessions=0, request_interval=0
+    )
+    cover = await covered(repo, "daily", ["20261127@1127b"])
+    assert ("sbl_twse", "20261127@1127b") in cover
+    assert ("sbl_tpex", "20261127@1127b") not in cover  # not recorded: it is asked again
+    assert not [r for r in await repo.sd_sbl_rows(date(2026, 11, 1), FAR) if r.symbol.endswith("O")]
+    published["tpex"] = True
+    late.requests.clear()
+    await sched.refresh_short_data(
+        repo,
+        late,
+        late,
+        now=now + timedelta(minutes=11),
+        attempts=attempts,
+        backfill_sessions=0,
+        request_interval=0,
+    )
+    assert late.requests[TPEX_SBL_KEY] >= 1
+    assert late.requests[SBL_KEY] == 0  # TWSE is recorded for this slot, not refetched
+    cover = await covered(repo, "daily", ["20261127@1127b"])
+    assert cover[("sbl_tpex", "20261127@1127b")].status == "ok"
+    assert {r.symbol for r in await repo.sd_sbl_rows(date(2026, 11, 1), FAR)} >= {"6488.TWO"}
+
+
+async def test_day_trading_never_waits_for_tpex() -> None:
+    """Day trading has TWSE only: a TPEx-less dataset is complete with the TWSE answer."""
+    repo, ex = MemoryQuantRepository(), FakeExchanges()
+    await sched.refresh_short_data(
+        repo,
+        ex,
+        ex,
+        now=taipei(27, 21),
+        attempts={},
+        sbl_enabled=False,
+        insider_enabled=False,
+        dividend_enabled=False,
+        backfill_sessions=0,
+        request_interval=0,
+    )
+    cover = await covered(repo, "daily", ["20261127@1127b"])
+    assert cover[("dt_twse", "20261127@1127b")].status == "ok"
+    assert ex.requests[TPEX_SBL_KEY] == 0
+
+
+async def test_source_that_stays_empty_is_given_up_with_a_warning(caplog) -> None:
+    """After MAX_MISSING_DAYS different days the still-empty source is recorded as empty."""
+    from quant_signal.application.source_guard import MAX_MISSING_DAYS
+
+    repo = MemoryQuantRepository()
+
+    class NoTpex(FakeExchanges):
+        def _handle(self, request):
+            if "margin_sbl" in request.url.path:
+                return httpx.Response(200, json={"stat": "ok", "tables": []})
+            return super()._handle(request)
+
+    ex, attempts = NoTpex(), {}
+    for offset in range(MAX_MISSING_DAYS + 1):
+        # Friday 11-27 evening, then the following weekdays: day 11-27 stays a recent day
+        now = taipei(27, 22, 40) + timedelta(days=offset if offset == 0 else offset)
+        await sched.refresh_short_data(
+            repo,
+            ex,
+            ex,
+            now=now,
+            attempts=attempts,
+            backfill_sessions=0,
+            request_interval=0,
+            insider_enabled=False,
+            dividend_enabled=False,
+        )
+    miss = await repo.list_fetch_coverage(sched.SOURCE, "daily_sbl_tpex_miss", "*", ["20261127"])
+    assert miss["20261127"].row_count >= MAX_MISSING_DAYS
+    assert "still empty" in caplog.text
+
+
+class DatedExchanges(FakeExchanges):
+    """Answers every date with the fixture rows re-dated to the requested day."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tpex_published = True
+
+    def _handle(self, request):
+        response = super()._handle(request)
+        if response.status_code != 200:
+            return response
+        payload = json.loads(response.content)
+        params = request.url.params
+        if "date" in params:  # TWSE
+            payload["date"] = params["date"]
+            for table in payload.get("tables", []):
+                table["date"] = params["date"]
+        elif "d" in params:  # TPEx
+            if not self.tpex_published:
+                return httpx.Response(200, json={"stat": "ok", "tables": []})
+            payload["tables"][0]["date"] = params["d"]
+        return httpx.Response(200, json=payload)
+
+
+async def test_backfill_day_is_not_done_after_one_source(monkeypatch) -> None:
+    repo, ex, attempts = MemoryQuantRepository(), DatedExchanges(), {}
+    ex.tpex_published = False
+    common = dict(
+        attempts=attempts,
+        backfill_sessions=1,
+        backfill_per_tick=1,
+        request_interval=0,
+        insider_enabled=False,
+        dividend_enabled=False,
+    )
+    # a Saturday: the recent window is Wed-Fri, the one backfill day is Tuesday 11-24
+    saturday = taipei(28, 12)
+    monkeypatch.setattr(sched, "recent_days", lambda now: [])  # only the backfill is of interest
+    await sched.refresh_short_data(repo, ex, ex, now=saturday, **common)
+    period = "bf:2026-11-27"  # recent window is empty, so the newest weekday is the backfill day
+    cover = await covered(repo, "backfill", [period])
+    assert cover[("sbl_twse", period)].status == "ok" and cover[("dt_twse", period)].status == "ok"
+    assert ("sbl_tpex", period) not in cover  # TPEx had nothing: the day is NOT recorded done
+    # the same Taipei day it is not hammered again ...
+    ex.requests.clear()
+    ex.tpex_published = True
+    await sched.refresh_short_data(repo, ex, ex, now=saturday + timedelta(minutes=30), **common)
+    assert ex.requests[TPEX_SBL_KEY] == 0
+    # ... but the next day it is asked for (only TPEx, the rest is recorded) and recorded
+    await sched.refresh_short_data(repo, ex, ex, now=saturday + timedelta(days=1), **common)
+    assert ex.requests[TPEX_SBL_KEY] == 1 and ex.requests[SBL_KEY] == 0
+    cover = await covered(repo, "backfill", [period])
+    assert cover[("sbl_tpex", period)].status == "ok"
+    assert {r.symbol for r in await repo.sd_sbl_rows(date(2026, 11, 1), FAR)} >= {"6488.TWO"}
+
+
+class DividendExchanges(FakeExchanges):
+    """Serves editable copies of the two forecast tables."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.twt48u = load("twse_twt48u.json")
+        self.tpex_ex = load("tpex_exright_prepost.json")
+
+    def _handle(self, request):
+        key = f"{request.url.host}{request.url.path}"
+        if key == "www.twse.com.tw/rwd/zh/exRight/TWT48U":
+            self.requests[key] += 1
+            return httpx.Response(200, json=self.twt48u)
+        if key == "www.tpex.org.tw/openapi/v1/tpex_exright_prepost":
+            self.requests[key] += 1
+            return httpx.Response(200, json=self.tpex_ex)
+        return super()._handle(request)
+
+
+async def dividends_only(repo, ex, now) -> dict:
+    return await sched.refresh_short_data(
+        repo,
+        ex,
+        ex,
+        now=now,
+        attempts={},
+        sbl_enabled=False,
+        daytrade_enabled=False,
+        insider_enabled=False,
+        backfill_sessions=0,
+        request_interval=0,
+    )
+
+
+async def test_a_moved_ex_date_retires_the_old_event_instead_of_keeping_both() -> None:
+    repo, ex = MemoryQuantRepository(), DividendExchanges()
+    first = taipei(27, 21)
+    await dividends_only(repo, ex, first)
+    december = (date(2026, 12, 1), date(2026, 12, 31))
+    got = await repo.list_dividend_events(["2330.TW"], *december, first)
+    assert [e.ex_date for e in got] == [date(2026, 12, 10)]
+    # the company moves its ex-date from 12/10 to 12/17; the next table lists only the new one
+    for row in ex.twt48u["data"]:
+        if row[1] == "2330":
+            row[0] = "115年12月17日"
+    second = taipei(28, 9)
+    await dividends_only(repo, ex, second)
+    after = await repo.list_dividend_events(["2330.TW"], *december, FAR)
+    assert [(e.ex_date, e.revision, e.withdrawn) for e in after] == [(date(2026, 12, 17), 1, False)]
+    # paper trading must see one dividend, not two
+    nxt = await repo.next_dividend_events(second)
+    assert nxt["2330.TW"].date == date(2026, 12, 17)
+    # as-of reads: before the withdrawal was fetched the old date is what was known
+    before = await repo.list_dividend_events(["2330.TW"], *december, first + timedelta(hours=1))
+    assert [e.ex_date for e in before] == [date(2026, 12, 10)]
+    # nothing else changed, and an identical table writes nothing
+    assert await dividends_only(repo, ex, taipei(28, 18)) == {"dividend": 0}
+
+
+async def test_cancelled_and_retyped_events_are_withdrawn_but_past_ones_never() -> None:
+    repo, ex = MemoryQuantRepository(), DividendExchanges()
+    await dividends_only(repo, ex, taipei(27, 21))
+    # 2646 disappears from the table (cancelled); 2345 becomes 權息 (a different kind)
+    ex.twt48u["data"] = [row for row in ex.twt48u["data"] if row[1] != "2646"]
+    for row in ex.twt48u["data"]:
+        if row[1] == "2345":
+            row[3] = "權息"
+    # TPEx's table no longer lists its already-passed 11/26 event
+    ex.tpex_ex = [row for row in ex.tpex_ex if row["SecuritiesCompanyCode"] != "6523"]
+    await dividends_only(repo, ex, taipei(28, 9))
+    events = await repo.list_dividend_events(
+        ["2646.TW", "2345.TW", "6523.TWO", "6488.TWO"], date(2026, 11, 1), date(2026, 12, 31), FAR
+    )
+    seen = {(e.symbol, e.kind) for e in events}
+    assert ("2646.TW", "ex_rights") not in seen  # cancelled
+    assert ("2345.TW", "ex_rights") not in seen and ("2345.TW", "ex_rights_dividend") in seen
+    assert ("6523.TWO", "ex_dividend") in seen  # ex-date 11/26 is in the past: never withdrawn
+    assert ("6488.TWO", "ex_dividend") in seen
+    # an event beyond the table's last date is not judged by it
+    one = [e for e in await repo.list_dividend_events(["2330.TW"], *(date(2026, 12, 1),) * 2, FAR)]
+    assert one == []
+    # a source whose table is empty (failed fetch) withdraws nothing
+    ex.twt48u = {"stat": "no data"}
+    await dividends_only(repo, ex, taipei(29, 9))
+    assert await repo.list_dividend_events(["2330.TW"], date(2026, 12, 1), date(2026, 12, 31), FAR)
+
+
+async def test_taipei_dates_not_utc_dates_decide_next_event_and_volume_cutoff() -> None:
+    repo = MemoryQuantRepository()
+    at = datetime(2026, 11, 20, tzinfo=UTC)
+
+    def event(day: date) -> DividendEvent:
+        return DividendEvent(
+            symbol="2330.TW",
+            ex_date=day,
+            kind="ex_dividend",
+            source="twse_twt48u",
+            cash_dividend_per_share=1.0,
+            available_at=at,
+        )
+
+    await repo.upsert_dividend_events([event(date(2026, 11, 27)), event(date(2026, 12, 3))])
+    # 02:00 Taipei on Saturday 11-28 is still Friday 11-27 18:00 in UTC: the 11-27 ex-date
+    # has passed in Taipei and must not be reported as upcoming
+    as_of = datetime(2026, 11, 27, 18, 0, tzinfo=UTC)
+    assert as_of.date() == date(2026, 11, 27)
+    assert (await repo.next_dividend_events(as_of))["2330.TW"].date == date(2026, 12, 3)
+    # the volume window ends on the Taipei date of the cutoff (Mon 11-30 04:00 Taipei = Sun UTC)
+    await repo.upsert_market_stock_days(
+        [
+            MarketStockDay(
+                symbol="2330.TW",
+                name="台積電",
+                market="TW",
+                trading_date=date(2026, 11, 30),
+                open=1,
+                high=1,
+                low=1,
+                close=1,
+                volume=5,
+                turnover_value=5.0,
+                available_at=datetime(2026, 11, 29, 20, 0, tzinfo=UTC),
+                source="t",
+            )
+        ]
+    )
+    cutoff = datetime(2026, 11, 29, 20, 30, tzinfo=UTC)
+    assert cutoff.date() == date(2026, 11, 29)
+    rows = await repo.sd_volume_rows(date(2026, 11, 1), cutoff)
+    assert rows == [("2330.TW", date(2026, 11, 30), 5)]
+
+
+def test_short_data_metrics_are_rounded_where_they_are_produced() -> None:
+    assert calc.pct(1, 3) == 33.33
+    assert calc.change_pct(4, 3) == 33.33
+    assert calc.days_to_cover(10, 3.0) == 3.3333
+    assert calc.pct(2, 3) == 66.67 and calc.change_pct(0.1 + 0.2, 0.3) == 0.0

@@ -96,9 +96,7 @@ class InstrumentRow(Base):
     institutional_flows: Mapped[list[InstitutionalFlowRow]] = relationship(
         back_populates="instrument"
     )
-    branch_flows: Mapped[list[BrokerBranchFlowRow]] = relationship(
-        back_populates="instrument"
-    )
+    branch_flows: Mapped[list[BrokerBranchFlowRow]] = relationship(back_populates="instrument")
 
 
 class DailyBarRow(Base):
@@ -182,9 +180,7 @@ class InstitutionalFlowRow(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    instrument: Mapped[InstrumentRow] = relationship(
-        back_populates="institutional_flows"
-    )
+    instrument: Mapped[InstrumentRow] = relationship(back_populates="institutional_flows")
 
 
 class BrokerBranchFlowRow(Base):
@@ -288,6 +284,9 @@ class MarketObservationRow(Base):
     investment_trust_net_flow: Mapped[float] = mapped_column(Float, nullable=False)
     dealer_net_flow: Mapped[float] = mapped_column(Float, nullable=False)
     futures_net_open_interest: Mapped[float] = mapped_column(Float, nullable=False)
+    futures_oi_known: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     margin_balance: Mapped[float] = mapped_column(Float, nullable=False)
     short_balance: Mapped[float] = mapped_column(Float, nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -734,6 +733,10 @@ class DividendEventRow(Base):
     stock_dividend_per_share: Mapped[float | None] = mapped_column(Float)
     cash_capital_increase_ratio: Mapped[float | None] = mapped_column(Float)
     subscription_price: Mapped[float | None] = mapped_column(Float)
+    # A revision with withdrawn = true retires the event (moved, re-typed or cancelled).
+    withdrawn: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

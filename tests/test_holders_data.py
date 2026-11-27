@@ -312,11 +312,11 @@ async def test_refresh_stores_both_datasets_and_is_idempotent() -> None:
     assert written["foreign_holding"] > 0
     assert len(await repo.latest_shareholding_pairs(FAR)) == 6
     # 11-23..25 are empty (recorded), 26 stored, today (27) not published -> retry later
-    coverage = await repo.list_fetch_coverage(
-        sched.SOURCE, sched.FOREIGN_HOLDING, "*", [f"2026-11-{d}" for d in (23, 24, 25, 26, 27)]
-    )
-    assert set(coverage) == {"2026-11-23", "2026-11-24", "2026-11-25", "2026-11-26"}
-    assert coverage["2026-11-25"].status == "empty" and coverage["2026-11-26"].status == "ok"
+    days = [f"2026-11-{d}" for d in (23, 24, 25, 26, 27)]
+    for dataset in ("foreign_holding_twse", "foreign_holding_tpex"):
+        coverage = await repo.list_fetch_coverage(sched.SOURCE, dataset, "*", days)
+        assert set(coverage) == {"2026-11-23", "2026-11-24", "2026-11-25", "2026-11-26"}
+        assert coverage["2026-11-25"].status == "empty" and coverage["2026-11-26"].status == "ok"
 
     exchange.requests.clear()
     again = await sched.refresh_holders_data(
@@ -556,3 +556,105 @@ async def test_postgres_statements_compile_with_point_in_time_filters() -> None:
     assert all("available_at <=" in sql for sql in session.sql[:5])
     assert any("row_number()" in sql for sql in session.sql)
     assert any("ON CONFLICT DO NOTHING" in sql for sql in session.sql)
+
+
+# --- data-integrity fixes ------------------------------------------------------------------
+
+
+class StaggeredExchanges(FakeExchanges):
+    """TWSE answers with its rows; TPEx has not published the day's table until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tpex_ready = False
+        self.twse_dates: list[str] = []
+
+    def _handle(self, request):
+        if request.url.host == "www.twse.com.tw":
+            self.twse_dates.append(request.url.params["date"])
+        if request.url.host == "www.tpex.org.tw" and not self.tpex_ready:
+            self.requests[f"{request.url.host}{request.url.path}"] += 1
+            return httpx.Response(200, json={"tables": [], "stat": "ok", "date": "20261126"})
+        return super()._handle(request)
+
+
+async def test_foreign_day_is_not_done_after_only_one_exchange_answered() -> None:
+    repo, exchange, attempts = await seeded_repo(), StaggeredExchanges(), {}
+    now = taipei(27, 18)
+    common = dict(attempts=attempts, request_interval=0, tdcc_enabled=False, foreign_window=2)
+    await sched.refresh_holders_data(repo, exchange, exchange, now=now, **common)
+    day = "2026-11-26"
+    assert await repo.list_fetch_coverage(sched.SOURCE, "foreign_holding_twse", "*", [day])
+    assert not await repo.list_fetch_coverage(sched.SOURCE, "foreign_holding_tpex", "*", [day])
+    assert repo.foreign_rows and not any(key[0].endswith(".TWO") for key in repo.foreign_rows)
+    exchange.tpex_ready = True
+    exchange.requests.clear()
+    exchange.twse_dates.clear()
+    await sched.refresh_holders_data(
+        repo, exchange, exchange, now=now + timedelta(days=1), **common
+    )
+    assert "20261126" not in exchange.twse_dates  # TWSE is recorded for 11-26: not asked again
+    assert exchange.requests[TPEX_KEY] >= 1
+    assert await repo.list_fetch_coverage(sched.SOURCE, "foreign_holding_tpex", "*", [day])
+    assert any(key[0].endswith(".TWO") for key in repo.foreign_rows)  # the OTC rows arrived
+
+
+async def test_first_deploy_fetches_tdcc_on_the_next_tick_outside_the_slots() -> None:
+    repo, exchange = await seeded_repo(), FakeExchanges()
+    early = taipei(28, 3)  # 03:00: neither the 08:00 nor the 17:00 slot
+    assert sched.tdcc_slot(early) is None
+    assert not await repo.has_shareholding_distribution()
+    written = await sched.refresh_holders_data(
+        repo, exchange, exchange, now=early, attempts={}, request_interval=0, foreign_enabled=False
+    )
+    assert written["tdcc_shareholding"] == 6 and exchange.requests[TDCC_KEY] == 1
+    assert await repo.has_shareholding_distribution()
+    exchange.requests.clear()
+    await sched.refresh_holders_data(  # data present: back to the slots
+        repo,
+        exchange,
+        exchange,
+        now=early + timedelta(minutes=5),
+        attempts={},
+        request_interval=0,
+        foreign_enabled=False,
+    )
+    assert TDCC_KEY not in exchange.requests
+
+
+def test_past_foreign_rows_are_stamped_with_their_publication_time() -> None:
+    fetched = taipei(28, 9)  # Saturday morning, long after Thursday's 21:00
+    thursday = date(2026, 11, 26)
+    published = datetime(2026, 11, 26, 21, 0, tzinfo=sched.TAIPEI)
+    assert sched.foreign_available_at(thursday, fetched) == published
+    # never later than the fetch itself (the same evening, before 21:00 has passed)
+    early_fetch = datetime(2026, 11, 27, 5, 0, tzinfo=sched.TAIPEI)  # Friday 05:00 Taipei
+    assert sched.foreign_available_at(thursday, early_fetch) == published
+    assert sched.foreign_available_at(thursday, taipei(26, 20)) == taipei(26, 20)
+    # the live same-day fetch keeps the fetch time, even after 21:00
+    friday = date(2026, 11, 27)
+    assert sched.foreign_available_at(friday, taipei(27, 22)) == taipei(27, 22)
+    assert sched.foreign_available_at(friday, taipei(27, 17, 5)) == taipei(27, 17, 5)
+
+
+async def test_a_snapshot_for_a_past_date_can_use_foreign_rows_fetched_later() -> None:
+    repo, exchange = await seeded_repo(), FakeExchanges()
+    await sched.refresh_holders_data(
+        repo,
+        exchange,
+        exchange,
+        now=taipei(28, 9),
+        attempts={},
+        request_interval=0,
+        tdcc_enabled=False,
+        foreign_window=3,
+    )
+    rows = [r for r in repo.foreign_rows.values() if r.trading_date == date(2026, 11, 26)]
+    assert rows and all(
+        r.available_at == datetime(2026, 11, 26, 21, 0, tzinfo=sched.TAIPEI) for r in rows
+    )
+    seen = await repo.latest_foreign_holdings(datetime(2026, 11, 26, 22, 0, tzinfo=sched.TAIPEI))
+    assert seen and all(h.trading_date == date(2026, 11, 26) for h in seen.values())
+    assert (
+        await repo.latest_foreign_holdings(datetime(2026, 11, 26, 20, 0, tzinfo=sched.TAIPEI)) == {}
+    )

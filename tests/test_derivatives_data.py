@@ -25,6 +25,7 @@ from quant_signal.domain.models import MarketObservation, MarketStockDay
 from quant_signal.infrastructure.db.models import Base
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 from quant_signal.infrastructure.providers import taifex as src
+from quant_signal.infrastructure.providers.taifex import TaifexBlocked
 from quant_signal.quant import derivatives as calc
 from quant_signal.quant.market_environment import MarketEnvironmentEngine
 
@@ -204,7 +205,11 @@ def test_delivery_month_rules() -> None:
     no_price = [src.ContractMonth(date(2026, 11, 26), "CDF", "202612", 0, None, None)]
     empty = src.build_stock_futures_days(no_price, table)[0]
     assert empty.near_month is None and empty.near_settlement is None
-    assert empty.total_open_interest == 0
+    assert empty.total_open_interest is None  # a regular-session row without OI: unknown, not 0
+    after_hours_only = [
+        src.ContractMonth(date(2026, 11, 26), "CDF", "202612", 3, None, None, regular_session=False)
+    ]
+    assert src.build_stock_futures_days(after_hours_only, table)[0].total_open_interest == 0
 
 
 def test_options_oi_levels_pick_nearest_monthly_and_weekly() -> None:
@@ -332,8 +337,8 @@ def test_basis_and_oi_change() -> None:
     days = [date(2026, 11, 16) + timedelta(days=i) for i in range(12) if (i % 7) < 5]
     history = [stock_day(day, 1000.0 + 10 * i) for i, day in enumerate(days)]
     one, five = calc.oi_changes(history)
-    assert one == pytest.approx(10 / 1080 * 100)
-    assert five == pytest.approx((1090 - 1040) / 1040 * 100)
+    assert one == pytest.approx(10 / 1080 * 100, abs=0.005)
+    assert five == pytest.approx((1090 - 1040) / 1040 * 100, abs=0.005)
     assert calc.oi_changes(history[:1]) == (None, None)
     assert calc.oi_changes(history[:3])[1] is None  # fewer than 6 rows
     gap = [stock_day(date(2026, 10, 1), 1000.0), stock_day(date(2026, 11, 27), 1100.0)]
@@ -406,7 +411,7 @@ async def test_stock_futures_metrics_and_history() -> None:
     metrics = await repo.latest_stock_futures_metrics(FAR)
     tsmc = metrics["2330.TW"]
     assert tsmc.data_date == date(2026, 11, 26) and tsmc.near_month == "202612"
-    assert tsmc.basis_pct == pytest.approx((2159 - 2150) / 2150 * 100)
+    assert tsmc.basis_pct == pytest.approx((2159 - 2150) / 2150 * 100, abs=0.005)
     assert tsmc.oi_change_1d is not None and tsmc.oi_change_1d > 0
     assert tsmc.oi_change_5d is not None
     assert metrics["0050.TW"].basis_pct is None  # no spot close stored for the ETF
@@ -682,9 +687,15 @@ def test_market_environment_handles_real_position_magnitudes(healthy_market) -> 
     engine = MarketEnvironmentEngine()
     base = engine.analyze(healthy_market, as_of=healthy_market[-1].trading_date)
 
-    def with_futures(values: list[float]) -> list[MarketObservation]:
+    def with_futures(values: list[float | None]) -> list[MarketObservation]:
+        """None = no TAIFEX data stored for that day (0 in the column, flag false)."""
         return [
-            item.model_copy(update={"futures_net_open_interest": value})
+            item.model_copy(
+                update={
+                    "futures_net_open_interest": 0.0 if value is None else value,
+                    "futures_oi_known": value is not None,
+                }
+            )
             for item, value in zip(healthy_market, values, strict=True)
         ]
 
@@ -694,20 +705,33 @@ def test_market_environment_handles_real_position_magnitudes(healthy_market) -> 
     covering = [*shorts[:-1], shorts[-2] + 12_000.0]  # latest day covers 12k contracts
     adding = [*shorts[:-1], shorts[-2] - 12_000.0]
 
-    def flow(values: list[float]) -> float:
+    def flow(values: list[float | None]) -> float:
         snapshot = engine.analyze(with_futures(values), as_of=healthy_market[-1].trading_date)
         return snapshot.factors.institutional_flow
 
     assert flow(covering) > flow(shorts) > flow(adding)
     assert 0 <= flow(adding) <= 100 and 0 <= flow(covering) <= 100
-    # no TAIFEX data stored (all 0): the futures leg is neutral and the score stays defined
-    assert with_futures([0.0] * count)[-1].futures_net_open_interest == 0
-    neutral = engine.analyze(with_futures([0.0] * count), as_of=healthy_market[-1].trading_date)
-    assert 0 <= neutral.factors.institutional_flow <= 100
-    # a missing latest day (0) amid real history does not become a -100,000 outlier
-    missing_latest = flow([*shorts[:-1], 0.0])
-    assert abs(missing_latest - flow([0.0] * count)) < 1e-9
+    # no TAIFEX data stored at all: the futures leg is neutral (the same as a flat position)
+    # and the score stays defined
+    no_data = flow([None] * count)
+    assert 0 <= no_data <= 100
+    assert abs(no_data - flow([5_000.0] * count)) < 1e-9
+    # a missing latest day amid real history does not become a -100,000 outlier ...
+    assert abs(flow([*shorts[:-1], None]) - no_data) < 1e-9
+    # ... and unknown days inside the history stay out of the z-score window
+    gappy = [None if i % 3 == 0 else value for i, value in enumerate(shorts)]
+    assert abs(flow(gappy) - flow(shorts)) < 5
+    # a REAL zero position is data, not "unknown": net flat after -100k of shorts is a
+    # large covering move and moves the score
+    flat = flow([*shorts[:-1], 0.0])
+    assert flat > flow(covering) and abs(flat - no_data) > 1.0
     assert base.market == "TW"
+
+
+def test_observation_flag_defaults_keep_the_old_meaning_of_zero() -> None:
+    row = observation(date(2026, 11, 27), futures=0.0)
+    assert row.futures_oi_known is False  # rows written before the flag: 0 = no data
+    assert observation(date(2026, 11, 27), futures=-5.0).futures_oi_known is True
 
 
 # --- API ---------------------------------------------------------------------------------
@@ -747,7 +771,7 @@ async def test_services(api_repo) -> None:
     assert early.days == [] and early.latest is None and early.data_through is None
     stock = await StockFuturesService(api_repo).get("2330", as_of=date(2026, 11, 28))
     assert stock.symbol == "2330.TW" and stock.has_futures
-    assert stock.days[-1].basis_pct == pytest.approx((2159 - 2150) / 2150 * 100)
+    assert stock.days[-1].basis_pct == pytest.approx((2159 - 2150) / 2150 * 100, abs=0.005)
     assert stock.oi_change_1d is not None
     none = await StockFuturesService(api_repo).get("1101.TW", as_of=date(2026, 11, 28))
     assert none.has_futures is False and none.days == [] and none.notes
@@ -840,6 +864,17 @@ class _Recorder:
     def drop_table(self, name):
         self.dropped.append(name)
 
+    def add_column(self, table, column):
+        self.added = getattr(self, "added", {})
+        self.added.setdefault(table, {})[column.name] = column
+
+    def drop_column(self, table, name):
+        self.added.get(table, {}).pop(name, None)
+
+    def execute(self, statement):
+        self.statements = getattr(self, "statements", [])
+        self.statements.append(str(statement))
+
 
 def test_migration_matches_orm() -> None:
     spec = importlib.util.spec_from_file_location("migration_0020", MIGRATION)
@@ -847,9 +882,7 @@ def test_migration_matches_orm() -> None:
     spec.loader.exec_module(module)
     recorder = _Recorder()
     module.op = recorder
-    assert (
-        module.revision == "0020_derivatives_data"
-    )
+    assert module.revision == "0020_derivatives_data"
     module.upgrade()
     assert set(recorder.tables) == set(TABLES)
     for name in TABLES:
@@ -862,6 +895,10 @@ def test_migration_matches_orm() -> None:
             assert columns[column.name].nullable == column.nullable, (name, column.name)
         pk = next(i for i in items if isinstance(i, sa.PrimaryKeyConstraint))
         assert list(pk._pending_colargs) == [c.name for c in orm.primary_key.columns], name
+    flag = recorder.added["market_observations_daily"]["futures_oi_known"]
+    orm_flag = Base.metadata.tables["market_observations_daily"].columns["futures_oi_known"]
+    assert type(flag.type) is type(orm_flag.type) and flag.nullable == orm_flag.nullable
+    assert any("futures_oi_known = true" in sql for sql in recorder.statements)
     orm_indexes = {
         index.name: (table.name, tuple(c.name for c in index.columns))
         for table in (Base.metadata.tables[n] for n in TABLES)
@@ -870,6 +907,7 @@ def test_migration_matches_orm() -> None:
     assert recorder.indexes == orm_indexes
     module.downgrade()
     assert set(recorder.dropped) == set(TABLES) and recorder.indexes == {}
+    assert recorder.added["market_observations_daily"] == {}
 
 
 class _Result:
@@ -1009,7 +1047,7 @@ async def test_postgres_round_trip(pg_session) -> None:
         ]
     )
     metrics = await repo.latest_stock_futures_metrics(FAR)
-    assert metrics["2330.TW"].basis_pct == pytest.approx((2159 - 2150) / 2150 * 100)
+    assert metrics["2330.TW"].basis_pct == pytest.approx((2159 - 2150) / 2150 * 100, abs=0.005)
     history = await repo.stock_futures_history("2330.TW", FAR, 5)
     assert history and history[-1].near_month == "202612"
     assert await repo.has_stock_futures("2330.TW") and not await repo.has_stock_futures("1101.TW")
@@ -1021,4 +1059,202 @@ async def test_postgres_round_trip(pg_session) -> None:
     stored = [o for o in await repo.list_market_observations("TW") if o.source == TEST_SOURCE]
     assert [o.revision for o in stored] == [1, 2]
     assert stored[-1].futures_net_open_interest == pytest.approx(-106699.2)
+    assert [o.futures_oi_known for o in stored] == [False, True]  # the flag round-trips
     assert await refresh_observation_futures(repo) == 0
+
+    # unknown open interest is NULL in the table, not 0 (and a real 0 stays a known 0)
+    unknown = stock[0].model_copy(
+        update={
+            "trading_date": date(2026, 11, 20),
+            "total_open_interest": None,
+            "open_interest_shares": None,
+            "near_open_interest": None,
+        }
+    )
+    assert await repo.upsert_stock_futures([unknown]) == 1
+    history = await repo.stock_futures_history(unknown.symbol, FAR, 10)
+    assert history[0].trading_date == date(2026, 11, 20) and history[0].total_open_interest is None
+    flat = observation(date(2026, 11, 20), source=TEST_SOURCE, futures=0.0).model_copy(
+        update={"futures_oi_known": True}
+    )
+    await repo.upsert_market_observations([flat])
+    got = [
+        o for o in await repo.list_market_observations("TW") if o.trading_date == flat.trading_date
+    ]
+    assert [(o.futures_net_open_interest, o.futures_oi_known) for o in got] == [(0.0, True)]
+
+
+# --- data-integrity fixes ------------------------------------------------------------------
+
+SSF_HEAD = (
+    "交易日期,契約,到期月份(週別),開盤價,最高價,最低價,收盤價,漲跌價,漲跌%,成交量,結算價,"
+    "未沖銷契約數,最後最佳買價,最後最佳賣價,歷史最高價,歷史最低價,是否因訊息面暫停交易,"
+    "交易時段,價差對單式委託成交量"
+)
+
+
+def test_a_regular_session_row_without_open_interest_is_unknown_not_zero() -> None:
+    rows = [
+        "2026/11/27,CDF,202612,2170,2185,2165,2175,5,0.2%,9000,2175,-,2174,2176,2300,1500,,一般,",
+        "2026/11/26,CDF,202612,2170,2185,2165,2170,5,0.2%,9000,2170,30000,2174,2176,2300,1500,,一般,",
+    ]
+    table = {"CDF": src.ContractSpec("CDF", "2330", "2330.TW", 2000.0)}
+    months = src.parse_futures_daily("\n".join([SSF_HEAD, *rows]), {"CDF"})
+    assert [m.open_interest for m in months] == [30000, None]
+    days = sorted(src.build_stock_futures_days(months, table), key=lambda r: r.trading_date)
+    assert days[0].total_open_interest == 30000 and days[0].open_interest_shares == 60_000_000
+    assert days[1].total_open_interest is None and days[1].open_interest_shares is None
+    assert days[1].near_open_interest is None  # not 0.0 either
+    assert days[1].total_volume == 9000  # everything else stays
+    # no -100% one-day move out of a missing figure, in either direction
+    assert calc.oi_changes(days) == (None, None)
+    assert calc.oi_changes(list(reversed(days))) == (None, None)
+    assert calc.pct_change(0.0, 100.0) is None and calc.pct_change(None, 100.0) is None
+    assert calc.pct_change(100.0, None) is None and calc.pct_change(110.0, 100.0) == 10.0
+
+
+class SsfFake(FakeTaifex):
+    """Serves the stock-futures fixture plus a 27th whose first regular row has no OI yet."""
+
+    def __init__(self, with_oi: bool) -> None:
+        super().__init__()
+        self.with_oi = with_oi
+
+    async def fetch(self, url, form=None):
+        body = await super().fetch(url, form)
+        if url != src.FUT_DAILY_URL:
+            return body
+        lines = body.splitlines()
+        copies = []
+        for line in lines[1:]:
+            if line.startswith("2026/11/26"):
+                copy = "2026/11/27" + line[len("2026/11/26") :]
+                copies.append(copy)
+        if not self.with_oi:
+            first = next(
+                i
+                for i, line in enumerate(copies)
+                if line.split(",")[1] == "CDF" and line.split(",")[17] == "一般"
+            )
+            cells = copies[first].split(",")
+            cells[11] = "-"
+            copies[first] = ",".join(cells)
+        return "\n".join([*lines, *copies])
+
+
+async def test_live_day_with_missing_open_interest_is_not_final_until_it_appears() -> None:
+    repo, attempts, cache = MemoryQuantRepository(), {}, {}
+    incomplete = SsfFake(with_oi=False)
+    written = await run(repo, incomplete, taipei(27, 18), attempts=attempts, specs_cache=cache)
+    assert written["stock_futures"] == 4  # the finished 26th only
+    stored = await repo.latest_stock_futures_days(FAR, 6)
+    assert {d.trading_date for rows in stored.values() for d in rows} == {date(2026, 11, 26)}
+    assert not await repo.list_fetch_coverage(sched.SOURCE, "stock_futures", "*", ["2026-11-27"])
+    assert "stock_futures" in attempts  # asked again after the retry delay
+    healthy = SsfFake(with_oi=True)
+    later = await run(repo, healthy, taipei(27, 19), attempts=attempts, specs_cache=cache)
+    assert later["stock_futures"] == 4
+    assert await repo.list_fetch_coverage(sched.SOURCE, "stock_futures", "*", ["2026-11-27"])
+    days = (await repo.latest_stock_futures_days(FAR, 6))["2330.TW"]
+    assert days[-1].trading_date == date(2026, 11, 27)
+    assert days[-1].total_open_interest == days[0].total_open_interest  # same OI as the 26th
+
+
+async def test_a_finished_day_with_missing_open_interest_is_stored_as_unknown() -> None:
+    repo = MemoryQuantRepository()
+    written = await run(
+        repo, SsfFake(with_oi=False), taipei(28, 12), backfill_sessions=3, specs_cache={}
+    )
+    assert written["stock_futures"] == 8  # 26th and 27th (4 underlyings each)
+    last = (await repo.latest_stock_futures_days(FAR, 6))["2330.TW"][-1]
+    assert last.trading_date == date(2026, 11, 27) and last.total_open_interest is None
+    metrics = (await repo.latest_stock_futures_metrics(FAR))["2330.TW"]
+    assert metrics.open_interest is None and metrics.oi_change_1d is None  # not -100%
+
+
+class RefusingTaifex(FakeTaifex):
+    def __init__(self, refuse: set[str]) -> None:
+        super().__init__()
+        self.refuse = refuse
+
+    async def fetch(self, url, form=None):
+        if url in self.refuse:
+            self.requests.append((url, form))
+            raise TaifexBlocked(f"TAIFEX answered 302 for {url} (location=/404.htm)")
+        return await super().fetch(url, form)
+
+
+async def test_block_page_ends_the_whole_taifex_pass_and_backs_off() -> None:
+    repo, attempts = MemoryQuantRepository(), {}
+    taifex = RefusingTaifex({src.PC_RATIO_URL})
+    written = await run(repo, taifex, taipei(27, 18), attempts=attempts)
+    # futures_institutional was fetched, the P/C ratio hit the 302, nothing after it was sent
+    assert [u for u, _ in taifex.requests] == [src.FUT_INSTITUTIONAL_URL, src.PC_RATIO_URL]
+    assert list(written) == ["futures_institutional"]
+    assert sched.BLOCKED in attempts
+    taifex.requests.clear()
+    await run(repo, taifex, taipei(27, 18, 5), attempts=attempts)
+    assert taifex.requests == []  # backed off: no request at all inside the retry delay
+    healthy = FakeTaifex()
+    later = await run(repo, healthy, taipei(27, 18, 20), attempts=attempts)
+    assert later["options_pc_ratio"] == 2 and sched.BLOCKED not in attempts
+    assert healthy.count(src.PC_RATIO_URL) == 1
+
+
+async def test_taifex_client_raises_blocked_for_redirects_and_timeouts() -> None:
+    import httpx
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "/404.htm"})
+
+    def hang(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    for handler in (redirect, hang):
+        client = src.TaifexClient(
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            request_interval_seconds=0,
+        )
+        with pytest.raises(TaifexBlocked):
+            await client.fetch(src.FUT_INSTITUTIONAL_URL, {"a": "b"})
+
+
+async def test_real_zero_position_is_data_and_old_rows_keep_their_meaning() -> None:
+    repo = MemoryQuantRepository()
+    day = date(2026, 11, 27)
+    await repo.upsert_market_observations([observation(day)])  # built before TAIFEX: unknown
+    await repo.upsert_futures_institutional(
+        src.parse_futures_institutional(text("fut_institutional.csv"))
+    )
+    assert await refresh_observation_futures(repo) == 1
+    stored = await repo.list_market_observations("TW")
+    newest = max(stored, key=lambda o: o.revision)
+    assert newest.futures_oi_known is True and newest.futures_net_open_interest != 0
+    # a genuinely flat position (0 contracts) is stored as known zero, not "unknown"
+    flat = observation(date(2026, 11, 30), futures=0.0)
+    assert flat.futures_oi_known is False
+    from quant_signal.application import derivatives_observations as obs
+
+    class Flat(MemoryQuantRepository):
+        async def foreign_tx_equiv_net_oi_series(self, start, end):
+            return {date(2026, 11, 30): 0.0}
+
+    repo2 = Flat()
+    await repo2.upsert_market_observations([flat])
+    assert await obs.refresh_observation_futures(repo2) == 1
+    revised = max(await repo2.list_market_observations("TW"), key=lambda o: o.revision)
+    assert revised.futures_net_open_interest == 0.0 and revised.futures_oi_known is True
+    assert await obs.refresh_observation_futures(repo2) == 0  # idempotent
+
+
+def test_derived_derivatives_figures_do_not_show_float_noise() -> None:
+    rows = src.parse_futures_institutional(text("fut_institutional.csv"))
+    equiv = calc.tx_equivalent_net_oi(rows, "foreign")
+    assert all(round(value, 2) == value for value in equiv.values())
+    assert 0.1 + 0.2 != 0.3  # the raw float behind the rounding
+    assert (
+        calc.day_over_day({date(2026, 11, 26): 0.1, date(2026, 11, 27): 0.3})[date(2026, 11, 27)]
+        == 0.2
+    )
+    assert calc.basis_pct(2159.0, 2150.0) == 0.42
+    assert calc.pct_change(1010.0, 1000.0) == 1.0

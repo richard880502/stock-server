@@ -11,7 +11,21 @@ from quant_signal.domain.short_data import (
     InsiderHolding,
     ShortLendingDay,
 )
-from quant_signal.infrastructure.short_data_reads import ShortDataReadsMixin, plan_revisions
+from quant_signal.infrastructure.column_limits import enforce_column_limits
+from quant_signal.infrastructure.db.models import (
+    DayTradeDailyRow,
+    DividendEventRow,
+    InsiderHoldingMonthlyRow,
+    ShortLendingDailyRow,
+)
+from quant_signal.infrastructure.short_data_reads import TAIPEI, ShortDataReadsMixin, plan_revisions
+
+_ORM = {
+    "sbl": ShortLendingDailyRow,
+    "daytrade": DayTradeDailyRow,
+    "insider": InsiderHoldingMonthlyRow,
+    "dividend": DividendEventRow,
+}
 
 
 def _newest(rows: list[Any], key: Any, cutoff: datetime) -> list[Any]:
@@ -44,6 +58,8 @@ class MemoryShortDataMixin(ShortDataReadsMixin):
             if k not in existing or row.revision > existing[k].revision:
                 existing[k] = row
         fresh = plan_revisions(rows, existing, key)
+        for row in fresh:
+            enforce_column_limits(_ORM[name], row.model_dump())
         store.extend(fresh)
         return len(fresh)
 
@@ -93,7 +109,7 @@ class MemoryShortDataMixin(ShortDataReadsMixin):
         return [
             (row.symbol, row.trading_date, row.volume)
             for row in self.market_stock_days.values()  # type: ignore[attr-defined]
-            if since <= row.trading_date <= cutoff.date()
+            if since <= row.trading_date <= cutoff.astimezone(TAIPEI).date()
             and row.available_at <= cutoff
             and (symbol is None or row.symbol == symbol)
         ]
@@ -111,8 +127,9 @@ class MemoryShortDataMixin(ShortDataReadsMixin):
         return list(newest.values())
 
     async def sd_dividend_rows(
-        self, start: date, end: date, cutoff: datetime
+        self, start: date, end: date, cutoff: datetime, *, include_withdrawn: bool = False
     ) -> list[DividendEvent]:
         self._sd()
         rows = [r for r in self.sd_store["dividend"] if start <= r.ex_date <= end]
-        return _newest(rows, lambda r: (r.symbol, r.ex_date, r.kind), cutoff)
+        newest = _newest(rows, lambda r: (r.symbol, r.ex_date, r.kind), cutoff)
+        return newest if include_withdrawn else [row for row in newest if not row.withdrawn]

@@ -81,6 +81,9 @@ class DividendEvent(BaseModel):
     stock_dividend_per_share: float | None = None  # new shares per 1 share held (0.05 = 50/1000)
     cash_capital_increase_ratio: float | None = None  # 現金增資配股率, new shares per share
     subscription_price: float | None = None  # NT$ per new share, None until announced
+    # True on the revision that retires an event the exchange no longer lists (its ex-date
+    # moved, its kind changed or it was cancelled). Reads never return withdrawn events.
+    withdrawn: bool = False
     available_at: datetime
     revision: int = Field(default=1, ge=1)
 

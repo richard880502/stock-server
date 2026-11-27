@@ -121,9 +121,11 @@ class StockFuturesDay(_Row):
     symbol: str
     trading_date: date
     underlying_code: str
-    total_open_interest: float
+    # None when a regular-session row of the underlying had no open interest yet ("-"):
+    # missing is not zero (it would read as a -100% one-day change).
+    total_open_interest: float | None
     total_volume: float
-    open_interest_shares: int
+    open_interest_shares: int | None
     volume_shares: int
     near_month: str | None
     near_settlement: float | None
@@ -207,7 +209,7 @@ class MarketDerivatives(BaseModel):
 
 class StockFuturesPoint(BaseModel):
     date: date
-    open_interest: float
+    open_interest: float | None
     volume: float
     near_month: str | None = None
     near_settlement: float | None = None
@@ -228,7 +230,7 @@ class StockFuturesMetrics(BaseModel):
 
     symbol: str
     data_date: date
-    open_interest: float
+    open_interest: float | None
     volume: float
     oi_change_1d: float | None
     oi_change_5d: float | None

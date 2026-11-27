@@ -72,6 +72,7 @@ def upgrade():
         sa.Column("stock_dividend_per_share", sa.Float),
         sa.Column("cash_capital_increase_ratio", sa.Float),
         sa.Column("subscription_price", sa.Float),
+        sa.Column("withdrawn", sa.Boolean, nullable=False, server_default=sa.text("false")),
         sa.Column("available_at", AT, nullable=False),
         sa.PrimaryKeyConstraint("symbol", "ex_date", "kind", "revision"),
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 
 from quant_signal.application.derivatives_data import refresh_derivatives_data
@@ -65,10 +66,155 @@ _derivatives_attempts: dict[str, datetime] = {}
 _derivatives_specs: dict[str, object] = {}
 
 
+async def _rollback_quietly(repository: QuantRepository) -> None:
+    """Best effort: a cancelled statement can leave the shared session needing a rollback."""
+    rollback = getattr(getattr(repository, "session", None), "rollback", None)
+    if rollback is None:
+        return
+    try:
+        await rollback()
+    except Exception:
+        logger.exception("rollback after an interrupted side feed failed")
+
+
+async def _run_feed(
+    name: str,
+    repository: QuantRepository,
+    budget: float,
+    feed: Callable[[], Awaitable[object]],
+) -> None:
+    """Run one side feed with a total wall-clock budget; it can never fail or stall the tick.
+
+    A feed commits what it finished (every write is its own transaction) and resumes from
+    ``fetch_coverage`` on the next tick, so cancelling it at the budget loses nothing.
+    """
+    try:
+        await asyncio.wait_for(feed(), timeout=budget)
+    except TimeoutError:
+        logger.warning(
+            "%s refresh used its %.0f s budget; moving on, it resumes next tick", name, budget
+        )
+        await _rollback_quietly(repository)
+    except Exception:
+        # Side feeds never stall the price sync.
+        logger.exception("%s refresh failed", name)
+
+
+async def run_side_feeds(
+    repository: QuantRepository,
+    twse: TwseProvider,
+    tpex: TpexProvider,
+    taifex: TaifexClient | None,
+    now: datetime,
+) -> None:
+    """The official-data side feeds, one after another, each within its own time budget."""
+    settings = get_settings()
+    budget = settings.side_feed_budget_seconds
+    if settings.official_events_enabled:
+        await _run_feed(
+            "official events",
+            repository,
+            budget,
+            lambda: refresh_official_data(
+                repository,
+                twse,
+                tpex,
+                now=now,
+                attempts=_official_attempts,
+                material_minutes=settings.official_events_material_minutes,
+                retry_after=timedelta(minutes=settings.official_events_retry_minutes),
+            ),
+        )
+    if settings.holders_tdcc_enabled or settings.holders_foreign_enabled:
+        await _run_feed(
+            "holders data",
+            repository,
+            budget,
+            lambda: refresh_holders_data(
+                repository,
+                twse,
+                tpex,
+                now=now,
+                attempts=_holders_attempts,
+                tdcc_enabled=settings.holders_tdcc_enabled,
+                foreign_enabled=settings.holders_foreign_enabled,
+                foreign_window=settings.holders_foreign_days,
+                retry_after=timedelta(minutes=settings.holders_retry_minutes),
+            ),
+        )
+    await _run_feed(
+        "short data",
+        repository,
+        budget,
+        lambda: refresh_short_data(
+            repository,
+            twse,
+            tpex,
+            now=now,
+            attempts=_short_data_attempts,
+            sbl_enabled=settings.short_data_sbl_enabled,
+            daytrade_enabled=settings.short_data_daytrade_enabled,
+            insider_enabled=settings.short_data_insider_enabled,
+            dividend_enabled=settings.short_data_dividend_enabled,
+            backfill_sessions=settings.short_data_backfill_sessions,
+            backfill_per_tick=settings.short_data_backfill_per_tick,
+            retry_after=timedelta(minutes=settings.short_data_retry_minutes),
+        ),
+    )
+    if (
+        settings.fundamentals_valuation_enabled
+        or settings.fundamentals_revenue_history_enabled
+        or settings.fundamentals_financials_enabled
+    ):
+        await _run_feed(
+            "fundamentals",
+            repository,
+            budget,
+            lambda: refresh_fundamentals_data(
+                repository,
+                twse,
+                tpex,
+                now=now,
+                attempts=_fundamentals_attempts,
+                valuation_enabled=settings.fundamentals_valuation_enabled,
+                valuation_backfill_sessions=settings.valuation_backfill_sessions,
+                revenue_history_enabled=settings.fundamentals_revenue_history_enabled,
+                revenue_backfill_months=settings.revenue_backfill_months,
+                financials_enabled=settings.fundamentals_financials_enabled,
+                financials_backfill_quarters=settings.financials_backfill_quarters,
+                backfill_per_tick=settings.fundamentals_backfill_per_tick,
+                retry_after=timedelta(minutes=settings.fundamentals_retry_minutes),
+                mops_interval=settings.fundamentals_mops_interval_seconds,
+            ),
+        )
+    if settings.derivatives_enabled and taifex is not None:
+        await _run_feed(
+            "derivatives data",
+            repository,
+            budget,
+            lambda: refresh_derivatives_data(
+                repository,
+                taifex,
+                now=now,
+                attempts=_derivatives_attempts,
+                specs_cache=_derivatives_specs,
+                backfill_sessions=settings.derivatives_backfill_sessions,
+                after_close=settings.derivatives_after_close,
+                request_budget=settings.derivatives_requests_per_tick,
+                retry_after=timedelta(minutes=settings.derivatives_retry_minutes),
+            ),
+        )
+
+
 async def tick(
     twse: TwseProvider, tpex: TpexProvider, taifex: TaifexClient | None = None
 ) -> bool | None:
-    """One scheduling pass: recover stuck jobs, queue the daily refresh, run one job."""
+    """One scheduling pass: recover stuck jobs, queue the daily refresh, run one job, then
+    the side feeds.
+
+    The price sync comes first: the side feeds are bounded individually, but a slow
+    exchange must never delay the quotes (and the realtime collector shares this loop).
+    """
     settings = get_settings()
     async with session_factory() as session:
         repository = PostgresQuantRepository(session)
@@ -81,114 +227,36 @@ async def tick(
         now = datetime.now(UTC)
         if now - _industry_attempt["at"] >= INDUSTRY_RETRY_AFTER:
             _industry_attempt["at"] = now
-            try:
-                await refresh_industries(repository, twse, tpex, now=now)
-            except Exception:
-                # Classification is a weekly nicety; never let it stall the price sync.
-                logger.exception("industry classification refresh failed")
-        if settings.official_events_enabled:
-            try:
-                await refresh_official_data(
-                    repository,
-                    twse,
-                    tpex,
-                    now=now,
-                    attempts=_official_attempts,
-                    material_minutes=settings.official_events_material_minutes,
-                    retry_after=timedelta(minutes=settings.official_events_retry_minutes),
-                )
-            except Exception:
-                # Events are a side feed; never let them stall the price sync.
-                logger.exception("official events refresh failed")
-        if settings.holders_tdcc_enabled or settings.holders_foreign_enabled:
-            try:
-                await refresh_holders_data(
-                    repository,
-                    twse,
-                    tpex,
-                    now=now,
-                    attempts=_holders_attempts,
-                    tdcc_enabled=settings.holders_tdcc_enabled,
-                    foreign_enabled=settings.holders_foreign_enabled,
-                    foreign_window=settings.holders_foreign_days,
-                    retry_after=timedelta(minutes=settings.holders_retry_minutes),
-                )
-            except Exception:
-                # Holder data is a side feed; never let it stall the price sync.
-                logger.exception("holders data refresh failed")
+            # Classification is a weekly nicety; never let it stall the price sync.
+            await _run_feed(
+                "industry classification",
+                repository,
+                settings.side_feed_budget_seconds,
+                lambda: refresh_industries(repository, twse, tpex, now=now),
+            )
+        job_error: Exception | None = None
+        outcome: bool | None = None
         try:
-            await refresh_short_data(
+            await enqueue_daily_refresh(
+                repository,
+                now=datetime.now(UTC),
+                daily_time=settings.sync_daily_time,
+                lookback_days=settings.sync_lookback_days,
+                market_lookback_days=settings.sync_market_lookback_days,
+            )
+            outcome = await process_next_job(
                 repository,
                 twse,
                 tpex,
-                now=now,
-                attempts=_short_data_attempts,
-                sbl_enabled=settings.short_data_sbl_enabled,
-                daytrade_enabled=settings.short_data_daytrade_enabled,
-                insider_enabled=settings.short_data_insider_enabled,
-                dividend_enabled=settings.short_data_dividend_enabled,
-                backfill_sessions=settings.short_data_backfill_sessions,
-                backfill_per_tick=settings.short_data_backfill_per_tick,
-                retry_after=timedelta(minutes=settings.short_data_retry_minutes),
+                max_attempts=settings.sync_max_attempts,
+                after_market_sync=_after_market_sync,
             )
-        except Exception:
-            # A side feed; never let it stall the price sync.
-            logger.exception("short data refresh failed")
-        if (
-            settings.fundamentals_valuation_enabled
-            or settings.fundamentals_revenue_history_enabled
-            or settings.fundamentals_financials_enabled
-        ):
-            try:
-                await refresh_fundamentals_data(
-                    repository,
-                    twse,
-                    tpex,
-                    now=now,
-                    attempts=_fundamentals_attempts,
-                    valuation_enabled=settings.fundamentals_valuation_enabled,
-                    valuation_backfill_sessions=settings.valuation_backfill_sessions,
-                    revenue_history_enabled=settings.fundamentals_revenue_history_enabled,
-                    revenue_backfill_months=settings.revenue_backfill_months,
-                    financials_enabled=settings.fundamentals_financials_enabled,
-                    financials_backfill_quarters=settings.financials_backfill_quarters,
-                    backfill_per_tick=settings.fundamentals_backfill_per_tick,
-                    retry_after=timedelta(minutes=settings.fundamentals_retry_minutes),
-                    mops_interval=settings.fundamentals_mops_interval_seconds,
-                )
-            except Exception:
-                # Fundamentals are a side feed; never let them stall the price sync.
-                logger.exception("fundamentals refresh failed")
-        if settings.derivatives_enabled and taifex is not None:
-            try:
-                await refresh_derivatives_data(
-                    repository,
-                    taifex,
-                    now=now,
-                    attempts=_derivatives_attempts,
-                    specs_cache=_derivatives_specs,
-                    backfill_sessions=settings.derivatives_backfill_sessions,
-                    after_close=settings.derivatives_after_close,
-                    request_budget=settings.derivatives_requests_per_tick,
-                    retry_after=timedelta(minutes=settings.derivatives_retry_minutes),
-                )
-            except Exception:
-                # Derivatives are a side feed; never let them stall the price sync.
-                logger.exception("derivatives data refresh failed")
-        await enqueue_daily_refresh(
-            repository,
-            now=datetime.now(UTC),
-            daily_time=settings.sync_daily_time,
-            lookback_days=settings.sync_lookback_days,
-            market_lookback_days=settings.sync_market_lookback_days,
-        )
-        outcome = await process_next_job(
-            repository,
-            twse,
-            tpex,
-            max_attempts=settings.sync_max_attempts,
-            after_market_sync=_after_market_sync,
-        )
+        except Exception as exc:  # the side feeds still run; the failure is re-raised below
+            job_error = exc
+            await _rollback_quietly(repository)
+        await run_side_feeds(repository, twse, tpex, taifex, datetime.now(UTC))
+        if job_error is not None:
+            raise job_error
         if outcome is None and now - _screener_attempt["at"] >= SCREENER_UPKEEP_EVERY:
             # Idle: catch up on any date the snapshot is missing (first run, downtime).
             _screener_attempt["at"] = now

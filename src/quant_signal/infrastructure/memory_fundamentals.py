@@ -14,6 +14,12 @@ from quant_signal.domain.fundamentals import (
     ValuationMetrics,
 )
 from quant_signal.domain.models import MonthlyRevenue
+from quant_signal.infrastructure.column_limits import enforce_column_limits
+from quant_signal.infrastructure.db.models import (
+    MonthlyRevenueRow,
+    QuarterlyFinancialRow,
+    ValuationDailyRow,
+)
 from quant_signal.infrastructure.revisions import latest_visible, plan_revisions
 from quant_signal.quant.quarterly import earnings_metrics
 from quant_signal.quant.revenue_trend import revenue_trend
@@ -44,6 +50,7 @@ class MemoryFundamentalsMixin:
         for row in rows:
             key = (row.symbol, row.trading_date, row.source)
             if key not in self.valuation_rows:
+                enforce_column_limits(ValuationDailyRow, row.model_dump())
                 self.valuation_rows[key] = row
                 written += 1
         return written
@@ -90,6 +97,8 @@ class MemoryFundamentalsMixin:
         for row in rows:
             if (row.symbol, row.period) not in held:
                 fresh[(row.symbol, row.period)] = row
+        for row in fresh.values():
+            enforce_column_limits(MonthlyRevenueRow, row.model_dump())
         self.revenue_rows.extend(fresh.values())  # type: ignore[attr-defined]
         return len(fresh)
 
@@ -128,6 +137,8 @@ class MemoryFundamentalsMixin:
     async def upsert_quarterly_financials(self, rows: list[QuarterlyFinancial]) -> int:
         self._fundamentals()
         planned = plan_revisions(self._latest_financials(), rows, _financial_key, ignore={"source"})
+        for row in planned:
+            enforce_column_limits(QuarterlyFinancialRow, row.model_dump())
         self.financial_rows.extend(planned)
         return len(planned)
 
@@ -138,6 +149,8 @@ class MemoryFundamentalsMixin:
         for row in rows:
             if _financial_key(row) not in held:
                 fresh[_financial_key(row)] = row
+        for row in fresh.values():
+            enforce_column_limits(QuarterlyFinancialRow, row.model_dump())
         self.financial_rows.extend(fresh.values())
         return len(fresh)
 

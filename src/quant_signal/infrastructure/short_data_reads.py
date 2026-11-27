@@ -7,8 +7,10 @@ upserts, everything else is derived here so both backends agree.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -24,6 +26,7 @@ from quant_signal.domain.short_data import (
 )
 from quant_signal.quant import short_data as calc
 
+TAIPEI = ZoneInfo("Asia/Taipei")
 LOOKBACK_DAYS = 50  # calendar days of history that cover 20 sessions plus the average window
 REVISION_IGNORED = {"available_at", "revision", "source"}
 
@@ -80,9 +83,39 @@ class ShortDataReadsMixin:
         raise NotImplementedError
 
     async def sd_dividend_rows(
-        self, start: date, end: date, cutoff: datetime
+        self, start: date, end: date, cutoff: datetime, *, include_withdrawn: bool = False
     ) -> list[DividendEvent]:
+        """Newest revision per event visible at ``cutoff``; withdrawn events are skipped
+        unless ``include_withdrawn`` (a withdrawal is visible from its own ``available_at``)."""
         raise NotImplementedError
+
+    async def upsert_dividend_events(self, rows: list[DividendEvent]) -> int:
+        raise NotImplementedError
+
+    async def withdraw_unlisted_dividend_events(
+        self, source: str, listed: Iterable[DividendEvent], *, today: date, available_at: datetime
+    ) -> int:
+        """Retire stored future events of ``source`` that its latest forecast table dropped.
+
+        ``listed`` is the complete table just fetched. Events with an ex-date after
+        ``today`` and up to the table's last ex-date that it no longer lists get a new
+        revision marked withdrawn (the old revisions stay for earlier as-of reads). Past
+        ex-dates and events beyond the table's span are never touched; an empty table
+        withdraws nothing (it may be a failed fetch).
+        """
+        keys = {(e.symbol, e.ex_date, e.kind) for e in listed}
+        if not keys:
+            return 0
+        start, last = today + timedelta(days=1), max(day for _, day, _ in keys)
+        if last < start:
+            return 0
+        stored = await self.sd_dividend_rows(start, last, available_at)
+        gone = [
+            row.model_copy(update={"withdrawn": True, "available_at": available_at})
+            for row in stored
+            if row.source == source and (row.symbol, row.ex_date, row.kind) not in keys
+        ]
+        return await self.upsert_dividend_events(gone) if gone else 0
 
     # --- shared helpers ----------------------------------------------------------------
     async def _sd_volumes(
@@ -154,7 +187,7 @@ class ShortDataReadsMixin:
 
     async def next_dividend_events(self, as_of: datetime, days: int = 60) -> dict[str, NextEvent]:
         """Earliest ex-dividend / ex-rights date per symbol from ``as_of``'s date on."""
-        start = as_of.date()
+        start = as_of.astimezone(TAIPEI).date()  # the Taipei date, not the UTC one
         rows = await self.sd_dividend_rows(start, start + timedelta(days=days), as_of)
         best: dict[str, DividendEvent] = {}
         for row in sorted(rows, key=lambda r: (r.ex_date, r.kind)):

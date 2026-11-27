@@ -9,6 +9,8 @@ from quant_signal.domain.models import (
     ShareholdingDistribution,
     ShareholdingPair,
 )
+from quant_signal.infrastructure.column_limits import enforce_column_limits
+from quant_signal.infrastructure.db.models import ForeignHoldingRow, ShareholdingDistributionRow
 from quant_signal.quant.holders import PAIR_WINDOW, pair_snapshots
 
 
@@ -27,6 +29,7 @@ class MemoryHoldersMixin:
         for row in rows:
             key = (row.symbol, row.data_date)
             if key not in self.shareholding_rows:
+                enforce_column_limits(ShareholdingDistributionRow, row.model_dump())
                 self.shareholding_rows[key] = row
                 written += 1
         return written
@@ -37,9 +40,14 @@ class MemoryHoldersMixin:
         for row in rows:
             key = (row.symbol, row.trading_date, row.source)
             if key not in self.foreign_rows:
+                enforce_column_limits(ForeignHoldingRow, row.model_dump())
                 self.foreign_rows[key] = row
                 written += 1
         return written
+
+    async def has_shareholding_distribution(self) -> bool:
+        self._holders()
+        return bool(self.shareholding_rows)
 
     def _visible_weeks(self, as_of: datetime) -> list[ShareholdingDistribution]:
         self._holders()

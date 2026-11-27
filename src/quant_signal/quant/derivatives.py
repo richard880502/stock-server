@@ -50,9 +50,12 @@ def tx_equivalent_net_oi(
     mtx = net_oi(rows, investor=investor, contract="MTX")
     tmf = net_oi(rows, investor=investor, contract="TMF")
     return {
-        day: value
-        + mtx.get(day, 0) * TX_EQUIVALENT_FACTOR["MTX"]
-        + tmf.get(day, 0) * TX_EQUIVALENT_FACTOR["TMF"]
+        day: round(
+            value
+            + mtx.get(day, 0) * TX_EQUIVALENT_FACTOR["MTX"]
+            + tmf.get(day, 0) * TX_EQUIVALENT_FACTOR["TMF"],
+            2,
+        )
         for day, value in tx.items()
     }
 
@@ -62,7 +65,7 @@ def day_over_day(series: dict[date, float]) -> dict[date, float | None]:
     out: dict[date, float | None] = {}
     previous: float | None = None
     for day in sorted(series):
-        out[day] = None if previous is None else series[day] - previous
+        out[day] = None if previous is None else round(series[day] - previous, 2)
         previous = series[day]
     return out
 
@@ -147,17 +150,19 @@ ONE_DAY_MAX_GAP = timedelta(days=6)  # long weekend plus a holiday
 FIVE_DAY_MAX_GAP = timedelta(days=12)
 
 
-def pct_change(current: float, previous: float | None) -> float | None:
-    if previous is None or previous <= 0:
+def pct_change(current: float | None, previous: float | None) -> float | None:
+    """Percent change; None when either side is missing or zero (an unreported open
+    interest must never read as a -100% / +infinite move)."""
+    if current is None or previous is None or previous <= 0 or current <= 0:
         return None
-    return (current - previous) / previous * 100.0
+    return round((current - previous) / previous * 100.0, 2)
 
 
 def basis_pct(near_settlement: float | None, spot_close: float | None) -> float | None:
     """(near-month settlement - spot close) / spot close, in percent; None if either is missing."""
     if near_settlement is None or spot_close is None or spot_close <= 0:
         return None
-    return (near_settlement - spot_close) / spot_close * 100.0
+    return round((near_settlement - spot_close) / spot_close * 100.0, 2)
 
 
 def oi_changes(history: list[StockFuturesDay]) -> tuple[float | None, float | None]:

@@ -29,11 +29,13 @@ from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.derivatives_observations import refresh_observation_futures
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import taifex as src
+from quant_signal.infrastructure.providers.taifex import TaifexBlocked
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "taifex_derivatives"
 RETRY_AFTER = timedelta(minutes=15)
+BLOCKED = "taifex:blocked"  # key in the retry-after map: the whole TAIFEX pass is backing off
 SPECS_TTL = timedelta(days=7)
 SPECS_RETRY_TTL = timedelta(days=1)  # when the adjusted-contract list could not be read
 MIN_SPECS = 250  # ~326 stock-futures underlying products
@@ -98,6 +100,9 @@ class RangeDataset:
     complete: Callable[[list[Any]], bool]  # is this one day's slice fully published?
     # Runs once a request is due and before it; returns the extra requests it made.
     prepare: Callable[[], Awaitable[int]] | None = None
+    # A live day is only final (written and recorded) once this also holds, e.g. no missing
+    # open interest; a finished day is stored as published, gaps and all.
+    final: Callable[[list[Any]], bool] | None = None
 
 
 def _tx_foreign_trust_dealer(rows: list[Any]) -> bool:
@@ -167,6 +172,7 @@ def build_datasets(taifex: Fetcher, cache: dict[str, Any], moment: datetime) -> 
             28,
             lambda rows: len(rows) >= MIN_STOCK_FUTURES_DAY,
             prepare_specs,
+            lambda rows: all(row.total_open_interest is not None for row in rows),
         ),
     ]
 
@@ -222,6 +228,8 @@ async def _load_specs(
     try:
         for spec in src.parse_ssf_adjusted(await taifex.fetch(src.SSF_ADJUSTED_URL)):
             specs.setdefault(spec.code, spec)
+    except TaifexBlocked:
+        raise  # a refusal ends the pass; it is not "the list is just unavailable"
     except Exception:
         ttl = SPECS_RETRY_TTL
         logger.exception("stock-futures adjusted contract list unavailable; using base list")
@@ -257,6 +265,9 @@ async def _refresh_range_dataset(
     for day in chunk:
         rows = by_day.get(day, [])
         if rows and dataset.complete(rows):
+            if day in live_days and dataset.final and not dataset.final(rows):
+                pending = True  # published with gaps (open interest "-"): ask again later
+                continue
             to_write.extend(rows)
             results[day] = len(rows)
         elif day in live_days:
@@ -359,6 +370,9 @@ async def refresh_derivatives_data(
         failed_at = failures.get(name)
         return failed_at is not None and moment - failed_at < retry_after
 
+    if throttled(BLOCKED):
+        return written  # TAIFEX refused us recently: no request at all until the back-off ends
+
     budget = request_budget
     datasets: list[tuple[str, Callable[[], Awaitable[tuple[int, int, bool]]]]] = [
         (
@@ -376,6 +390,7 @@ async def refresh_derivatives_data(
             ("options_oi_levels", lambda: _refresh_oi_levels(repository, taifex, today, moment))
         )
 
+    blocked = False
     for name, run in datasets:
         if budget <= 0:
             break
@@ -383,6 +398,14 @@ async def refresh_derivatives_data(
             continue
         try:
             new, used, pending = await run()
+        except TaifexBlocked:
+            # A non-200 / redirect to /404.htm / timeout means "slow down": end the whole
+            # pass, every further request would be refused too.
+            failures[BLOCKED] = moment
+            blocked = True
+            logger.warning("TAIFEX refused or did not answer (%s); backing off", name)
+            await _rollback(repository)
+            break
         except Exception:
             failures[name] = moment
             logger.exception("derivatives refresh failed: %s", name)
@@ -397,6 +420,8 @@ async def refresh_derivatives_data(
         else:
             failures.pop(name, None)
 
+    if not blocked:
+        failures.pop(BLOCKED, None)  # a pass that was not refused ends the back-off
     if written.get("futures_institutional"):
         try:
             revised = await refresh_observation_futures(repository)

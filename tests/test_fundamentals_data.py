@@ -441,6 +441,7 @@ class FakeExchanges:
         self.valuation_days: list[str] = []
         self.fail = fail or set()
         self.eps_override: str | None = None
+        self.otc_has_data = False
         self.client = httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -464,7 +465,7 @@ class FakeExchanges:
             return httpx.Response(200, content=(FIXTURES / name).read_bytes())
         if url.host == "mopsov.twse.com.tw":
             form = dict(item.split("=") for item in request.content.decode().split("&"))
-            if form["TYPEK"] == "otc":
+            if form["TYPEK"] == "otc" and not self.otc_has_data:
                 return httpx.Response(200, text=text("mops_no_data.html"))
             name = "mops_income.html" if key.endswith("sb04") else "mops_balance.html"
             return httpx.Response(200, text=text(name))
@@ -495,6 +496,7 @@ def fast(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
     monkeypatch.setattr(sched, "MIN_VALUATION_ROWS", 1)
     monkeypatch.setattr(sched, "MIN_REVENUE_ROWS", 1)
+    monkeypatch.setattr(sched, "MIN_STATEMENT_ROWS", 1)
 
 
 def taipei(day: int, hour: int, minute: int = 0, month: int = 11) -> datetime:
@@ -587,10 +589,9 @@ async def test_valuation_today_not_published_yet_is_retried_later() -> None:
         financials_enabled=False,
         valuation_window=1,
     )
-    assert sched.VALUATION_DAILY in attempts
-    assert not await repo.list_fetch_coverage(
-        sched.SOURCE, sched.VALUATION_DAILY, "*", ["2026-11-27"]
-    )
+    assert {"miss:valuation_twse:2026-11-27", "miss:valuation_tpex:2026-11-27"} <= set(attempts)
+    for dataset in ("valuation_twse", "valuation_tpex"):
+        assert not await repo.list_fetch_coverage(sched.SOURCE, dataset, "*", ["2026-11-27"])
     before = empty.count("BWIBBU_d")
     await sched.refresh_fundamentals_data(  # inside the retry delay: nothing is requested
         repo,
@@ -633,9 +634,9 @@ async def test_valuation_exchange_failure_never_raises_and_is_remembered() -> No
         fetch_attempts=1,
     )
     assert sched.VALUATION_DAILY in attempts and written[sched.VALUATION_DAILY] == 6  # TWSE kept
-    assert not await repo.list_fetch_coverage(
-        sched.SOURCE, sched.VALUATION_DAILY, "*", ["2026-11-27"]
-    )
+    # TWSE delivered and is recorded on its own; the failed TPEx is not, so it is retried
+    assert await repo.list_fetch_coverage(sched.SOURCE, "valuation_twse", "*", ["2026-11-27"])
+    assert not await repo.list_fetch_coverage(sched.SOURCE, "valuation_tpex", "*", ["2026-11-27"])
 
 
 async def test_valuation_backfill_is_gradual_newest_first_resumable_and_off_session() -> None:
@@ -781,7 +782,10 @@ async def test_financials_forward_failure_of_required_statement_is_retried() -> 
     await sched.refresh_fundamentals_data(repo, broken, broken, now=now, **common)
     assert sched.FINANCIALS_FORWARD in attempts
     assert not await repo.list_fetch_coverage(
-        sched.SOURCE, sched.FINANCIALS_FORWARD, "*", ["2026-11-28"]
+        sched.SOURCE, "financials_forward_twse", "*", ["2026-11-28"]
+    )
+    assert await repo.list_fetch_coverage(  # TPEx's own slot is recorded and not refetched
+        sched.SOURCE, "financials_forward_tpex", "*", ["2026-11-28"]
     )
     healthy = FakeExchanges()
     await sched.refresh_fundamentals_data(
@@ -789,7 +793,7 @@ async def test_financials_forward_failure_of_required_statement_is_retried() -> 
     )
     assert sched.FINANCIALS_FORWARD not in attempts
     assert await repo.list_fetch_coverage(
-        sched.SOURCE, sched.FINANCIALS_FORWARD, "*", ["2026-11-28"]
+        sched.SOURCE, "financials_forward_twse", "*", ["2026-11-28"]
     )
 
 
@@ -815,16 +819,21 @@ async def test_financials_history_backfills_one_quarter_per_tick_with_deadline_s
     holding = (await repo.quarterly_financials("2880.TW", FAR))[0]
     assert (holding.fiscal_year, holding.fiscal_quarter) == (2026, 3)
     assert holding.source == "mops_financials"
-    assert holding.available_at == datetime(2026, 11, 14, 23, 59, tzinfo=TAIPEI)
+    # a financial holding files later than the general 11/14: the common later bound 11/30
+    assert holding.available_at == datetime(2026, 11, 30, 23, 59, tzinfo=TAIPEI)
     cement = (await repo.quarterly_financials("1101.TW", FAR))[0]
     assert cement.source == "twse_financials"  # published rows are never overwritten
-    assert await repo.list_fetch_coverage(sched.SOURCE, sched.FINANCIALS_HISTORY, "*", ["2026Q3"])
+    assert await repo.list_fetch_coverage(sched.SOURCE, "financials_history_sii", "*", ["2026Q3"])
+    # the OTC page said 查詢無資料 for a closed quarter: not recorded as done, asked again later
+    assert not await repo.list_fetch_coverage(
+        sched.SOURCE, "financials_history_otc", "*", ["2026Q3"]
+    )
     await sched.refresh_fundamentals_data(
         repo, exchange, exchange, now=now, attempts=attempts, **common
     )
-    assert await repo.list_fetch_coverage(sched.SOURCE, sched.FINANCIALS_HISTORY, "*", ["2026Q2"])
+    assert await repo.list_fetch_coverage(sched.SOURCE, "financials_history_sii", "*", ["2026Q2"])
     assert not await repo.list_fetch_coverage(
-        sched.SOURCE, sched.FINANCIALS_HISTORY, "*", ["2026Q1"]
+        sched.SOURCE, "financials_history_sii", "*", ["2026Q1"]
     )
 
 
@@ -843,7 +852,7 @@ async def test_financials_history_failure_is_remembered_and_never_raises() -> No
     await sched.refresh_fundamentals_data(repo, broken, broken, now=taipei(28, 9), **common)
     assert sched.FINANCIALS_HISTORY in attempts
     assert not await repo.list_fetch_coverage(
-        sched.SOURCE, sched.FINANCIALS_HISTORY, "*", ["2026Q3"]
+        sched.SOURCE, "financials_history_sii", "*", ["2026Q3"]
     )
 
 
@@ -1076,7 +1085,7 @@ class _StubSession:
     def __init__(self) -> None:
         self.sql: list[str] = []
 
-    async def execute(self, statement):
+    async def execute(self, statement, params=None):
         from sqlalchemy.dialects import postgresql
 
         self.sql.append(str(statement.compile(dialect=postgresql.dialect())))
@@ -1100,7 +1109,10 @@ async def test_postgres_statements_compile_with_point_in_time_filters() -> None:
     await repo.quarterly_financials("2330.TW", cutoff)
     reads = list(session.sql)
     assert len(reads) == 6 and all("available_at <=" in sql for sql in reads)
-    assert "FILTER (WHERE" in reads[0] and "row_number()" in reads[0]
+    # only each symbol's newest `window` rows are read (lateral, LIMIT), never ranked wholesale
+    assert "FILTER (WHERE" in reads[0] and "LATERAL" in reads[0] and "LIMIT %(window)s" in reads[0]
+    assert "row_number()" not in reads[0] and "RECURSIVE" in reads[0]
+    assert "unnest" in reads[1] and "RECURSIVE" not in reads[1]
     await repo.upsert_valuation_daily([day_row("2330.TW", date(2026, 11, 27), 20.0)])
     await repo.insert_missing_monthly_revenue([revenue_row("2026-10", 1.0)])
     await repo.upsert_quarterly_financials(STATEMENTS[:1])
@@ -1123,10 +1135,13 @@ async def test_postgres_reads_match_the_memory_twin() -> None:
     engine = create_async_engine(DATABASE_URL)  # type: ignore[arg-type]
     factory = async_sessionmaker(engine, expire_on_commit=False)
     days = weekdays(300)
-    symbols = ["ZZV1.TW", "ZZV2.TW"]
+    symbols = ["ZZV1.TW", "ZZV2.TW", "ZZV3.TW", "ZZV4.TWO"]
 
     def rows_for(symbol: str) -> list[ValuationDay]:
-        return [
+        history = days
+        if symbol == "ZZV3.TW":
+            history = days[-8:]  # too short for percentiles
+        rows = [
             day_row(
                 symbol,
                 d,
@@ -1134,8 +1149,12 @@ async def test_postgres_reads_match_the_memory_twin() -> None:
                 pb=1 + (i % 13) / 10,
                 y=(i % 9) / 2,
             )
-            for i, d in enumerate(days)
+            for i, d in enumerate(history)
         ]
+        if symbol == "ZZV4.TWO":  # its newest three days are published after the cutoff
+            late = datetime(2026, 12, 15, tzinfo=TAIPEI)
+            rows = [*rows[:-3], *(r.model_copy(update={"available_at": late}) for r in rows[-3:])]
+        return rows
 
     revenue = [
         revenue_row(p, 100.0 + (i * 7) % 23).model_copy(update={"symbol": "ZZV1.TW"})
@@ -1173,6 +1192,22 @@ async def test_postgres_reads_match_the_memory_twin() -> None:
                 mine["ZZV1.TW"].pe_observations > 60
                 and mine["ZZV1.TW"].pe_percentile_250d is not None
             )
+            assert mine["ZZV1.TW"].pe_observations <= 250  # the window, not the whole history
+            assert mine["ZZV3.TW"].pe_percentile_250d is None  # below the minimum observations
+            assert mine["ZZV4.TWO"].trading_date == days[-4]  # later rows are not yet visible
+            # other cutoffs, an explicit symbol list and a narrower window agree as well
+            for other in (
+                datetime(2026, 6, 1, tzinfo=TAIPEI),
+                datetime(2026, 12, 20, tzinfo=TAIPEI),
+            ):
+                for wanted in (None, ["ZZV1.TW", "zzv4.two", "ZZV9.TW"]):
+                    got = await repo.latest_valuation_metrics(other, wanted, window=120)
+                    expect = await memory.latest_valuation_metrics(other, wanted, window=120)
+                    keep = lambda found: {k: v for k, v in found.items() if k.startswith("ZZV")}  # noqa: E731
+                    assert keep(got) == keep(expect)
+            assert set(await repo.latest_valuation_metrics(cutoff, ["ZZV1.TW", "ZZV9.TW"])) == {
+                "ZZV1.TW"
+            }
             assert (await repo.valuation_history("ZZV1.TW", cutoff, 50)) == (
                 await memory.valuation_history("ZZV1.TW", cutoff, 50)
             )
@@ -1192,3 +1227,185 @@ async def test_postgres_reads_match_the_memory_twin() -> None:
                 await session.execute(sql_text(f"DELETE FROM {table} WHERE symbol LIKE 'ZZV%'"))
             await session.commit()
         await engine.dispose()
+
+
+# --- data-integrity fixes ------------------------------------------------------------------
+
+
+def test_single_quarter_eps_and_other_per_share_figures_are_rounded() -> None:
+    assert 32.3 - 14.8 == 17.499999999999996  # the raw float difference users used to see
+    rows = [
+        cumulative(2026, 1, 100, 30, 10, 8, 14.8),
+        cumulative(2026, 2, 210, 62, 22, 17, 32.3),
+    ]
+    q2 = single_quarters(rows)[-1]
+    assert q2.eps == 17.5
+    assert quarter_points(rows)[-1].eps == 17.5
+    metrics = earnings_metrics(rows)
+    assert metrics is not None and metrics.eps == 17.5
+    ttm_rows = [
+        cumulative(2025, 4, 1, 1, 1, 1, 0.1 + 0.2),
+        cumulative(2025, 2, 1, 1, 1, 1, 0.1),
+        cumulative(2026, 2, 1, 1, 1, 1, 0.2),
+    ]
+    assert earnings_metrics(ttm_rows).eps_ttm == pytest.approx(0.4) and (
+        str(earnings_metrics(ttm_rows).eps_ttm) == "0.4"
+    )
+
+
+def test_financial_sector_quarters_are_not_visible_before_they_were_filed() -> None:
+    general = [fnd.financials_deadline(2026, q) for q in (1, 2, 3, 4)]
+    assert [d.date().isoformat() for d in general] == [
+        "2026-05-15",
+        "2026-08-14",
+        "2026-11-14",
+        "2027-03-31",
+    ]
+    assert all(fnd.financials_deadline(2026, q, "general") == general[q - 1] for q in (1, 2, 3, 4))
+    financial = [fnd.financials_deadline(2026, q, "financial") for q in (1, 2, 3, 4)]
+    # common later bound 5/31, 8/31, 11/30, 3/31; 2026-05-31 is a Sunday -> Monday 6/1
+    assert [d.date().isoformat() for d in financial] == [
+        "2026-06-01",
+        "2026-08-31",
+        "2026-11-30",
+        "2027-03-31",
+    ]
+    assert (
+        all(f >= g for f, g in zip(financial, general, strict=True)) and financial[0] > general[0]
+    )
+    # stamped on the rows: a bank's backfilled Q3 appears after 11/14, a manufacturer's on it
+    bank = QuarterlyFinancial(
+        symbol="2880.TW",
+        fiscal_year=2026,
+        fiscal_quarter=3,
+        statement_kind="financial",
+        eps=1.0,
+        source="mops_financials",
+        available_at=fnd.financials_deadline(2026, 3, "financial"),
+    )
+    assert bank.available_at.date().isoformat() == "2026-11-30"
+
+
+async def test_backfilled_statements_use_each_sectors_deadline_and_live_rows_the_fetch_time() -> (
+    None
+):
+    repo, exchange = MemoryQuantRepository(), FakeExchanges()
+    now = taipei(28, 9)
+    await sched.refresh_fundamentals_data(
+        repo,
+        exchange,
+        exchange,
+        now=now,
+        attempts={},
+        request_interval=0,
+        mops_interval=0,
+        valuation_enabled=False,
+        revenue_history_enabled=False,
+        financials_backfill_quarters=1,
+    )
+    rows = {r.symbol: r for r in await repo.quarterly_financials("2880.TW", FAR)}
+    mops_bank = rows["2880.TW"]
+    assert mops_bank.source == "mops_financials" and mops_bank.statement_kind == "financial"
+    assert mops_bank.available_at == datetime(2026, 11, 30, 23, 59, tzinfo=TAIPEI)
+    live = (await repo.quarterly_financials("2330.TW", FAR))[0]
+    assert live.source == "twse_financials" and live.available_at == now  # fetch time
+    # a financial statement not visible on the day the general deadline passes
+    assert await repo.quarterly_financials("2880.TW", datetime(2026, 11, 15, tzinfo=TAIPEI)) == []
+
+
+async def test_valuation_day_waits_for_tpex_instead_of_losing_the_otc_rows() -> None:
+    """TWSE has rows at 17:05, TPEx has not published yet: the day must stay open."""
+    repo = MemoryQuantRepository()
+    tpex_published = {"yes": False}
+
+    class Staggered(FakeExchanges):
+        def _handle(self, request):
+            if request.url.path.endswith("pera_result.php") and not tpex_published["yes"]:
+                return httpx.Response(200, json={"tables": [{"date": "", "data": []}]})
+            return super()._handle(request)
+
+    exchange, attempts = Staggered(), {}
+    common = dict(
+        attempts=attempts,
+        request_interval=0,
+        revenue_history_enabled=False,
+        financials_enabled=False,
+        valuation_backfill_sessions=0,
+        valuation_window=1,
+    )
+    await sched.refresh_fundamentals_data(repo, exchange, exchange, now=taipei(27, 17, 5), **common)
+    assert await repo.list_fetch_coverage(sched.SOURCE, "valuation_twse", "*", ["2026-11-27"])
+    assert not await repo.list_fetch_coverage(sched.SOURCE, "valuation_tpex", "*", ["2026-11-27"])
+    assert not [s for s in repo.valuation_rows if s[0].endswith(".TWO")]
+    tpex_published["yes"] = True
+    exchange.requests.clear()
+    await sched.refresh_fundamentals_data(repo, exchange, exchange, now=taipei(27, 20), **common)
+    assert exchange.count("BWIBBU_d") == 0  # TWSE is recorded: not asked again
+    assert exchange.count("pera_result.php") == 1
+    assert sum(1 for key in repo.valuation_rows if key[0].endswith(".TWO")) == 6
+    assert await repo.list_fetch_coverage(sched.SOURCE, "valuation_tpex", "*", ["2026-11-27"])
+
+
+async def test_valuation_holiday_is_still_recorded_once_for_both_exchanges() -> None:
+    repo = MemoryQuantRepository()
+
+    class Closed(FakeExchanges):
+        def _handle(self, request):
+            if request.url.path.endswith(("BWIBBU_d", "pera_result.php")):
+                return httpx.Response(200, json={"stat": "no data", "total": 0})
+            return super()._handle(request)
+
+    exchange = Closed()
+    await sched.refresh_fundamentals_data(
+        repo,
+        exchange,
+        exchange,
+        now=taipei(28, 12),  # Saturday: the window is the last weekdays, all "empty"
+        attempts={},
+        request_interval=0,
+        revenue_history_enabled=False,
+        financials_enabled=False,
+        valuation_backfill_sessions=0,
+        valuation_window=2,
+    )
+    for dataset in ("valuation_twse", "valuation_tpex"):
+        found = await repo.list_fetch_coverage(
+            sched.SOURCE, dataset, "*", ["2026-11-26", "2026-11-27"]
+        )
+        assert {k: v.status for k, v in found.items()} == {
+            "2026-11-26": "empty",
+            "2026-11-27": "empty",
+        }
+
+
+async def test_quarter_statements_one_market_without_data_is_retried_and_other_kept() -> None:
+    repo, attempts = MemoryQuantRepository(), {}
+    exchange = FakeExchanges()  # its OTC pages answer 查詢無資料 (the test's baseline)
+    common = dict(
+        request_interval=0,
+        mops_interval=0,
+        valuation_enabled=False,
+        revenue_history_enabled=False,
+        financials_enabled=True,
+        financials_backfill_quarters=1,
+        attempts=attempts,
+    )
+    now = taipei(28, 9)
+    await sched.refresh_fundamentals_data(repo, exchange, exchange, now=now, **common)
+    assert await repo.list_fetch_coverage(sched.SOURCE, "financials_history_sii", "*", ["2026Q3"])
+    assert not await repo.list_fetch_coverage(
+        sched.SOURCE, "financials_history_otc", "*", ["2026Q3"]
+    )
+    asked = exchange.count("ajax_t163sb04")
+    # same Taipei day: not hammered; next day: only the missing market is asked again
+    await sched.refresh_fundamentals_data(
+        repo, exchange, exchange, now=now + timedelta(hours=2), **common
+    )
+    assert exchange.count("ajax_t163sb04") == asked
+    exchange.otc_has_data = True
+    await sched.refresh_fundamentals_data(
+        repo, exchange, exchange, now=now + timedelta(days=1), **common
+    )
+    assert exchange.count("ajax_t163sb04") == asked + 1  # one OTC income page, sii is done
+    assert await repo.list_fetch_coverage(sched.SOURCE, "financials_history_otc", "*", ["2026Q3"])
+    assert await repo.quarterly_financials("2880.TWO", FAR)

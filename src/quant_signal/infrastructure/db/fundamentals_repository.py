@@ -8,8 +8,8 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select, tuple_
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import String, bindparam, func, select, text, tuple_
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from quant_signal.domain.fundamentals import (
@@ -69,68 +69,71 @@ class FundamentalsRepositoryMixin:
         window: int = PERCENTILE_WINDOW,
     ) -> dict[str, ValuationMetrics]:
         """Newest visible valuation per symbol with percentiles over its own newest
-        ``window`` sessions (one aggregate query; no per-row objects)."""
+        ``window`` sessions.
+
+        Only each symbol's newest ``window`` rows are ever read: one primary-key probe for
+        the newest row and one backward range scan limited to ``window`` rows per symbol
+        (a lateral join over the symbol list; the whole-market symbol list itself is found
+        with an index skip-scan). Ranking every row of the lookback range and joining it
+        back to itself took ~0.6 s at full history; this does no sort and no self-join.
+        """
         if symbols is not None and not symbols:
             return {}
-        cls = ValuationDailyRow
+        if symbols is None:
+            symbol_source = """
+                WITH RECURSIVE syms(symbol) AS (
+                    (SELECT min(symbol) FROM valuation_daily)
+                    UNION ALL
+                    SELECT (SELECT min(v.symbol) FROM valuation_daily v WHERE v.symbol > s.symbol)
+                    FROM syms s WHERE s.symbol IS NOT NULL
+                )"""
+        else:
+            symbol_source = """
+                WITH syms(symbol) AS (SELECT unnest(CAST(:symbols AS text[])))"""
+        visible = """
+            v.symbol = s.symbol AND v.available_at <= :as_of
+            AND v.trading_date <= :day AND v.trading_date >= :floor"""
+        statement = text(
+            f"""{symbol_source}
+            SELECT s.symbol, n.trading_date, n.pe_ratio, n.pb_ratio, n.dividend_yield_pct,
+                   n.dividend_year, n.fiscal_period,
+                   a.pe_n, a.pe_le, a.pb_n, a.pb_le, a.yd_n, a.yd_le
+            FROM syms s
+            CROSS JOIN LATERAL (
+                SELECT v.trading_date, v.pe_ratio, v.pb_ratio, v.dividend_yield_pct,
+                       v.dividend_year, v.fiscal_period
+                FROM valuation_daily v WHERE {visible}
+                ORDER BY v.trading_date DESC LIMIT 1
+            ) n
+            CROSS JOIN LATERAL (
+                SELECT count(r.pe_ratio) AS pe_n,
+                       count(r.pe_ratio) FILTER (WHERE r.pe_ratio <= n.pe_ratio) AS pe_le,
+                       count(r.pb_ratio) AS pb_n,
+                       count(r.pb_ratio) FILTER (WHERE r.pb_ratio <= n.pb_ratio) AS pb_le,
+                       count(r.dividend_yield_pct) AS yd_n,
+                       count(r.dividend_yield_pct)
+                           FILTER (WHERE r.dividend_yield_pct <= n.dividend_yield_pct) AS yd_le
+                FROM (
+                    SELECT v.pe_ratio, v.pb_ratio, v.dividend_yield_pct
+                    FROM valuation_daily v WHERE {visible}
+                    ORDER BY v.trading_date DESC LIMIT :window
+                ) r
+            ) a
+            WHERE s.symbol IS NOT NULL
+            ORDER BY s.symbol"""
+        )
         day = as_of.astimezone(TAIPEI).date()
-        inner = select(
-            cls.symbol,
-            cls.trading_date,
-            cls.pe_ratio,
-            cls.pb_ratio,
-            cls.dividend_yield_pct,
-            cls.dividend_year,
-            cls.fiscal_period,
-            func.row_number()
-            .over(partition_by=cls.symbol, order_by=cls.trading_date.desc())
-            .label("rn"),
-        ).where(
-            cls.available_at <= as_of,
-            cls.trading_date <= day,
-            cls.trading_date >= day - timedelta(days=VALUATION_LOOKBACK_DAYS),
-        )
+        params: dict[str, object] = {
+            "as_of": as_of,
+            "day": day,
+            "floor": day - timedelta(days=VALUATION_LOOKBACK_DAYS),
+            "window": window,
+        }
         if symbols is not None:
-            inner = inner.where(cls.symbol.in_([symbol.upper() for symbol in symbols]))
-        ranked = inner.cte("ranked")
-        newest, hist = ranked.alias("newest"), ranked.alias("hist")
-        in_window = hist.c.rn <= window
-
-        def counts(column: str) -> tuple:
-            value, current = hist.c[column], newest.c[column]
-            return (
-                func.count(value).filter(in_window),
-                func.count(value).filter(and_(in_window, value <= current)),
-            )
-
-        statement = (
-            select(
-                newest.c.symbol,
-                newest.c.trading_date,
-                newest.c.pe_ratio,
-                newest.c.pb_ratio,
-                newest.c.dividend_yield_pct,
-                newest.c.dividend_year,
-                newest.c.fiscal_period,
-                *counts("pe_ratio"),
-                *counts("pb_ratio"),
-                *counts("dividend_yield_pct"),
-            )
-            .join(hist, hist.c.symbol == newest.c.symbol)
-            .where(newest.c.rn == 1)
-            .group_by(
-                newest.c.symbol,
-                newest.c.trading_date,
-                newest.c.pe_ratio,
-                newest.c.pb_ratio,
-                newest.c.dividend_yield_pct,
-                newest.c.dividend_year,
-                newest.c.fiscal_period,
-            )
-            .order_by(newest.c.symbol)
-        )
+            statement = statement.bindparams(bindparam("symbols", type_=ARRAY(String)))
+            params["symbols"] = sorted({symbol.upper() for symbol in symbols})
         result: dict[str, ValuationMetrics] = {}
-        for record in (await self.session.execute(statement)).all():
+        for record in (await self.session.execute(statement, params)).all():
             symbol, trading_date, pe, pb, dividend, year, period = record[:7]
             (pe_n, pe_le), (pb_n, pb_le), (yd_n, yd_le) = (
                 record[7:9],

@@ -25,8 +25,9 @@ History (HTML, big5 for revenue / utf-8 for statements; whole market in one resp
   headers match the OpenAPI field names. ``查詢無資料`` when the quarter does not exist yet.
 
 Backfilled rows are stamped with the *statutory publication deadline* (monthly revenue:
-the 10th of the following month; Q1 5/15, Q2 8/14, Q3 11/14, annual 3/31 -- end of day,
-Taipei). That is an approximation: most companies file earlier, and MOPS shows the
+the 10th of the following month; general industries Q1 5/15, Q2 8/14, Q3 11/14, annual 3/31
+-- end of day, Taipei; financial-sector companies file later, see ``financials_deadline``).
+That is an approximation: most companies file earlier, and MOPS shows the
 latest (possibly restated) figures, so history can differ slightly from what was known
 on the day. Point-in-time readers should treat backfilled availability as conservative.
 """
@@ -35,7 +36,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -76,14 +77,33 @@ def revenue_deadline(period: str) -> datetime:
     return datetime.combine(date(year, month, 10), time(23, 59), TAIPEI)
 
 
-def financials_deadline(fiscal_year: int, fiscal_quarter: int) -> datetime:
-    """Q1 5/15, Q2 8/14, Q3 11/14 of the same year; annual (Q4) 3/31 of the next year."""
-    due = {
-        1: date(fiscal_year, 5, 15),
-        2: date(fiscal_year, 8, 14),
-        3: date(fiscal_year, 11, 14),
-        4: date(fiscal_year + 1, 3, 31),
-    }[fiscal_quarter]
+def financials_deadline(fiscal_year: int, fiscal_quarter: int, kind: str = "general") -> datetime:
+    """Statutory filing deadline of a fiscal quarter (end of day, Taipei).
+
+    General industries: Q1 5/15, Q2 8/14, Q3 11/14 of the same year, annual (Q4) 3/31 of
+    the next year. Financial-sector companies (banks, insurers, financial holdings, bills
+    finance, ...: ``kind == "financial"``) file later -- financial holdings are due about 60
+    days after Q1/Q3 (5/30 and 11/29, moved to the next business day when that is a
+    holiday) and two months after the half year (8/31). Their rule set is not one date, so
+    the common later bound 5/31, 8/31, 11/30 and 3/31 is used, rolled to Monday when it
+    falls on a weekend: a backfilled quarter never becomes visible before it existed.
+    """
+    if kind == "financial":
+        due = {
+            1: date(fiscal_year, 5, 31),
+            2: date(fiscal_year, 8, 31),
+            3: date(fiscal_year, 11, 30),
+            4: date(fiscal_year + 1, 3, 31),
+        }[fiscal_quarter]
+        while due.weekday() >= 5:
+            due += timedelta(days=1)
+    else:
+        due = {
+            1: date(fiscal_year, 5, 15),
+            2: date(fiscal_year, 8, 14),
+            3: date(fiscal_year, 11, 14),
+            4: date(fiscal_year + 1, 3, 31),
+        }[fiscal_quarter]
     return datetime.combine(due, time(23, 59), TAIPEI)
 
 
@@ -257,7 +277,7 @@ def build_quarterly_financials(
             fiscal_quarter=period[1],
             statement_kind=kind,  # type: ignore[arg-type]
             source=source,
-            available_at=available_at or financials_deadline(*period),
+            available_at=available_at or financials_deadline(*period, kind),
             **figures,
         )
     return list(result.values())

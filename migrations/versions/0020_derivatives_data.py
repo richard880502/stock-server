@@ -25,6 +25,16 @@ def _big(name: str) -> sa.Column:
 
 
 def upgrade():
+    # 0 in futures_net_open_interest used to mean "no TAIFEX data"; the flag makes a real
+    # zero position distinguishable. Rows that already hold a non-zero position are known.
+    op.add_column(
+        "market_observations_daily",
+        sa.Column("futures_oi_known", sa.Boolean, nullable=False, server_default=sa.text("false")),
+    )
+    op.execute(
+        "UPDATE market_observations_daily SET futures_oi_known = true "
+        "WHERE futures_net_open_interest <> 0"
+    )
     op.create_table(
         "futures_institutional_daily",
         sa.Column("trading_date", sa.Date, nullable=False),
@@ -88,9 +98,9 @@ def upgrade():
         sa.Column("symbol", sa.String(32), nullable=False),
         sa.Column("trading_date", sa.Date, nullable=False),
         sa.Column("underlying_code", sa.String(16), nullable=False),
-        sa.Column("total_open_interest", sa.Float, nullable=False),
+        sa.Column("total_open_interest", sa.Float),
         sa.Column("total_volume", sa.Float, nullable=False),
-        _big("open_interest_shares"),
+        sa.Column("open_interest_shares", sa.BigInteger),
         _big("volume_shares"),
         sa.Column("near_month", sa.String(8)),
         sa.Column("near_settlement", sa.Float),
@@ -128,6 +138,7 @@ def upgrade():
 
 def downgrade():
     op.drop_index("ix_stock_futures_date", table_name="stock_futures_daily")
+    op.drop_column("market_observations_daily", "futures_oi_known")
     for table in (
         "vix_daily",
         "options_oi_levels_daily",

@@ -11,8 +11,10 @@ after ``retry_after``; nothing here raises into the price sync.
   nothing. Today's SBL is only read from slot ``b`` (after the first official update).
 - Backfill: the last ``backfill_sessions`` weekdays before the recent window, at most
   ``backfill_per_tick`` days per tick, never during the trading session (weekdays
-  08:30-14:30 Taipei), each day recorded once in ``fetch_coverage``. Backfilled rows get
-  the documented publication time as ``available_at`` (never later than the fetch).
+  08:30-14:30 Taipei), each day and *source* (TWSE SBL, TPEx SBL, TWSE day trade) recorded
+  once in ``fetch_coverage`` (``daily_sbl_twse`` ... keys of at most 16 characters).
+  Backfilled rows get the documented publication time as ``available_at`` (never later than
+  the fetch).
 - ``insider`` (monthly pledge tables) once a day, ``dividend`` (除權除息預告表) twice a day.
 """
 
@@ -28,6 +30,7 @@ import httpx
 
 from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.holders_data import _rollback, tdcc_slot
+from quant_signal.application.source_guard import Backoff, MissingSources, SourceBlocked, retrying
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import short_data as src
 
@@ -118,19 +121,20 @@ def documented_available_at(kind: str, day: date) -> datetime:
     return moment.astimezone(UTC)
 
 
-async def _get_json(
-    client: httpx.AsyncClient, url: str, params: dict[str, str], *, attempts: int
-) -> Any:
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            response = await client.get(url, params=params, headers={"Accept": "*/*"})
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            last_error = exc
-            await asyncio.sleep(min(1.5 * (2**attempt), 15))
-    raise RuntimeError(f"short data request failed after retries: {url}") from last_error
+# Sources per dataset. Day trading is published by TWSE only; never wait for TPEx there.
+EXCHANGES = {SBL: ("twse", "tpex"), DAYTRADE: ("twse",)}
+Source = tuple[str, str]  # (dataset name, exchange)
+
+
+def coverage_dataset(kind: str, source: Source) -> str:
+    """``daily_sbl_twse`` / ``backfill_dt_tpex``: coverage is kept per source, not per day."""
+    name, exchange = source
+    return f"{kind}_{'sbl' if name == SBL else 'dt'}_{exchange}"
+
+
+def daily_period(day: date, today: date, slot: str) -> str:
+    """``20261125@1127c``: at most 16 characters (``fetch_coverage.period`` is varchar(16))."""
+    return f"{day:%Y%m%d}@{today:%m%d}{slot}"
 
 
 async def _record(repository: Any, dataset: str, period: str, rows: int, moment: datetime) -> None:
@@ -149,6 +153,22 @@ async def _record(repository: Any, dataset: str, period: str, rows: int, moment:
     )
 
 
+async def _get_json(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, str],
+    *,
+    attempts: int,
+    backoff: Backoff | None = None,
+) -> Any:
+    async def call() -> Any:
+        response = await client.get(url, params=params, headers={"Accept": "*/*"})
+        response.raise_for_status()
+        return response.json()
+
+    return await retrying(backoff, call, url=url, attempts=attempts)
+
+
 async def _fetch_one(
     client: httpx.AsyncClient,
     url: str,
@@ -158,8 +178,9 @@ async def _fetch_one(
     minimum: int,
     *,
     attempts: int,
+    backoff: Backoff | None = None,
 ) -> list:
-    payload = await _get_json(client, url, params or {}, attempts=attempts)
+    payload = await _get_json(client, url, params or {}, attempts=attempts, backoff=backoff)
     rows = [row for row in parse(payload) if day is None or row.trading_date == day]
     if rows and len(rows) < minimum:
         raise RuntimeError(f"short data looks incomplete: {len(rows)} rows ({url})")
@@ -172,69 +193,73 @@ async def _refresh_day(
     tpex: _HasClient,
     day: date,
     *,
-    datasets: tuple[str, ...],
+    sources: list[Source],
     moment: datetime,
     backfill: bool,
     fetch_attempts: int,
     request_interval: float,
-) -> tuple[dict[str, int], dict[str, int], int]:
-    """Fetch one day for the wanted datasets: (rows parsed, rows written, failures)."""
-    parsed = {name: 0 for name in datasets}
-    written = {name: 0 for name in datasets}
-    failures = 0
+    backoff: Backoff | None = None,
+) -> tuple[dict[Source, int], dict[str, int], list[Source]]:
+    """Fetch the given sources of one day: (rows parsed per source, rows written per dataset,
+    sources that failed)."""
+    counts: dict[Source, int] = {}
+    written = {name: 0 for name, _ in sources}
+    failed: list[Source] = []
     sbl_at = documented_available_at(SBL, day) if backfill else moment
     dt_at = documented_available_at(DAYTRADE, day) if backfill else moment
     sbl_at, dt_at = min(sbl_at, moment), min(dt_at, moment)
-    plan: list[tuple[str, _HasClient, str, dict[str, str], Callable, int, Callable]] = []
-    if SBL in datasets:
-        plan.append(
-            (
-                SBL,
-                twse,
-                src.TWSE_SBL_URL,
-                src.twse_params(day),
-                lambda p: src.parse_twse_sbl(p, available_at=sbl_at),
-                MIN_TWSE_SBL_ROWS,
-                repository.upsert_short_lending,
-            )
-        )
-        plan.append(
-            (
-                SBL,
-                tpex,
-                src.TPEX_SBL_URL,
-                src.tpex_sbl_params(day),
-                lambda p: src.parse_tpex_sbl(p, available_at=sbl_at),
-                MIN_TPEX_SBL_ROWS,
-                repository.upsert_short_lending,
-            )
-        )
-    if DAYTRADE in datasets:
-        plan.append(
-            (
-                DAYTRADE,
-                twse,
-                src.TWSE_DAYTRADE_URL,
-                src.twse_params(day),
-                lambda p: src.parse_twse_daytrade(p, available_at=dt_at),
-                MIN_DAYTRADE_ROWS,
-                repository.upsert_day_trade,
-            )
-        )
-    for index, (name, provider, url, params, parse, minimum, upsert) in enumerate(plan):
+    plan: dict[Source, tuple[_HasClient, str, dict[str, str], Callable, int, Callable]] = {
+        (SBL, "twse"): (
+            twse,
+            src.TWSE_SBL_URL,
+            src.twse_params(day),
+            lambda p: src.parse_twse_sbl(p, available_at=sbl_at),
+            MIN_TWSE_SBL_ROWS,
+            repository.upsert_short_lending,
+        ),
+        (SBL, "tpex"): (
+            tpex,
+            src.TPEX_SBL_URL,
+            src.tpex_sbl_params(day),
+            lambda p: src.parse_tpex_sbl(p, available_at=sbl_at),
+            MIN_TPEX_SBL_ROWS,
+            repository.upsert_short_lending,
+        ),
+        (DAYTRADE, "twse"): (
+            twse,
+            src.TWSE_DAYTRADE_URL,
+            src.twse_params(day),
+            lambda p: src.parse_twse_daytrade(p, available_at=dt_at),
+            MIN_DAYTRADE_ROWS,
+            repository.upsert_day_trade,
+        ),
+    }
+    for index, source in enumerate(sources):
+        provider, url, params, parse, minimum, upsert = plan[source]
         if index and request_interval:
             await asyncio.sleep(request_interval)
         try:
             rows = await _fetch_one(
-                provider.client, url, params, parse, day, minimum, attempts=fetch_attempts
+                provider.client,
+                url,
+                params,
+                parse,
+                day,
+                minimum,
+                attempts=fetch_attempts,
+                backoff=backoff,
             )
-            parsed[name] += len(rows)
-            written[name] += await upsert(rows) if rows else 0
+            counts[source] = len(rows)
+            written[source[0]] += await upsert(rows) if rows else 0
+        except SourceBlocked:
+            failed.append(source)
+            logger.warning("short data source unavailable: %s %s", url, day)
+            await _rollback(repository)
         except Exception:
-            failures += 1
+            failed.append(source)
             logger.exception("short data request failed: %s %s", url, day)
             await _rollback(repository)
-    return parsed, written, failures
+    return counts, written, failed
 
 
 async def _refresh_daily(
@@ -251,93 +276,170 @@ async def _refresh_daily(
     written: dict[str, int],
     sbl_enabled: bool,
     daytrade_enabled: bool,
+    retry_after: timedelta = RETRY_AFTER,
 ) -> None:
     local = moment.astimezone(TAIPEI)
     today = local.date()
     slot = evening_slot(moment)
-    token = f"{today.isoformat()}-{slot}"
+    backoff = Backoff(last_failure, moment, retry_after)
+    tracker = MissingSources(
+        repository, source=SOURCE, moment=moment, last_failure=last_failure, retry_after=retry_after
+    )
 
-    def wanted(day: date) -> tuple[str, ...]:
+    def wanted(day: date) -> list[Source]:
         names: list[str] = []
         if sbl_enabled and (day < today or slot in ("b", "c")):
             names.append(SBL)
         if daytrade_enabled:
             names.append(DAYTRADE)
-        return tuple(names)
+        return [(name, exchange) for name in names for exchange in EXCHANGES[name]]
 
     # 1) recent days, re-read once per evening slot so T+1/T+2 revisions are caught
-    days = recent_days(moment)
-    periods = {day: f"{day.isoformat()}@{token}" for day in days}
-    done = await repository.list_fetch_coverage(SOURCE, "daily", "*", list(periods.values()))
-    for index, day in enumerate(day for day in days if periods[day] not in done):
-        names = wanted(day)
-        if not names:
+    fetched_days = 0
+    for day in recent_days(moment):
+        sources = wanted(day)
+        if not sources:
             continue
-        if index and request_interval:
+        period, key = daily_period(day, today, slot), f"{day:%Y%m%d}"
+        past = day < today
+        final = past or slot == "c"
+        covered = {
+            source: await repository.list_fetch_coverage(
+                SOURCE, coverage_dataset("daily", source), "*", [period]
+            )
+            for source in sources
+        }
+        due: list[Source] = []
+        for source in sources:
+            if period in covered[source]:
+                continue
+            if await tracker.due(coverage_dataset("daily", source), key, final=final):
+                due.append(source)
+        if not due:
+            continue
+        if fetched_days and request_interval:
             await asyncio.sleep(request_interval)
-        parsed, new, failures = await _refresh_day(
+        fetched_days += 1
+        counts, new, failed = await _refresh_day(
             repository,
             twse,
             tpex,
             day,
-            datasets=names,
+            sources=due,
             moment=moment,
             backfill=False,
             fetch_attempts=fetch_attempts,
             request_interval=request_interval,
+            backoff=backoff,
         )
         for name, count in new.items():
             written[name] = written.get(name, 0) + count
-        if failures:
+        day_has_rows = any(counts.values()) or any(
+            covered[source][period].status == "ok"
+            for source in sources
+            if period in covered[source]
+        )
+        for source, rows in counts.items():
+            if failed and not rows:
+                continue  # an exchange that failed may be why this one looks empty
+            await tracker.settle(
+                coverage_dataset("daily", source),
+                period,
+                key,
+                rows,
+                day_has_rows=day_has_rows,
+                past=past,
+                final=final,
+            )
+        logger.info("short data %s (%s): rows %s, new %s", day, slot, counts, new)
+        if failed:
             last_failure["daily"] = moment
             return  # retry later; do not keep hitting an exchange that is failing
-        if day >= today and not any(parsed.values()):
-            last_failure["daily"] = moment  # not published yet
-            return
-        await _record(repository, "daily", periods[day], sum(parsed.values()), moment)
-        logger.info("short data %s (%s): parsed %s, new %s", day, token, parsed, new)
 
     # 2) gradual, off-session backfill of older sessions
     if backfill_sessions <= 0 or not backfill_allowed(moment):
         return
     older = backfill_days(moment, backfill_sessions)
-    cover = await repository.list_fetch_coverage(
-        SOURCE, "backfill", "*", [f"bf:{day.isoformat()}" for day in older]
-    )
-    todo = [day for day in older if f"bf:{day.isoformat()}" not in cover][:backfill_per_tick]
-    for index, day in enumerate(todo):
+    sources = [
+        (name, exchange)
+        for name, on in ((SBL, sbl_enabled), (DAYTRADE, daytrade_enabled))
+        if on
+        for exchange in EXCHANGES[name]
+    ]
+    periods = [f"bf:{day.isoformat()}" for day in older]
+    cover = {
+        source: await repository.list_fetch_coverage(
+            SOURCE, coverage_dataset("backfill", source), "*", periods
+        )
+        for source in sources
+    }
+    todo: list[tuple[date, str, list[Source]]] = []
+    for day, period in zip(older, periods, strict=True):
+        due = [
+            source
+            for source in sources
+            if period not in cover[source]
+            and await tracker.due(coverage_dataset("backfill", source), period, final=True)
+        ]
+        if due:
+            todo.append((day, period, due))
+        if len(todo) >= backfill_per_tick:
+            break
+    for index, (day, period, due) in enumerate(todo):
         if index and request_interval:
             await asyncio.sleep(request_interval)
-        names = tuple(name for name, on in ((SBL, sbl_enabled), (DAYTRADE, daytrade_enabled)) if on)
-        parsed, new, failures = await _refresh_day(
+        counts, new, failed = await _refresh_day(
             repository,
             twse,
             tpex,
             day,
-            datasets=names,
+            sources=due,
             moment=moment,
             backfill=True,
             fetch_attempts=fetch_attempts,
             request_interval=request_interval,
+            backoff=backoff,
         )
         for name, count in new.items():
             written[name] = written.get(name, 0) + count
-        if failures:
+        day_has_rows = any(counts.values()) or any(
+            cover[source][period].status == "ok" for source in sources if period in cover[source]
+        )
+        for source, rows in counts.items():
+            if failed and not rows:
+                continue
+            await tracker.settle(
+                coverage_dataset("backfill", source),
+                period,
+                period,
+                rows,
+                day_has_rows=day_has_rows,
+                past=True,
+                final=True,
+            )
+        logger.info("short data backfill %s: rows %s, new %s", day, counts, new)
+        if failed:
             last_failure["daily"] = moment
             return
-        await _record(repository, "backfill", f"bf:{day.isoformat()}", sum(parsed.values()), moment)
-        logger.info("short data backfill %s: parsed %s, new %s", day, parsed, new)
 
 
 async def _refresh_insiders(
-    repository: Any, twse: _HasClient, tpex: _HasClient, *, moment: datetime, fetch_attempts: int
+    repository: Any,
+    twse: _HasClient,
+    tpex: _HasClient,
+    *,
+    moment: datetime,
+    fetch_attempts: int,
+    backoff: Backoff | None = None,
 ) -> tuple[int, int]:
     rows: list = []
     for provider, url, parse in (
         (twse, src.TWSE_PLEDGE_URL, src.parse_twse_pledges),
         (tpex, src.TPEX_PLEDGE_URL, src.parse_tpex_pledges),
     ):
-        payload = await _get_json(provider.client, url, {}, attempts=fetch_attempts)
+        payload = await _get_json(
+            provider.client, url, {}, attempts=fetch_attempts, backoff=backoff
+        )
         rows += parse(payload, available_at=moment)
     if len(rows) < MIN_PLEDGE_ROWS:
         raise RuntimeError(f"insider holdings look incomplete: {len(rows)} companies")
@@ -345,16 +447,34 @@ async def _refresh_insiders(
 
 
 async def _refresh_dividends(
-    repository: Any, twse: _HasClient, tpex: _HasClient, *, moment: datetime, fetch_attempts: int
+    repository: Any,
+    twse: _HasClient,
+    tpex: _HasClient,
+    *,
+    moment: datetime,
+    fetch_attempts: int,
+    backoff: Backoff | None = None,
 ) -> tuple[int, int]:
-    rows: list = []
+    """Each exchange's forecast table is the complete list of its upcoming events: stored
+    events of that source for a future ex-date inside the table's span that are no longer
+    listed (moved, re-typed or cancelled) are withdrawn, not left to be credited twice."""
+    total = new = 0
+    today = moment.astimezone(TAIPEI).date()
     for provider, url, parse in (
         (twse, src.TWSE_DIVIDEND_URL, src.parse_twse_dividends),
         (tpex, src.TPEX_DIVIDEND_URL, src.parse_tpex_dividends),
     ):
-        payload = await _get_json(provider.client, url, {}, attempts=fetch_attempts)
-        rows += parse(payload, available_at=moment)
-    return len(rows), await repository.upsert_dividend_events(rows)
+        payload = await _get_json(
+            provider.client, url, {}, attempts=fetch_attempts, backoff=backoff
+        )
+        rows = parse(payload, available_at=moment)
+        total += len(rows)
+        new += await repository.upsert_dividend_events(rows)
+        if rows:
+            new += await repository.withdraw_unlisted_dividend_events(
+                rows[0].source, rows, today=today, available_at=moment
+            )
+    return total, new
 
 
 async def refresh_short_data(
@@ -398,6 +518,7 @@ async def refresh_short_data(
                 written=written,
                 sbl_enabled=sbl_enabled,
                 daytrade_enabled=daytrade_enabled,
+                retry_after=retry_after,
             )
             if last_failure.get("daily") != moment:
                 last_failure.pop("daily", None)  # a clean pass clears the earlier failure
@@ -419,7 +540,12 @@ async def refresh_short_data(
             continue
         try:
             parsed, new = await job(
-                repository, twse, tpex, moment=moment, fetch_attempts=fetch_attempts
+                repository,
+                twse,
+                tpex,
+                moment=moment,
+                fetch_attempts=fetch_attempts,
+                backoff=Backoff(last_failure, moment, retry_after),
             )
         except Exception:
             last_failure[name] = moment

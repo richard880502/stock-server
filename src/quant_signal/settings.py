@@ -36,14 +36,10 @@ class Settings(BaseSettings):
     # Taipei local times (24h, comma separated) after which the daily refresh is
     # queued. The second run picks up reports the exchanges publish late in the
     # evening (credit balances).
-    sync_daily_time: str = Field(
-        default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    sync_daily_time: str = Field(default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     # News (消息面) job in the ingest service: Taipei times, like sync_daily_time.
     news_sync_enabled: bool = True
-    news_sync_time: str = Field(
-        default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    news_sync_time: str = Field(default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     news_sync_max_symbols: int = Field(default=60, ge=0)
     # Seconds between per-company queries to Google News (be polite).
     news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
@@ -136,9 +132,7 @@ class Settings(BaseSettings):
     # Official 1-minute bars (Shioaji kbars) fill the minutes the live feed missed.
     quotes_backfill_enabled: bool = True
     # Taipei time after which the day's minutes are replaced with official kbars.
-    quotes_backfill_after_close: str = Field(
-        default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
-    )
+    quotes_backfill_after_close: str = Field(default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
     quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
     # After the close, collect the whole listed + OTC market (~2,000 symbols, watched
@@ -187,6 +181,10 @@ class Settings(BaseSettings):
     derivatives_request_interval_seconds: float = Field(default=6.0, ge=1.0)
     derivatives_requests_per_tick: int = Field(default=4, ge=1, le=50)
     derivatives_retry_minutes: float = Field(default=15.0, gt=0)
+    # Total wall-clock budget of each official-data side feed inside one worker tick; a feed
+    # that is still running is cancelled (it commits what it finished and resumes from
+    # fetch_coverage next tick) so a hanging exchange cannot delay the price sync.
+    side_feed_budget_seconds: float = Field(default=90.0, gt=0, le=3600)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

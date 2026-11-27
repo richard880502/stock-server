@@ -38,6 +38,8 @@ from quant_signal.domain.models import (
     taipei_day_end,
 )
 from quant_signal.domain.ranking import finalize_ranking_value, ranking_raw_value
+from quant_signal.infrastructure.column_limits import enforce_column_limits
+from quant_signal.infrastructure.db.models import FetchCoverageRow
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.memory_derivatives import MemoryDerivativesMixin
 from quant_signal.infrastructure.memory_factors import MemoryFactorDataMixin
@@ -100,9 +102,7 @@ class MemoryQuantRepository(
                         first_date=min(bar.trading_date for bar in subset),
                         latest_date=max(bar.trading_date for bar in subset),
                         observations=len(subset),
-                        adjusted_observations=sum(
-                            bar.adjusted_close is not None for bar in subset
-                        ),
+                        adjusted_observations=sum(bar.adjusted_close is not None for bar in subset),
                         is_real=source != "synthetic_demo",
                     )
                 )
@@ -123,9 +123,7 @@ class MemoryQuantRepository(
                 )
         return DataStatus(
             generated_at=datetime.now(UTC),
-            real_data_ready=any(
-                item.is_real and item.observations >= 60 for item in bar_series
-            ),
+            real_data_ready=any(item.is_real and item.observations >= 60 for item in bar_series),
             bar_series=bar_series,
             market_series=market_series,
             institutional_series=self._series_status(self.institutional_flows),
@@ -144,9 +142,9 @@ class MemoryQuantRepository(
             existing = self.instruments.get(symbol)
             self.instruments[symbol] = Instrument(
                 symbol=symbol,
-                name=instrument_name if instrument_name is not None else (
-                    existing.name if existing else None
-                ),
+                name=instrument_name
+                if instrument_name is not None
+                else (existing.name if existing else None),
                 market=market if market is not None else (existing.market if existing else None),
             )
         for bar in bars:
@@ -368,9 +366,7 @@ class MemoryQuantRepository(
         return None
 
     async def list_api_keys(self) -> list[ApiKey]:
-        return sorted(
-            self.api_keys.values(), key=lambda key: key.created_at, reverse=True
-        )
+        return sorted(self.api_keys.values(), key=lambda key: key.created_at, reverse=True)
 
     async def revoke_api_key(self, key_id: UUID) -> bool:
         key = self.api_keys.get(key_id)
@@ -383,9 +379,7 @@ class MemoryQuantRepository(
         key = self.api_keys.get(key_id)
         if key is None:
             return
-        self.api_keys[key_id] = key.model_copy(
-            update={"last_used_at": datetime.now(UTC)}
-        )
+        self.api_keys[key_id] = key.model_copy(update={"last_used_at": datetime.now(UTC)})
 
     async def search_instruments(
         self,
@@ -415,10 +409,7 @@ class MemoryQuantRepository(
                 score = 4
             return (score, symbol)
 
-        scored = [
-            (rank(instrument), instrument)
-            for instrument in self.instruments.values()
-        ]
+        scored = [(rank(instrument), instrument) for instrument in self.instruments.values()]
         matches = sorted(
             (item for item in scored if item[0] is not None),
             key=lambda item: item[0],
@@ -520,6 +511,9 @@ class MemoryQuantRepository(
 
     async def record_fetch_coverage(self, entries: list[FetchCoverage]) -> None:
         for entry in entries:
+            enforce_column_limits(
+                FetchCoverageRow, {**entry.model_dump(), "symbol": entry.symbol.upper()}
+            )
             key = (entry.source, entry.dataset, entry.symbol.upper(), entry.period)
             self.fetch_coverage[key] = entry
 
@@ -627,9 +621,7 @@ class MemoryQuantRepository(
         self, symbol: str, *, since: datetime, until: datetime
     ) -> list[MinuteBar]:
         return [
-            bar
-            for bar in self.minute_bars.get(symbol.upper(), [])
-            if since <= bar.minute < until
+            bar for bar in self.minute_bars.get(symbol.upper(), []) if since <= bar.minute < until
         ]
 
     async def upsert_intraday_snapshots(self, rows: list[IntradaySnapshot]) -> int:
@@ -656,12 +648,8 @@ class MemoryQuantRepository(
                 latest[item.symbol] = item
         return list(latest.values())
 
-    def _market_rows(
-        self, market: str | None, as_of: date | None
-    ) -> list[MarketStockDay]:
-        cutoff = (
-            datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei")) if as_of else None
-        )
+    def _market_rows(self, market: str | None, as_of: date | None) -> list[MarketStockDay]:
+        cutoff = datetime.combine(as_of, time.max, ZoneInfo("Asia/Taipei")) if as_of else None
         return [
             item
             for item in list(self.market_stock_days.values())
@@ -855,8 +843,7 @@ class MemoryQuantRepository(
                     stocks_on_last_day=len(latest),
                     institutional_coverage=sum(r.total_net is not None for r in latest)
                     / len(latest),
-                    credit_coverage=sum(r.margin_balance is not None for r in latest)
-                    / len(latest),
+                    credit_coverage=sum(r.margin_balance is not None for r in latest) / len(latest),
                 )
             )
         return result

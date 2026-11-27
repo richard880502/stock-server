@@ -163,3 +163,73 @@ async def test_storage_revisions_and_point_in_time_reads(sessions) -> None:
             [symbol], date(2026, 12, 1), date(2026, 12, 31), first + timedelta(hours=1)
         )
         assert [e.cash_dividend_per_share for e in window] == [1.5]
+
+
+async def test_evening_slot_for_three_days_through_the_real_repository(
+    sessions, monkeypatch
+) -> None:
+    """The slot-``c`` run for Wed-Fri used 23-character coverage keys that Postgres rejected
+    (``fetch_coverage.period`` is varchar(16)); only the first day was stored."""
+    import asyncio
+
+    from test_short_data import DividendExchanges, taipei
+
+    from quant_signal.application import short_data as sched
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    for name in ("MIN_TWSE_SBL_ROWS", "MIN_TPEX_SBL_ROWS", "MIN_DAYTRADE_ROWS", "MIN_PLEDGE_ROWS"):
+        monkeypatch.setattr(sched, name, 1)
+    ex = DividendExchanges()
+    moment = taipei(27, 22, 40)
+    try:
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            written = await sched.refresh_short_data(
+                repo, ex, ex, now=moment, attempts={}, backfill_sessions=0, request_interval=0
+            )
+            assert written["sbl"] == 6 and written["daytrade"] == 4
+            periods = [f"202611{d}@1127c" for d in (25, 26, 27)]
+            for dataset in ("daily_sbl_twse", "daily_sbl_tpex", "daily_dt_twse"):
+                found = await repo.list_fetch_coverage(sched.SOURCE, dataset, "*", periods)
+                assert set(found) == set(periods), dataset  # all three days, not only the first
+            # the dividend table: a moved ex-date is retired in the real tables as well
+            for row in ex.twt48u["data"]:
+                if row[1] == "2330":
+                    row[0] = "115年12月17日"
+            await sched.refresh_short_data(
+                repo,
+                ex,
+                ex,
+                now=moment + timedelta(days=1),
+                attempts={},
+                sbl_enabled=False,
+                daytrade_enabled=False,
+                insider_enabled=False,
+                backfill_sessions=0,
+                request_interval=0,
+            )
+            far = datetime(2027, 1, 1, tzinfo=UTC)
+            got = await repo.list_dividend_events(
+                ["2330.TW"], date(2026, 12, 1), date(2026, 12, 31), far
+            )
+            assert [(e.ex_date, e.withdrawn) for e in got] == [(date(2026, 12, 17), False)]
+            soon = await repo.next_dividend_events(moment + timedelta(days=2))
+            assert soon["2330.TW"].date == date(2026, 12, 17)
+            earlier = await repo.list_dividend_events(
+                ["2330.TW"], date(2026, 12, 1), date(2026, 12, 31), moment + timedelta(hours=1)
+            )
+            assert [e.ex_date for e in earlier] == [date(2026, 12, 10)]
+    finally:
+        async with sessions() as session:
+            for table in TABLES:
+                await session.execute(
+                    text(f"DELETE FROM {table} WHERE available_at >= :t"), {"t": moment}
+                )
+            await session.execute(
+                text("DELETE FROM fetch_coverage WHERE source = 'short_data' AND fetched_at >= :t"),
+                {"t": moment},
+            )
+            await session.commit()

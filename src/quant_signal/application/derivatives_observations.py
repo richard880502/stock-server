@@ -37,13 +37,17 @@ async def refresh_observation_futures(repository: Any, *, market: str = MARKET) 
         item.model_copy(
             update={
                 "futures_net_open_interest": float(series[item.trading_date]),
+                "futures_oi_known": True,
                 "revision": item.revision + 1,
             }
         )
         for item in latest.values()
         if item.trading_date in series
-        and not math.isclose(
-            item.futures_net_open_interest, series[item.trading_date], abs_tol=1e-9
+        and (
+            not item.futures_oi_known
+            or not math.isclose(
+                item.futures_net_open_interest, series[item.trading_date], abs_tol=1e-9
+            )
         )
     ]
     return await repository.upsert_market_observations(revisions) if revisions else 0

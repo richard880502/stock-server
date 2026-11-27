@@ -33,6 +33,11 @@ def _diff(current: float | None, previous: float | None) -> float | None:
     return None if current is None or previous is None else current - previous
 
 
+def _eps(value: float | None) -> float | None:
+    """EPS is quoted to the cent: 52.5 - 35.0 must not surface as 17.499999999999996."""
+    return None if value is None else round(value, 2)
+
+
 def single_quarters(rows: list[Q]) -> list[QuarterSingle]:
     """Single-quarter values for every stored period, oldest first."""
     cumulative = latest_revisions(rows)
@@ -46,6 +51,8 @@ def single_quarters(rows: list[Q]) -> list[QuarterSingle]:
                 values[name] = current
             else:
                 values[name] = _diff(current, getattr(previous, name) if previous else None)
+            if name == "eps":
+                values[name] = _eps(values[name])
         for name in BALANCE_FIELDS:
             values[name] = getattr(row, name)
         singles.append(
@@ -96,7 +103,7 @@ def quarter_points(rows: list[Q], count: int = 8) -> list[QuarterPoint]:
             gross_margin_pct=_margin(single.gross_profit, single.revenue),
             operating_margin_pct=_margin(single.operating_income, single.revenue),
             net_margin_pct=_margin(single.net_income_parent, single.revenue),
-            eps=None if single.eps is None else round(single.eps, 4),
+            eps=_eps(single.eps),
         )
         for single in single_quarters(rows)[-count:]
     ]
@@ -127,8 +134,8 @@ def earnings_metrics(rows: list[Q]) -> EarningsMetrics | None:
         period=current.period,
         statement_kind=current.statement_kind,
         revenue=current.revenue,
-        eps=current.eps,
-        eps_ttm=None if eps_ttm is None else round(eps_ttm, 4),
+        eps=_eps(current.eps),
+        eps_ttm=_eps(eps_ttm),
         eps_yoy_pct=eps_yoy,
         gross_margin_pct=gross,
         operating_margin_pct=operating,

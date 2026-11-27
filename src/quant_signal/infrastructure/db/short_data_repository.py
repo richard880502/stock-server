@@ -24,7 +24,7 @@ from quant_signal.infrastructure.db.models import (
     MarketStockDayRow,
     ShortLendingDailyRow,
 )
-from quant_signal.infrastructure.short_data_reads import ShortDataReadsMixin, plan_revisions
+from quant_signal.infrastructure.short_data_reads import TAIPEI, ShortDataReadsMixin, plan_revisions
 
 CHUNK = 500
 
@@ -141,7 +141,7 @@ class ShortDataRepositoryMixin(ShortDataReadsMixin):
         cls = MarketStockDayRow
         statement = select(cls.symbol, cls.trading_date, cls.volume).where(
             cls.trading_date >= since,
-            cls.trading_date <= cutoff.date(),
+            cls.trading_date <= cutoff.astimezone(TAIPEI).date(),
             cls.available_at <= cutoff,
         )
         if symbol:
@@ -166,10 +166,10 @@ class ShortDataRepositoryMixin(ShortDataReadsMixin):
         return list(newest.values())
 
     async def sd_dividend_rows(
-        self, start: date, end: date, cutoff: datetime
+        self, start: date, end: date, cutoff: datetime, *, include_withdrawn: bool = False
     ) -> list[DividendEvent]:
         cls = DividendEventRow
-        return await self._newest(
+        rows = await self._newest(
             cls,
             DividendEvent,
             ["symbol", "ex_date", "kind"],
@@ -177,3 +177,4 @@ class ShortDataRepositoryMixin(ShortDataReadsMixin):
             cls.ex_date <= end,
             cls.available_at <= cutoff,
         )
+        return rows if include_withdrawn else [row for row in rows if not row.withdrawn]
