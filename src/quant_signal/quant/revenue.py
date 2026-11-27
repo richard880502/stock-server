@@ -13,6 +13,19 @@ def _ordinal(period: str) -> int:
     return int(year) * 12 + int(month) - 1
 
 
+def latest_by_period(rows: list[MonthlyRevenue]) -> dict[str, MonthlyRevenue]:
+    """One row per period; the newest revision / fetch wins when a period repeats."""
+    by_period: dict[str, MonthlyRevenue] = {}
+    for row in rows:
+        current = by_period.get(row.period)
+        if current is None or (row.revision, row.available_at) > (
+            current.revision,
+            current.available_at,
+        ):
+            by_period[row.period] = row
+    return by_period
+
+
 def revenue_metrics(rows: list[MonthlyRevenue]) -> RevenueMetrics | None:
     """Summarise one company's monthly revenue history (any order, any revisions).
 
@@ -27,14 +40,7 @@ def revenue_metrics(rows: list[MonthlyRevenue]) -> RevenueMetrics | None:
     """
     if not rows:
         return None
-    by_period: dict[str, MonthlyRevenue] = {}
-    for row in rows:  # newest revision / fetch wins when a period repeats
-        current = by_period.get(row.period)
-        if current is None or (row.revision, row.available_at) > (
-            current.revision,
-            current.available_at,
-        ):
-            by_period[row.period] = row
+    by_period = latest_by_period(rows)
     latest = by_period[max(by_period)]
     position = _ordinal(latest.period)
     by_month = {_ordinal(period): row for period, row in by_period.items()}

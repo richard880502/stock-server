@@ -735,3 +735,45 @@ class DividendEventRow(Base):
     cash_capital_increase_ratio: Mapped[float | None] = mapped_column(Float)
     subscription_price: Mapped[float | None] = mapped_column(Float)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ValuationDailyRow(Base):
+    """Official daily P/E, P/B and dividend yield (percent) per stock; NULL = not defined."""
+
+    __tablename__ = "valuation_daily"
+    __table_args__ = (Index("ix_valuation_daily_date", "trading_date"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    pe_ratio: Mapped[float | None] = mapped_column(Float)
+    pb_ratio: Mapped[float | None] = mapped_column(Float)
+    dividend_yield_pct: Mapped[float | None] = mapped_column(Float)
+    dividend_year: Mapped[int | None] = mapped_column(Integer)
+    fiscal_period: Mapped[str | None] = mapped_column(String(8))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class QuarterlyFinancialRow(Base):
+    """Quarterly statements as published: income lines are year-to-date cumulative
+    (``cumulative`` is always true today), NT$ thousands, EPS in NT$; a restated quarter is
+    a new revision."""
+
+    __tablename__ = "quarterly_financials"
+    __table_args__ = (Index("ix_quarterly_financials_period", "fiscal_year", "fiscal_quarter"),)
+
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    fiscal_year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fiscal_quarter: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    statement_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    cumulative: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    revenue: Mapped[float | None] = mapped_column(Float)
+    gross_profit: Mapped[float | None] = mapped_column(Float)
+    operating_income: Mapped[float | None] = mapped_column(Float)
+    net_income_parent: Mapped[float | None] = mapped_column(Float)
+    eps: Mapped[float | None] = mapped_column(Float)
+    equity_parent: Mapped[float | None] = mapped_column(Float)
+    total_assets: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

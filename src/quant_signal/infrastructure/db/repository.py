@@ -49,6 +49,7 @@ from quant_signal.domain.ranking import (
     finalize_ranking_value,
 )
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
+from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -92,6 +93,7 @@ class PostgresQuantRepository(
     FactorDataRepositoryMixin,
     HoldersRepositoryMixin,
     ShortDataRepositoryMixin,
+    FundamentalsRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

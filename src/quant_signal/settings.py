@@ -162,6 +162,20 @@ class Settings(BaseSettings):
     short_data_backfill_sessions: int = Field(default=60, ge=0, le=500)
     short_data_backfill_per_tick: int = Field(default=2, ge=1, le=10)
     short_data_retry_minutes: float = Field(default=10.0, gt=0)
+    # Official valuation (P/E, P/B, dividend yield), monthly-revenue history and quarterly
+    # financial statements (sync worker). The backfills are bounded, gradual and off-session.
+    fundamentals_valuation_enabled: bool = True
+    fundamentals_revenue_history_enabled: bool = True
+    fundamentals_financials_enabled: bool = True
+    # Trading days of valuation history to fill (0 = only the live window).
+    valuation_backfill_sessions: int = Field(default=250, ge=0, le=1500)
+    revenue_backfill_months: int = Field(default=36, ge=0, le=120)
+    financials_backfill_quarters: int = Field(default=12, ge=0, le=40)
+    # Valuation days / revenue months fetched per worker tick during a backfill.
+    fundamentals_backfill_per_tick: int = Field(default=3, ge=1, le=20)
+    fundamentals_retry_minutes: float = Field(default=10.0, gt=0)
+    # Pause between MOPS requests (the site throttles bursts).
+    fundamentals_mops_interval_seconds: float = Field(default=3.0, ge=0.5, le=60)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

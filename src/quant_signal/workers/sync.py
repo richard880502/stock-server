@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, date, datetime, timedelta
 
+from quant_signal.application.fundamentals_data import refresh_fundamentals_data
 from quant_signal.application.holders_data import refresh_holders_data
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
@@ -57,6 +58,7 @@ async def _after_market_sync(repository: QuantRepository) -> None:
 
 _holders_attempts: dict[str, datetime] = {}
 _short_data_attempts: dict[str, datetime] = {}
+_fundamentals_attempts: dict[str, datetime] = {}
 
 
 async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
@@ -126,6 +128,31 @@ async def tick(twse: TwseProvider, tpex: TpexProvider) -> bool | None:
         except Exception:
             # A side feed; never let it stall the price sync.
             logger.exception("short data refresh failed")
+        if (
+            settings.fundamentals_valuation_enabled
+            or settings.fundamentals_revenue_history_enabled
+            or settings.fundamentals_financials_enabled
+        ):
+            try:
+                await refresh_fundamentals_data(
+                    repository,
+                    twse,
+                    tpex,
+                    now=now,
+                    attempts=_fundamentals_attempts,
+                    valuation_enabled=settings.fundamentals_valuation_enabled,
+                    valuation_backfill_sessions=settings.valuation_backfill_sessions,
+                    revenue_history_enabled=settings.fundamentals_revenue_history_enabled,
+                    revenue_backfill_months=settings.revenue_backfill_months,
+                    financials_enabled=settings.fundamentals_financials_enabled,
+                    financials_backfill_quarters=settings.financials_backfill_quarters,
+                    backfill_per_tick=settings.fundamentals_backfill_per_tick,
+                    retry_after=timedelta(minutes=settings.fundamentals_retry_minutes),
+                    mops_interval=settings.fundamentals_mops_interval_seconds,
+                )
+            except Exception:
+                # Fundamentals are a side feed; never let them stall the price sync.
+                logger.exception("fundamentals refresh failed")
         await enqueue_daily_refresh(
             repository,
             now=datetime.now(UTC),

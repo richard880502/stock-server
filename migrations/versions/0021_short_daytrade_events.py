@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0021_short_daytrade_events"
-down_revision = "0017_holders_data"
+down_revision = "0019_valuation_fundamentals"
 branch_labels = None
 depends_on = None
 
