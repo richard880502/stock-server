@@ -34,6 +34,16 @@ export function EquityCard({
 }) {
   const series = useMemo(() => rebaseBenchmark(points ?? []), [points]);
   const count = series.equity.length;
+  if (points !== null && count < 2) {
+    // Nothing to draw yet: one compact line instead of a tall empty chart area, so the
+    // positions and orders below stay near the top of a phone screen.
+    return (
+      <section className="card paper-equity paper-equity-compact" aria-label="權益曲線">
+        <h2 className="card-title">權益曲線</h2>
+        <p className="paper-equity-note">明天起這裡會畫出你的權益曲線</p>
+      </section>
+    );
+  }
   return (
     <Card
       title="權益曲線"
@@ -45,7 +55,7 @@ export function EquityCard({
         {points === null && loading ? (
           <span className="skeleton block paper-chart-skeleton" aria-label="載入中" />
         ) : count < 2 ? (
-          <p className="paper-empty paper-chart-empty">明天起這裡會畫出你的權益曲線</p>
+          <span className="skeleton block paper-chart-skeleton" aria-label="載入中" />
         ) : (
           <EquityLines series={series} />
         )}

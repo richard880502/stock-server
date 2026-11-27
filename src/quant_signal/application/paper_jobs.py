@@ -11,10 +11,13 @@ Prices are read only from our own tables (``quote_latest``, ``minute_bars``,
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from time import perf_counter
 from typing import Protocol
 from uuid import UUID
 
@@ -23,8 +26,9 @@ from quant_signal.application.paper_market import (
     account_start_date,
     benchmark_closes,
     load_market,
+    past_references,
 )
-from quant_signal.application.paper_ports import PaperRepository
+from quant_signal.application.paper_ports import PaperInsufficientCash, PaperRepository
 from quant_signal.domain.paper import (
     LedgerEntry,
     PaperAccountRecord,
@@ -32,15 +36,15 @@ from quant_signal.domain.paper import (
     PaperOrderRecord,
     SnapshotRecord,
 )
-from quant_signal.domain.tw_trading import BOARD_LOT
+from quant_signal.domain.tw_trading import BOARD_LOT, price_limit_pct_for
 from quant_signal.infrastructure.db.prices import MinuteBar
 from quant_signal.quant.paper_book import replay
 from quant_signal.quant.paper_calendar import (
-    in_session,
     is_trading_day,
     local,
+    matcher_open,
+    observation_window,
     previous_trading_day,
-    session_window,
 )
 from quant_signal.quant.paper_matching import (
     Match,
@@ -48,7 +52,7 @@ from quant_signal.quant.paper_matching import (
     OrderSpec,
     compute_fill,
     day_trade_shares,
-    limits_for,
+    limits_for_symbol,
     match_order,
     resolve_reference,
     symbol_is_etf,
@@ -70,6 +74,25 @@ DEMAND_CLOSES = time(13, 35)
 # Paper trading may hold at most this many of the 200 collector subscriptions.
 PAPER_DEMAND_MAX = 60
 OFFICIAL_LAST_MINUTE = time(13, 20)  # an official bar this late means the day is complete
+# Every loop over orders/accounts yields to the event loop at least this often: the matcher
+# shares its loop with the realtime quote collector and must never starve it.
+YIELD_EVERY = 50
+YIELD_AFTER_SECONDS = 0.004
+
+
+class _Breather:
+    """``await breathe()`` once per item: yields every ``YIELD_EVERY`` items, and sooner
+    when the loop has been busy for more than ``YIELD_AFTER_SECONDS`` (a heavy order)."""
+
+    def __init__(self) -> None:
+        self.count = 0
+        self.last = perf_counter()
+
+    async def __call__(self) -> None:
+        self.count += 1
+        if self.count % YIELD_EVERY == 0 or perf_counter() - self.last > YIELD_AFTER_SECONDS:
+            await asyncio.sleep(0)
+            self.last = perf_counter()
 
 
 class DemandPort(Protocol):
@@ -87,6 +110,13 @@ class TickStats:
     demand: list[str] = field(default_factory=list)
 
 
+@dataclass
+class _SnapshotState:
+    checked_at: datetime
+    written: set[tuple[UUID, int]] = field(default_factory=set)  # (account, epoch) done
+    final: bool = False
+
+
 class PaperJobs:
     def __init__(
         self,
@@ -101,7 +131,13 @@ class PaperJobs:
         self._last_bar_minute: datetime | None = None
         self._last_demand: datetime | None = None
         self._last_reconcile: datetime | None = None
-        self._snapshot_state: dict[date, datetime | str] = {}
+        self._snapshot_state: dict[date, _SnapshotState] = {}
+        # Per symbol: the minute of the newest bar already matched, and a fingerprint of the
+        # prices the working orders were last checked against. Orders checked against an
+        # unchanged fingerprint are not looked at again.
+        self._bar_watermark: dict[str, datetime] = {}
+        self._fingerprint: dict[str, tuple] = {}
+        self._examined: set[UUID] = set()
 
     # --- entry point ---------------------------------------------------------------
 
@@ -116,7 +152,7 @@ class PaperJobs:
             ):
                 stats.demand = await self.register_demand(repo, working, now)
                 self._last_demand = now
-        if working and in_session(now):
+        if working and matcher_open(now):
             await self._match_live(repo, working, now, stats)
         if working and (
             self._last_reconcile is None
@@ -124,7 +160,9 @@ class PaperJobs:
         ):
             self._last_reconcile = now
             await self.reconcile(repo, now, stats)
-        await self.write_daily_snapshots(repo, now, stats)
+        if stats.matched or stats.expired or stats.rejected:
+            working = await repo.list_working_paper_orders()  # what is left after this tick
+        await self.write_daily_snapshots(repo, now, stats, working=working)
         return stats
 
     @staticmethod
@@ -140,23 +178,27 @@ class PaperJobs:
     ) -> list[str]:
         """Ask the shared, capped demand set for the symbols paper trading cares about.
 
-        Working orders for today first, then open positions. Each symbol is requested on
-        its own through the same all-or-nothing ``ADMIT`` script real viewers use, so a
-        full set simply refuses it (those symbols stay on 10-minute snapshots and minute
-        bars and the API marks them ``price_delayed``). Paper trading never asks for more
-        than ``demand_max`` symbols.
+        Working orders for today first, then open positions (one aggregate query, not a
+        replay of every account's fills). Each symbol is requested on its own through the
+        same all-or-nothing ``ADMIT`` script real viewers use, so a full set simply refuses
+        it (those symbols stay on 10-minute snapshots and minute bars and the API marks
+        them ``price_delayed``). Paper trading never asks for more than ``demand_max``
+        symbols.
         """
         assert self.demand is not None
         today = local(now).date()
         wanted: list[str] = []
+        seen: set[str] = set()
+        breathe = _Breather()
         for order in working:
-            if order.session_date == today and order.symbol not in wanted:
+            if order.session_date == today and order.symbol not in seen:
+                seen.add(order.symbol)
                 wanted.append(order.symbol)
-        for account in await repo.list_active_paper_accounts():
-            fills = await repo.list_paper_fills(account.id, epoch=account.epoch)
-            for state in replay(fills).open_positions():
-                if state.symbol not in wanted:
-                    wanted.append(state.symbol)
+            await breathe()
+        for symbol in await repo.list_open_position_symbols():
+            if symbol not in seen:
+                seen.add(symbol)
+                wanted.append(symbol)
         admitted: list[str] = []
         for symbol in wanted:
             if len(admitted) >= self.demand_max:
@@ -167,6 +209,7 @@ class PaperJobs:
             except Exception:
                 log.warning("Paper demand registration failed; will retry")
                 break
+            await breathe()
         return admitted
 
     # --- live matching -------------------------------------------------------------
@@ -179,51 +222,94 @@ class PaperJobs:
         stats: TickStats,
     ) -> None:
         today = local(now).date()
-        orders = [o for o in working if o.session_date == today]
-        if not orders:
+        by_symbol: dict[str, list[PaperOrderRecord]] = {}
+        for order in working:
+            if order.session_date == today:
+                by_symbol.setdefault(order.symbol, []).append(order)
+        if not by_symbol:
             return
-        symbols = sorted({o.symbol for o in orders})
+        self._examined &= {o.id for orders in by_symbol.values() for o in orders}
+        symbols = sorted(by_symbol)
         views = await load_market(repo, symbols)
         minute = local(now).replace(second=0, microsecond=0)
         bars_due = self._last_bar_minute != minute
         self._last_bar_minute = minute
-        bars: dict[str, list[MinuteBar]] = {}
-        if bars_due:
-            first, _ = session_window(today)
-            for symbol in symbols:
-                bars[symbol] = [
-                    bar for bar in await repo.list_minute_bars(symbol, since=first, until=minute)
-                ]
+        first, _ = observation_window(today)
         accounts: dict[UUID, PaperAccountRecord | None] = {}
-        for order in orders:
-            view = views.get(order.symbol)
+        breathe = _Breather()
+        for symbol in symbols:
+            view = views.get(symbol)
             if view is None or not view.known:
                 continue
-            observations = self.quote_observations(view, order) + [
-                self.bar_observation(b) for b in bars.get(order.symbol, [])
-            ]
-            if observations:
-                await self.settle(repo, order, view, observations, now, stats, accounts)
+            mark = self._bar_watermark.get(symbol)
+            new_bars: list[MinuteBar] = []
+            if bars_due:
+                since = first if mark is None or mark < first else mark + timedelta(minutes=1)
+                new_bars = await repo.list_minute_bars(symbol, since=since, until=minute)
+            quote = view.quote
+            fingerprint = (
+                None if quote is None else (quote.trade_time, quote.price, quote.reference),
+                None if quote is None else quote.open,
+                view.official_date,
+                view.official_close,
+            )
+            symbol_orders = by_symbol[symbol]
+            if new_bars or self._fingerprint.get(symbol) != fingerprint:
+                todo = symbol_orders
+            else:  # same prices, no new bars: only orders not yet looked at
+                todo = [o for o in symbol_orders if o.id not in self._examined]
+            if todo:
+                shared = self.point_observations(view) + [self.bar_observation(b) for b in new_bars]
+                shared.sort(key=lambda o: o.time)
+                await breathe()
+                times = [o.time for o in shared]
+                for order in todo:
+                    found = shared[bisect_right(times, order.created_at) :]
+                    opening = self.open_observation(view, order)
+                    if opening is not None:
+                        found = [opening, *found]
+                    if found:
+                        await self.settle(repo, order, view, found, now, stats, accounts)
+                    await breathe()
+            self._examined.update(o.id for o in symbol_orders)
+            self._fingerprint[symbol] = fingerprint
+            if new_bars:
+                self._bar_watermark[symbol] = max(mark or new_bars[0].minute, new_bars[-1].minute)
 
     # --- observations --------------------------------------------------------------
 
     @staticmethod
-    def quote_observations(view: MarketView, order: PaperOrderRecord) -> list[Observation]:
+    def point_observations(view: MarketView) -> list[Observation]:
         quote = view.quote
         if quote is None:
             return []
-        found = [
+        return [
             Observation(
                 time=quote.trade_time,
                 source="tick" if quote.source == "tick" else "snapshot",
                 price=to_price(quote.price),
             )
         ]
-        first, _ = session_window(order.session_date)
-        # An order waiting for the open meets the day's first trade, the open price.
-        if order.created_at < first and quote.open and view.quote_date == order.session_date:
-            found.append(Observation(time=first, source="open", price=to_price(quote.open)))
-        return found
+
+    @staticmethod
+    def open_observation(view: MarketView, order: PaperOrderRecord) -> Observation | None:
+        """An order waiting for the open meets the day's first trade, the open price."""
+        quote = view.quote
+        first, _ = observation_window(order.session_date)
+        if (
+            quote is not None
+            and order.created_at < first
+            and quote.open
+            and view.quote_date == order.session_date
+        ):
+            return Observation(time=first, source="open", price=to_price(quote.open))
+        return None
+
+    @classmethod
+    def quote_observations(cls, view: MarketView, order: PaperOrderRecord) -> list[Observation]:
+        found = cls.point_observations(view)
+        opening = cls.open_observation(view, order)
+        return found if opening is None else [*found, opening]
 
     @staticmethod
     def bar_observation(bar: MinuteBar) -> Observation:
@@ -246,21 +332,31 @@ class PaperJobs:
         now: datetime,
         stats: TickStats,
         accounts: dict[UUID, PaperAccountRecord | None],
+        *,
+        reference: Decimal | None = None,
     ) -> bool:
-        """Match ``order`` against ``observations`` and book the fill. True if filled."""
+        """Match ``order`` against ``observations`` and book the fill. True if filled.
+
+        ``reference`` is the session's reference price when the caller already knows it
+        (a finished session reconciled later); otherwise it is derived from the market view.
+        """
         etf = symbol_is_etf(order.symbol)
         quote = view.quote
-        reference = resolve_reference(
-            order.session_date,
-            quote_reference=(D(str(quote.reference)) if quote and quote.reference else None),
-            quote_price=(D(str(quote.price)) if quote else None),
-            quote_date=view.quote_date,
-            official_close=view.official_close,
-            official_date=view.official_date,
-        )
         if reference is None:
-            return False
-        limit_down, limit_up = limits_for(reference, etf)
+            reference = resolve_reference(
+                order.session_date,
+                quote_reference=(D(str(quote.reference)) if quote and quote.reference else None),
+                quote_price=(D(str(quote.price)) if quote else None),
+                quote_date=view.quote_date,
+                official_close=view.official_close,
+                official_date=view.official_date,
+            )
+        limit_down: Decimal | None = None
+        limit_up: Decimal | None = None
+        if price_limit_pct_for(order.symbol) is not None:  # symbols without a limit need none
+            if reference is None:
+                return False
+            limit_down, limit_up = limits_for_symbol(reference, order.symbol)
         spec = OrderSpec(
             side=order.side,
             order_type=order.order_type,
@@ -296,11 +392,10 @@ class PaperJobs:
         stats: TickStats,
     ) -> bool:
         shares = order.lots * BOARD_LOT
-        fills = await repo.list_paper_fills(account.id, epoch=account.epoch)
-        book = replay(fills)
         day = order.session_date
         dt_qty = 0
         if order.side == "sell":
+            book = replay(await repo.list_paper_fills(account.id, epoch=account.epoch))
             if book.held(order.symbol) < shares:
                 if await repo.finish_paper_order(
                     order.id, status="rejected", now=now, reject_reason="成交時持股不足，委託作廢"
@@ -321,14 +416,6 @@ class PaperJobs:
             commission_discount=account.commission_discount,
             day_trade_qty=dt_qty,
         )
-        if order.side == "buy":
-            cash = await repo.paper_cash(account.id, account.epoch)
-            if cash < amounts.amount + amounts.commission:
-                if await repo.finish_paper_order(
-                    order.id, status="rejected", now=now, reject_reason="成交時資金不足，委託作廢"
-                ):
-                    stats.rejected += 1
-                return False
         fill = PaperFillRecord(
             order_id=order.id,
             account_id=account.id,
@@ -346,9 +433,17 @@ class PaperJobs:
             price_time=found.time,
         )
         ledger = ledger_entries(fill, now)
-        if await repo.apply_paper_fill(fill, ledger, now=now):
-            stats.matched += 1
-            return True
+        try:
+            # The repository re-checks, under the account lock, that the cash left after
+            # the reserves of the account's other working orders covers this fill.
+            if await repo.apply_paper_fill(fill, ledger, now=now):
+                stats.matched += 1
+                return True
+        except PaperInsufficientCash:
+            if await repo.finish_paper_order(
+                order.id, status="rejected", now=now, reject_reason="成交時資金不足，委託作廢"
+            ):
+                stats.rejected += 1
         return False
 
     # --- after the close -----------------------------------------------------------
@@ -360,7 +455,8 @@ class PaperJobs:
 
         Catches touches the 3-second poll missed, then expires what never traded. Runs
         once official minutes are stored (after ~14:40), or at 16:00 with whatever was
-        observed. Idempotent: booking and expiry both require ``working``.
+        observed. Idempotent: booking and expiry both require ``working``. Every date
+        whose fills or expiries changed has its equity snapshots rewritten afterwards.
         """
         stats = stats or TickStats()
         local_now = local(now)
@@ -368,84 +464,148 @@ class PaperJobs:
         working = await repo.list_working_paper_orders()
         due_days = sorted({o.session_date for o in working if o.session_date <= today})
         accounts: dict[UUID, PaperAccountRecord | None] = {}
+        touched: dict[date, set[UUID]] = {}
+        breathe = _Breather()
         for day in due_days:
             if day == today and local_now.time() < RECONCILE_AFTER:
                 continue
             orders = [o for o in working if o.session_date == day]
             symbols = sorted({o.symbol for o in orders})
             views = await load_market(repo, symbols)
-            first, last = session_window(day)
-            bars_by_symbol = {
-                symbol: await repo.list_minute_bars(
+            references = await past_references(repo, symbols, day) if day < today else {}
+            first, last = observation_window(day)
+            bar_obs: dict[str, list[Observation]] = {}
+            bar_times: dict[str, list[datetime]] = {}
+            complete: dict[str, bool] = {}
+            for symbol in symbols:
+                bars = await repo.list_minute_bars(
                     symbol, since=first, until=last + timedelta(minutes=1)
                 )
-                for symbol in symbols
-            }
-            final = day < today or local_now.time() >= FALLBACK_EXPIRE_AT
-            for order in orders:
-                bars = bars_by_symbol.get(order.symbol, [])
-                complete = any(
+                complete[symbol] = any(
                     b.official and local(b.minute).time() >= OFFICIAL_LAST_MINUTE for b in bars
                 )
-                if not (complete or final):
+                bar_obs[symbol] = sorted(
+                    (self.bar_observation(b) for b in bars), key=lambda o: o.time
+                )
+                bar_times[symbol] = [o.time for o in bar_obs[symbol]]
+                await breathe()
+            final = day < today or local_now.time() >= FALLBACK_EXPIRE_AT
+            for order in orders:
+                await breathe()
+                if not (complete[order.symbol] or final):
                     continue
                 view = views.get(order.symbol)
                 filled = False
                 if view is not None and view.known:
-                    observations = [self.bar_observation(b) for b in bars]
-                    observations += self.quote_observations(view, order)
-                    if not bars and view.official_date == day and view.official_open:
-                        first_trade, _ = session_window(day)
-                        if order.created_at < first_trade:
+                    mine = bar_obs[order.symbol]
+                    observations = mine[bisect_right(bar_times[order.symbol], order.created_at) :]
+                    observations = observations + self.quote_observations(view, order)
+                    if not mine and view.official_date == day and view.official_open:
+                        if order.created_at < first:
                             observations.append(
                                 Observation(
-                                    time=first_trade,
+                                    time=first,
                                     source="open",
                                     price=to_price(view.official_open),
                                 )
                             )
                     filled = await self.settle(
-                        repo, order, view, observations, now, stats, accounts
+                        repo,
+                        order,
+                        view,
+                        observations,
+                        now,
+                        stats,
+                        accounts,
+                        reference=references.get(order.symbol),
                     )
-                if not filled and await repo.finish_paper_order(
-                    order.id, status="expired", now=now
-                ):
-                    stats.expired += 1
+                if filled or await repo.finish_paper_order(order.id, status="expired", now=now):
+                    touched.setdefault(day, set()).add(order.account_id)
+                    if not filled:
+                        stats.expired += 1
+        if touched:
+            await self._rewrite_snapshots(repo, touched, now, stats)
         return stats
 
     # --- daily snapshots -----------------------------------------------------------
 
-    async def write_daily_snapshots(
-        self, repo: PaperRepository, now: datetime, stats: TickStats | None = None
-    ) -> TickStats:
-        """Upsert one equity snapshot per account for the latest finished trading day.
-
-        Runs from 14:45, retried every 15 minutes until every position is valued at the
-        official close (or no position needs one). Safe to repeat: it is an upsert.
-        """
-        stats = stats or TickStats()
+    @staticmethod
+    def _snapshot_day(now: datetime) -> date:
         local_now = local(now)
         today = local_now.date()
         if is_trading_day(today) and local_now.time() >= SNAPSHOT_AFTER:
-            day = today
-        else:
-            day = previous_trading_day(today)
+            return today
+        return previous_trading_day(today)
+
+    async def _rewrite_snapshots(
+        self,
+        repo: PaperRepository,
+        touched: dict[date, set[UUID]],
+        now: datetime,
+        stats: TickStats,
+    ) -> None:
+        """Re-value the days whose fills changed (and the later days already written)."""
+        newest = self._snapshot_day(now)
+        breathe = _Breather()
+        for day, account_ids in sorted(touched.items()):
+            for account_id in sorted(account_ids, key=str):
+                account = await repo.get_paper_account(account_id)
+                if account is None or account.archived:
+                    continue
+                known = await repo.list_paper_snapshots(account.id, epoch=account.epoch, since=day)
+                days = {day} | {s.trading_date for s in known}
+                for target in sorted(d for d in days if d <= newest):
+                    if account_start_date(account) > target:
+                        continue
+                    snapshot, _ = await self.snapshot_account(repo, account, target, now)
+                    await repo.upsert_paper_snapshot(snapshot)
+                    stats.equity_rows += 1
+                await breathe()
+
+    async def write_daily_snapshots(
+        self,
+        repo: PaperRepository,
+        now: datetime,
+        stats: TickStats | None = None,
+        *,
+        working: list[PaperOrderRecord] | None = None,
+    ) -> TickStats:
+        """Upsert one equity snapshot per account for the latest finished trading day.
+
+        Runs from 14:45, retried every 15 minutes. A day is only *final* once every
+        position is valued at the official close AND no order that could still back-date a
+        fill into it is working (reconciliation for that session has completed); until then
+        the row is provisional and is rewritten. Once final, accounts that appear later (a
+        reset starts a new epoch) still get their row at the next check. Safe to repeat:
+        it is an upsert.
+        """
+        stats = stats or TickStats()
+        day = self._snapshot_day(now)
         state = self._snapshot_state.get(day)
-        if state == "final":
+        if state is not None and (now - state.checked_at).total_seconds() < SNAPSHOT_RETRY_SECONDS:
             return stats
-        if isinstance(state, datetime) and (now - state).total_seconds() < SNAPSHOT_RETRY_SECONDS:
-            return stats
-        self._snapshot_state[day] = now
+        if working is None:
+            working = await repo.list_working_paper_orders()
+        pending = any(o.session_date <= day for o in working)
+        previous = state or _SnapshotState(checked_at=now)
+        fresh = _SnapshotState(
+            checked_at=now, written=set(previous.written) if previous.final else set()
+        )
+        self._snapshot_state[day] = fresh
         all_official = True
+        breathe = _Breather()
         for account in await repo.list_active_paper_accounts():
             if account_start_date(account) > day:
                 continue
+            if (account.id, account.epoch) in fresh.written:
+                continue
             snapshot, official = await self.snapshot_account(repo, account, day, now)
             await repo.upsert_paper_snapshot(snapshot)
+            fresh.written.add((account.id, account.epoch))
             stats.equity_rows += 1
             all_official = all_official and official
-        if all_official:
-            self._snapshot_state[day] = "final"
+            await breathe()
+        fresh.final = all_official and not pending
         return stats
 
     async def snapshot_account(

@@ -97,6 +97,9 @@ class PaperOrderRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reject_reason: Mapped[str | None] = mapped_column(Text)
     reserved_cash: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    reserve_amount: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     note: Mapped[str | None] = mapped_column(Text)
 
 
@@ -158,8 +161,11 @@ class PaperSnapshotRow(Base):
         ForeignKey("paper_accounts.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    # A reset starts a new epoch whose rows must not collide with (or overwrite) the old one.
+    epoch: Mapped[int] = mapped_column(
+        Integer, primary_key=True, nullable=False, server_default=text("0")
+    )
     trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
-    epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     cash: Mapped[int] = mapped_column(BigInteger, nullable=False)
     market_value: Mapped[int] = mapped_column(BigInteger, nullable=False)
     equity: Mapped[int] = mapped_column(BigInteger, nullable=False)

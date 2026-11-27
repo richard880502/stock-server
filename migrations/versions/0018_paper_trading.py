@@ -67,6 +67,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("reject_reason", sa.Text, nullable=True),
         sa.Column("reserved_cash", sa.BigInteger, server_default=sa.text("0"), nullable=False),
+        sa.Column("reserve_amount", sa.BigInteger, server_default=sa.text("0"), nullable=False),
         sa.Column("note", sa.Text, nullable=True),
         sa.ForeignKeyConstraint(["account_id"], ["paper_accounts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -136,7 +137,7 @@ def upgrade() -> None:
         sa.Column("realized_pnl_cum", sa.BigInteger, nullable=False),
         sa.Column("benchmark_close", sa.Float, nullable=True),
         sa.ForeignKeyConstraint(["account_id"], ["paper_accounts.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("account_id", "trading_date"),
+        sa.PrimaryKeyConstraint("account_id", "epoch", "trading_date"),
     )
 
 

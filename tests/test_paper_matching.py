@@ -123,7 +123,11 @@ def test_observation_must_be_strictly_after_creation_and_inside_the_session() ->
     assert _match(spec, [_tick(9, 59, 59, "101")]) is None
     assert _match(spec, [_tick(10, 0, 1, "101", day=MON)]) is None  # another day
     assert _match(_spec("buy", created=at(FRI, 7)), [_tick(8, 59, 0, "101")]) is None
-    assert _match(_spec("buy", created=at(FRI, 7)), [_tick(13, 30, 1, "101")]) is None
+    assert _match(_spec("buy", created=at(FRI, 7)), [_tick(13, 35, 1, "101")]) is None
+    # the closing-auction print carries 13:30 but arrives a moment later: still counts
+    closing = _match(_spec("buy", created=at(FRI, 7)), [_tick(13, 30, 1, "101")])
+    assert closing is not None and closing.price == D("101.50")
+    assert _match(_spec("buy", created=at(FRI, 7)), [_tick(13, 35, 0, "101")]) is not None
     found = _match(spec, [_tick(10, 0, 1, "101")])
     assert found is not None and found.price == D("101.50") and found.source == "tick"
 

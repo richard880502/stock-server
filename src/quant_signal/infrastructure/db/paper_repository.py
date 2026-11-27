@@ -7,10 +7,11 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, case, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
+from quant_signal.application.paper_ports import PaperInsufficientCash
 from quant_signal.domain.paper import (
     LedgerEntry,
     PaperAccountRecord,
@@ -18,6 +19,7 @@ from quant_signal.domain.paper import (
     PaperOrderRecord,
     SnapshotRecord,
 )
+from quant_signal.domain.tw_trading import TWCostConfig, commission
 from quant_signal.infrastructure.db.paper_models import (
     PaperAccountRow,
     PaperFillRow,
@@ -60,6 +62,7 @@ def _order(row: PaperOrderRow) -> PaperOrderRecord:
         updated_at=row.updated_at,
         reject_reason=row.reject_reason,
         reserved_cash=row.reserved_cash,
+        reserve_amount=row.reserve_amount,
         note=row.note,
     )
 
@@ -161,7 +164,9 @@ class PaperRepositoryMixin:
         return "created"
 
     async def get_paper_account(self, account_id: UUID) -> PaperAccountRecord | None:
-        row = await self.session.get(PaperAccountRow, account_id)
+        # populate_existing: a lock taken since the last read may have waited for a writer
+        # (reset, discount change); never answer from a stale identity-map copy.
+        row = await self.session.get(PaperAccountRow, account_id, populate_existing=True)
         return None if row is None else _account(row)
 
     async def lock_paper_account(self, account_id: UUID) -> None:
@@ -190,7 +195,7 @@ class PaperRepositoryMixin:
         name: str | None = None,
         commission_discount: Decimal | None = None,
         allow_day_trade: bool | None = None,
-    ) -> Literal["ok", "duplicate", "missing"]:
+    ) -> Literal["ok", "duplicate", "missing", "insufficient"]:
         row = await self.session.get(
             PaperAccountRow, account_id, with_for_update=True, populate_existing=True
         )
@@ -209,7 +214,35 @@ class PaperRepositoryMixin:
                 await self.session.commit()
                 return "duplicate"
             row.name = name
-        if commission_discount is not None:
+        if commission_discount is not None and commission_discount != row.commission_discount:
+            # Re-size the reserves of working buys under the account lock; refuse the
+            # change when the cash would no longer cover all of them.
+            orders = (
+                await self.session.scalars(
+                    select(PaperOrderRow)
+                    .where(
+                        PaperOrderRow.account_id == account_id,
+                        PaperOrderRow.status == "working",
+                        PaperOrderRow.side == "buy",
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+            config = TWCostConfig(commission_discount=commission_discount)
+            resized = {
+                o.id: o.reserve_amount + commission(o.reserve_amount, config)
+                for o in orders
+                if o.reserve_amount
+            }
+            cash = await self.paper_cash(account_id, row.epoch)
+            others = sum(o.reserved_cash for o in orders if o.id not in resized)
+            if cash - others - sum(resized.values()) < 0:
+                await self.session.rollback()
+                return "insufficient"
+            for order in orders:
+                if order.id in resized:
+                    order.reserved_cash = resized[order.id]
             row.commission_discount = commission_discount
         if allow_day_trade is not None:
             row.allow_day_trade = allow_day_trade
@@ -330,15 +363,37 @@ class PaperRepositoryMixin:
     async def apply_paper_fill(
         self, fill: PaperFillRecord, ledger: list[LedgerEntry], *, now: datetime
     ) -> bool:
-        # The row lock makes a second worker (or a cancel) wait; the status check then
-        # turns it away. The unique (order_id) and (fill_id, kind) constraints are the
-        # last line of defence if both somehow got past it.
+        # The account lock serialises this with placement, resets and discount changes, so
+        # the cash/reserve check below cannot be raced; the order row lock makes a second
+        # worker (or a cancel) wait and the status check then turns it away. The unique
+        # (order_id) and (fill_id, kind) constraints are the last line of defence.
+        account = await self.session.get(
+            PaperAccountRow, fill.account_id, with_for_update=True, populate_existing=True
+        )
         row = await self.session.get(
             PaperOrderRow, fill.order_id, with_for_update=True, populate_existing=True
         )
-        if row is None or row.status != "working" or row.epoch != fill.epoch:
+        if (
+            account is None
+            or account.epoch != fill.epoch
+            or row is None
+            or row.status != "working"
+            or row.epoch != fill.epoch
+        ):
             await self.session.commit()
             return False
+        if fill.side == "buy":
+            cash = await self.paper_cash(fill.account_id, fill.epoch)
+            others = await self.session.scalar(
+                select(func.coalesce(func.sum(PaperOrderRow.reserved_cash), 0)).where(
+                    PaperOrderRow.account_id == fill.account_id,
+                    PaperOrderRow.status == "working",
+                    PaperOrderRow.id != fill.order_id,
+                )
+            )
+            if cash - int(others or 0) < fill.amount + fill.commission:
+                await self.session.rollback()
+                raise PaperInsufficientCash
         try:
             self.session.add(PaperFillRow(**fill.model_dump()))
             await self.session.flush()
@@ -376,6 +431,52 @@ class PaperRepositoryMixin:
         )
         return int(total or 0)
 
+    async def paper_cash_and_working(
+        self, account_id: UUID, epoch: int
+    ) -> tuple[int, list[PaperOrderRecord]]:
+        # One statement, so cash and reserves come from the same snapshot.
+        cash = (
+            select(func.coalesce(func.sum(PaperLedgerRow.amount), 0).label("cash"))
+            .where(PaperLedgerRow.account_id == account_id, PaperLedgerRow.epoch == epoch)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(cash.c.cash, PaperOrderRow)
+            .select_from(cash)
+            .outerjoin(
+                PaperOrderRow,
+                and_(
+                    PaperOrderRow.account_id == account_id,
+                    PaperOrderRow.status == "working",
+                    PaperOrderRow.epoch == epoch,
+                ),
+            )
+            .order_by(PaperOrderRow.created_at, PaperOrderRow.id)
+            .execution_options(populate_existing=True)
+        )
+        rows = result.all()
+        total = int(rows[0][0]) if rows else 0
+        return total, [_order(order) for _, order in rows if order is not None]
+
+    async def list_open_position_symbols(self) -> list[str]:
+        """One aggregate for the demand registration: net shares per account and symbol."""
+        signed = case((PaperFillRow.side == "buy", PaperFillRow.shares), else_=-PaperFillRow.shares)
+        net = func.sum(signed)
+        rows = await self.session.execute(
+            select(PaperFillRow.symbol)
+            .join(
+                PaperAccountRow,
+                and_(
+                    PaperAccountRow.id == PaperFillRow.account_id,
+                    PaperAccountRow.epoch == PaperFillRow.epoch,
+                ),
+            )
+            .where(PaperAccountRow.archived.is_(False))
+            .group_by(PaperFillRow.account_id, PaperFillRow.symbol)
+            .having(net > 0)
+        )
+        return sorted({symbol for (symbol,) in rows})
+
     async def list_paper_ledger(self, account_id: UUID, epoch: int) -> list[LedgerEntry]:
         rows = await self.session.scalars(
             select(PaperLedgerRow)
@@ -389,11 +490,11 @@ class PaperRepositoryMixin:
         statement = insert(PaperSnapshotRow).values(**values)
         await self.session.execute(
             statement.on_conflict_do_update(
-                index_elements=["account_id", "trading_date"],
+                index_elements=["account_id", "epoch", "trading_date"],
                 set_={
                     k: getattr(statement.excluded, k)
                     for k in values
-                    if k not in ("account_id", "trading_date")
+                    if k not in ("account_id", "epoch", "trading_date")
                 },
             )
         )

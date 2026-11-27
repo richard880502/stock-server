@@ -195,7 +195,8 @@ export function OrderTicket({
       ? maxSellLots(position)
       : maxBuyLots({
           availableCash: account.available_cash,
-          price: orderType === "limit" ? (price ?? 0) : (info?.limit_up ?? lastPrice ?? 0),
+          // No daily limit (most ETFs): the server reserves last x 1.10 for a market buy.
+          price: orderType === "limit" ? (price ?? 0) : (info?.limit_up ?? (lastPrice ?? 0) * 1.1),
           discount: account.commission_discount,
           rules,
         });

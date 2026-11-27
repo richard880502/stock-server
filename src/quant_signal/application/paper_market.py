@@ -21,7 +21,7 @@ from quant_signal.quant.paper_calendar import (
     in_session,
     local,
 )
-from quant_signal.quant.paper_matching import to_price
+from quant_signal.quant.paper_matching import past_session_reference, to_price
 
 D = Decimal
 STALE_TICK_SECONDS = 120
@@ -128,6 +128,37 @@ async def load_market(
             quote=quotes.get(symbol),
         )
     return views
+
+
+async def past_references(
+    repo: PaperRepository, symbols: list[str], day: date
+) -> dict[str, Decimal]:
+    """Reference prices of the finished session ``day``, from official daily rows only.
+
+    ``close - change`` of that day's own row, else the newest official close before it.
+    Symbols with neither are left out.
+    """
+    wanted = sorted({s.upper() for s in symbols})
+    if not wanted:
+        return {}
+    dates = await repo.list_market_trading_dates(None, as_of=day, limit=3)
+    rows = await repo.list_market_stock_rows(wanted, dates) if dates else []
+    by_symbol: dict[str, list] = {}
+    for row in rows:
+        by_symbol.setdefault(row.symbol, []).append(row)
+    found: dict[str, Decimal] = {}
+    for symbol, history in by_symbol.items():
+        history.sort(key=lambda r: (r.trading_date, r.source))
+        own = [r for r in history if r.trading_date == day]
+        before = [r for r in history if r.trading_date < day]
+        reference = past_session_reference(
+            day_close=to_price(own[-1].close) if own else None,
+            day_change=to_price(own[-1].change) if own else None,
+            prior_close=to_price(before[-1].close) if before else None,
+        )
+        if reference is not None:
+            found[symbol] = reference
+    return found
 
 
 def account_start_date(account: PaperAccountRecord) -> date:

@@ -74,6 +74,12 @@ describe("stepPrice", () => {
     expect(stepPrice(1090, -1)).toBe(1085);
   });
 
+  it("does not clamp when the symbol has no daily limit (null limits)", () => {
+    expect(stepPrice(150, 1, undefined, { down: null, up: null })).toBe(150.5);
+    expect(stepPrice(150, -1, undefined, { down: null, up: null })).toBe(149.5);
+    expect(stepPrice(150, 1, undefined, { down: 135, up: 150 })).toBe(150); // still clamped when known
+  });
+
   it("uses the new band's tick when crossing a boundary", () => {
     expect(stepPrice(9.99, 1)).toBe(10);
     expect(stepPrice(10, 1)).toBe(10.05);

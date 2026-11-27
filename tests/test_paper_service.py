@@ -22,7 +22,8 @@ from paper_support import (
     taiex,
 )
 
-from quant_signal.application.paper_jobs import PaperJobs
+from quant_signal.application.paper_jobs import PaperJobs, TickStats
+from quant_signal.application.paper_market import load_market
 from quant_signal.application.paper_trading import (
     PaperConflict,
     PaperInvalid,
@@ -133,7 +134,6 @@ async def test_rejections_are_stored_with_reasons() -> None:
     cases = [
         (req(kind="limit", limit="100.3"), "升降單位"),
         (req(kind="limit", limit="120"), "漲跌幅"),
-        (req(lots=0), "1 張以上"),
         (req(lots=5000), "可用資金不足"),
         (req(side="sell"), "可賣股數不足"),
         (req(symbol="9999.TW"), "找不到股票"),
@@ -199,13 +199,36 @@ async def test_queued_order_waits_for_the_next_session_open() -> None:
     assert filled.fill.price_source == "open" and filled.fill.price == 100.5
 
 
+class StaleListing:
+    """Repository proxy: the matcher reads the working orders, then waits until the test
+    says go, so the user's cancel can commit while the matcher still holds the stale order."""
+
+    def __init__(self, repo) -> None:
+        self._repo = repo
+        self.listed = asyncio.Event()
+        self.release = asyncio.Event()
+        self.stale: list = []
+
+    def __getattr__(self, name):
+        return getattr(self._repo, name)
+
+    async def list_working_paper_orders(self, account_id=None):
+        found = await self._repo.list_working_paper_orders(account_id)
+        if account_id is None and not self.listed.is_set():
+            self.stale = [o.model_copy() for o in found]
+            self.listed.set()
+            await self.release.wait()
+        return found
+
+
 async def test_matching_and_cancelling_race_never_double_books() -> None:
     repo, _, service, jobs, user, acct = await setup(at(FRI, 10, 0))
     repo.quotes_latest["1101.TW"] = quote("1101.TW", 100, at(FRI, 9, 59))
     order = await service.place_order(user, acct, req())
     repo.quotes_latest["1101.TW"] = quote("1101.TW", 100, at(FRI, 10, 0, 5))
+    # two matchers and a retry may overlap: still exactly one booking
     await asyncio.gather(jobs.tick(repo, at(FRI, 10, 0, 6)), jobs.tick(repo, at(FRI, 10, 0, 6)))
-    await jobs.tick(repo, at(FRI, 10, 0, 9))  # a retry
+    await jobs.tick(repo, at(FRI, 10, 0, 9))
     assert len(await repo.list_paper_fills(acct, epoch=0)) == 1
     ledger = await repo.list_paper_ledger(acct, 0)
     assert [e.kind for e in ledger].count("buy") == 1
@@ -213,14 +236,28 @@ async def test_matching_and_cancelling_race_never_double_books() -> None:
     with pytest.raises(PaperConflict):  # cancel after the fill
         await service.cancel_order(user, acct, order.id)
 
-    # cancel first, then a late match must not book
+    # The matcher lists the working order; the cancel commits; only then does the matcher,
+    # still holding the stale "working" copy and a price that fills it, try to book.
     other = await service.place_order(user, acct, req())
-    await service.cancel_order(user, acct, other.id)
-    stale = (await repo.get_paper_order(other.id)).model_copy(update={"status": "working"})
-    jobs_stats = await jobs.tick(repo, at(FRI, 10, 1))
-    assert jobs_stats.matched == 0
-    assert await repo.finish_paper_order(stale.id, status="expired", now=at(FRI, 10, 2)) is False
+    repo.quotes_latest["1101.TW"] = quote("1101.TW", 100, at(FRI, 10, 1, 5))
+    proxy = StaleListing(repo)
+    matcher = asyncio.create_task(PaperJobs().tick(proxy, at(FRI, 10, 1, 6)))
+    await proxy.listed.wait()
+    assert [o.id for o in proxy.stale] == [other.id] and proxy.stale[0].status == "working"
+    await service.cancel_order(user, acct, other.id)  # commits while the matcher waits
+    proxy.release.set()
+    stats = await matcher
+    assert stats.matched == 0 and stats.rejected == 0
+    assert (await repo.get_paper_order(other.id)).status == "cancelled"
     assert len(await repo.list_paper_fills(acct, epoch=0)) == 1
+    assert await repo.paper_cash(acct, 0) == 1_000_000 - 100_500 - 143
+    # and the stale object itself, handed straight to the settle path, books nothing either
+    view = (await load_market(repo, ["1101.TW"]))["1101.TW"]
+    obs = PaperJobs.quote_observations(view, proxy.stale[0])
+    assert obs  # the price would fill it...
+    jobs_stats = TickStats()
+    assert not await jobs.settle(repo, proxy.stale[0], view, obs, at(FRI, 10, 2), jobs_stats, {})
+    assert jobs_stats.matched == 0 and len(await repo.list_paper_fills(acct, epoch=0)) == 1
 
 
 async def test_apply_fill_is_idempotent() -> None:

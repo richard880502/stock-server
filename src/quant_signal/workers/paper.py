@@ -19,7 +19,7 @@ from redis.asyncio import Redis
 from quant_signal.application.paper_jobs import PaperJobs
 from quant_signal.application.quote_cache import ADMIT, DEMAND
 from quant_signal.infrastructure.db.database import session_factory
-from quant_signal.quant.paper_calendar import in_session
+from quant_signal.quant.paper_calendar import matcher_open
 
 log = logging.getLogger(__name__)
 IDLE_SECONDS = 20.0  # outside the session there is nothing to match every 3 seconds
@@ -57,7 +57,7 @@ async def run_forever(settings) -> None:
             try:
                 async with session_factory() as session:
                     await jobs.tick(PostgresQuantRepository(session), now)
-                pause = settings.paper_match_seconds if in_session(now) else IDLE_SECONDS
+                pause = settings.paper_match_seconds if matcher_open(now) else IDLE_SECONDS
             except asyncio.CancelledError:
                 raise
             except Exception:

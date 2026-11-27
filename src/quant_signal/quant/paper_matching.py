@@ -6,7 +6,8 @@ result; every price, fee and tax goes through ``domain/tw_trading``.
 Rules (see PAPER_SPEC.md section 3):
 
 * An observation counts for an order only if it is strictly after the order was created
-  and inside the order's session date (09:00-13:30 Taipei).
+  and inside the order's session date (09:00 to 13:35 Taipei: the closing-auction print
+  carries 13:30 but arrives a little later).
 * Market buy: first observation's price plus ``slippage_ticks``, capped at limit-up, and
   no fill while the price sits at limit-up. Market sell mirrors it.
 * Limit buy at L: first observation with price <= L, filled at
@@ -31,10 +32,11 @@ from quant_signal.domain.tw_trading import (
     is_etf,
     is_on_tick,
     move_ticks,
+    price_limit_pct_for,
     price_limits,
     transaction_tax,
 )
-from quant_signal.quant.paper_calendar import local, session_window
+from quant_signal.quant.paper_calendar import local, observation_window
 
 D = Decimal
 Side = Literal["buy", "sell"]
@@ -132,9 +134,37 @@ def resolve_reference(
 
 
 def limits_for(reference: Decimal, etf: bool) -> tuple[Decimal, Decimal]:
-    """(limit_down, limit_up) as Decimals."""
+    """(limit_down, limit_up) as Decimals, at the ordinary 10% band."""
     down, up = price_limits(reference, etf=etf)
     return D(str(down)), D(str(up))
+
+
+def limits_for_symbol(
+    reference: Decimal, symbol: str
+) -> tuple[Decimal, Decimal] | tuple[None, None]:
+    """(limit_down, limit_up) for ``symbol``, or (None, None) when it has no usable limit."""
+    pct = price_limit_pct_for(symbol)
+    if pct is None:
+        return None, None
+    down, up = price_limits(reference, etf=symbol_is_etf(symbol), pct=pct)
+    return D(str(down)), D(str(up))
+
+
+def past_session_reference(
+    *,
+    day_close: Decimal | None,
+    day_change: Decimal | None,
+    prior_close: Decimal | None,
+) -> Decimal | None:
+    """The reference price of an already finished session, from official daily rows only.
+
+    That day's own row says it directly (``close - change``); failing that, the newest
+    official close before it. Used when reconciling a session older than today, where the
+    live quote belongs to a later day and says nothing about that day's band.
+    """
+    if day_close is not None and day_change is not None and day_close - day_change > 0:
+        return to_price(day_close - day_change)
+    return prior_close
 
 
 def limit_price_problem(
@@ -198,71 +228,81 @@ def _usable(order: OrderSpec, observation: Observation) -> bool:
     moment = local(observation.time)
     if moment.date() != order.session_date:
         return False
-    first, last = session_window(order.session_date)
+    first, last = observation_window(order.session_date)
     return first <= moment <= last
 
 
 def _match_point(
     order: OrderSpec,
     price: Decimal,
-    limit_down: Decimal,
-    limit_up: Decimal,
+    limit_down: Decimal | None,
+    limit_up: Decimal | None,
     slippage_ticks: int,
 ) -> Decimal | None:
-    """Fill price for one traded price, or None (no fill / locked at the limit)."""
+    """Fill price for one traded price, or None (no fill / locked at the limit).
+
+    ``None`` limits mean the symbol has no daily price limit: nothing is ever "locked"
+    and nothing is capped.
+    """
     etf = order.etf
     if order.side == "buy":
-        if price >= limit_up:
+        if limit_up is not None and price >= limit_up:
             return None  # locked limit-up: nobody sells
         slipped = move_ticks(price, slippage_ticks, "up", etf=etf)
         if order.order_type == "market":
-            return min(slipped, limit_up)
+            return _cap(slipped, limit_up, "up")
         assert order.limit_price is not None
         if price > order.limit_price:
             return None
-        return min(order.limit_price, slipped, limit_up)
-    if price <= limit_down:
+        return _cap(min(order.limit_price, slipped), limit_up, "up")
+    if limit_down is not None and price <= limit_down:
         return None  # locked limit-down: nobody buys
     slipped = move_ticks(price, slippage_ticks, "down", etf=etf)
     if order.order_type == "market":
-        return max(slipped, limit_down)
+        return _cap(slipped, limit_down, "down")
     assert order.limit_price is not None
     if price < order.limit_price:
         return None
-    return max(order.limit_price, slipped, limit_down)
+    return _cap(max(order.limit_price, slipped), limit_down, "down")
+
+
+def _cap(price: Decimal, bound: Decimal | None, side: Literal["up", "down"]) -> Decimal:
+    if bound is None:
+        return price
+    return min(price, bound) if side == "up" else max(price, bound)
 
 
 def _match_bar(
     order: OrderSpec,
     bar: Observation,
-    limit_down: Decimal,
-    limit_up: Decimal,
+    limit_down: Decimal | None,
+    limit_up: Decimal | None,
     slippage_ticks: int,
 ) -> Decimal | None:
     assert bar.high is not None and bar.low is not None
     etf = order.etf
     if order.side == "buy":
-        if bar.low >= limit_up:
+        if limit_up is not None and bar.low >= limit_up:
             return None
         slipped = move_ticks(bar.price, slippage_ticks, "up", etf=etf)
         if order.order_type == "market":
-            return min(slipped, limit_up)
+            return _cap(slipped, limit_up, "up")
         assert order.limit_price is not None
         if bar.low > order.limit_price:
             return None
         if bar.price <= order.limit_price:
-            return min(order.limit_price, slipped, limit_up)
+            return _cap(min(order.limit_price, slipped), limit_up, "up")
         return order.limit_price
-    if bar.high <= limit_down:
+    if limit_down is not None and bar.high <= limit_down:
         return None
     slipped = move_ticks(bar.price, slippage_ticks, "down", etf=etf)
     if order.order_type == "market":
-        return max(slipped, limit_down)
+        return _cap(slipped, limit_down, "down")
     assert order.limit_price is not None
     if bar.high < order.limit_price:
         return None
     if bar.price >= order.limit_price:
-        return max(order.limit_price, slipped, limit_down)
+        return _cap(max(order.limit_price, slipped), limit_down, "down")
     return order.limit_price
 
 
@@ -270,8 +310,8 @@ def match_order(
     order: OrderSpec,
     observations: Iterable[Observation],
     *,
-    limit_down: Decimal,
-    limit_up: Decimal,
+    limit_down: Decimal | None,
+    limit_up: Decimal | None,
     slippage_ticks: int,
 ) -> Match | None:
     """The first fill the observations allow, or None. Order of input does not matter."""

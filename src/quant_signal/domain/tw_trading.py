@@ -20,6 +20,7 @@ from typing import Literal
 
 BOARD_LOT = 1_000
 PRICE_LIMIT_PCT = Decimal("0.10")
+LEVERAGED_ETF_LIMIT_PCT = Decimal("0.20")
 
 D = Decimal
 
@@ -136,11 +137,31 @@ def round_to_tick_up(price: float | Decimal, *, etf: bool = False) -> Decimal:
     return _round_to_tick(D(str(price)), ROUND_CEILING, etf)
 
 
-def price_limits(reference: float | Decimal, *, etf: bool = False) -> tuple[Decimal, Decimal]:
-    """(limit_down, limit_up): reference ±10% rounded inward to legal ticks."""
+def price_limit_pct_for(symbol: str) -> Decimal | None:
+    """The daily price-limit fraction for ``symbol``, or None when it has no limit we can rely on.
+
+    Ordinary stocks: 10%. ETFs whose code ends in ``L`` (2x leveraged): 20%. ETFs ending
+    in ``R`` (inverse): 10%. Every other ETF: None, because many hold foreign components
+    and trade without a limit, and the code alone does not tell them apart from the
+    domestic ones (so we never guess a limit for them).
+    """
+    if not is_etf(symbol):
+        return PRICE_LIMIT_PCT
+    code = symbol.strip().upper().split(".")[0]
+    if code.endswith("L"):
+        return LEVERAGED_ETF_LIMIT_PCT
+    if code.endswith("R"):
+        return PRICE_LIMIT_PCT
+    return None
+
+
+def price_limits(
+    reference: float | Decimal, *, etf: bool = False, pct: Decimal = PRICE_LIMIT_PCT
+) -> tuple[Decimal, Decimal]:
+    """(limit_down, limit_up): reference ±``pct`` (default 10%) rounded inward to legal ticks."""
     ref = D(str(reference))
-    up = round_to_tick_down(ref * (1 + PRICE_LIMIT_PCT), etf=etf)
-    down = round_to_tick_up(ref * (1 - PRICE_LIMIT_PCT), etf=etf)
+    up = round_to_tick_down(ref * (1 + pct), etf=etf)
+    down = round_to_tick_up(ref * (1 - pct), etf=etf)
     return down, up
 
 

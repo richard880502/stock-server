@@ -333,9 +333,22 @@
   margin: 0;
 }
 
-.paper-chart-empty {
-  min-height: 10rem;
-  align-content: center;
+.paper-equity-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding-block: var(--space-3);
+}
+
+.paper-equity-compact .card-title {
+  margin: 0;
+}
+
+.paper-equity-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 0.875rem;
 }
 
 .paper-chart-skeleton {

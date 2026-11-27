@@ -180,6 +180,13 @@ describe("rules dialog, forms and chart", () => {
   it("equity card shows the empty state under two points and the chart otherwise", () => {
     const empty = html(<EquityCard points={[EQUITY_POINTS[0]]} loading={false} stale={false} range="3m" onRange={noop} />);
     expect(empty).toContain("明天起這裡會畫出你的權益曲線");
+    // a compact one-line state: no tall chart placeholder, no range switch
+    expect(empty).toContain("paper-equity-compact");
+    expect(empty).not.toContain("paper-chart-empty");
+    expect(empty).not.toContain("paper-chart-skeleton");
+    expect(empty).not.toContain("曲線區間");
+    const none = html(<EquityCard points={[]} loading={false} stale={false} range="3m" onRange={noop} />);
+    expect(none).toContain("paper-equity-compact");
     const full = html(<EquityCard points={EQUITY_POINTS} loading={false} stale={false} range="1m" onRange={noop} />);
     expect(full).not.toContain("明天起");
     expect(full).toContain("1 月");

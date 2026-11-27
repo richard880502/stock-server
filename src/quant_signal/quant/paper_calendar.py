@@ -17,6 +17,10 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 SESSION_OPEN = time(9, 0)
 CONTINUOUS_END = time(13, 25)
 SESSION_CLOSE = time(13, 30)
+# The closing-auction print carries a trade time of 13:30 but reaches us a moment later,
+# so observations (and the live matcher) are accepted until this time. Order validity
+# still follows SESSION_CLOSE: an order created after 13:30:00 belongs to the next session.
+SESSION_ACCEPT_UNTIL = time(13, 35)
 MAX_LOOKAHEAD_DAYS = 20
 
 
@@ -25,6 +29,7 @@ def _calendar():
     return xcals.get_calendar("XTAI")
 
 
+@lru_cache(maxsize=4096)
 def is_trading_day(day: date) -> bool:
     if day.weekday() >= 5:
         return False
@@ -68,6 +73,20 @@ def session_window(day: date) -> tuple[datetime, datetime]:
         datetime.combine(day, SESSION_OPEN, TAIPEI),
         datetime.combine(day, SESSION_CLOSE, TAIPEI),
     )
+
+
+def observation_window(day: date) -> tuple[datetime, datetime]:
+    """(first, last) instant an observation may carry to count for an order of ``day``."""
+    return (
+        datetime.combine(day, SESSION_OPEN, TAIPEI),
+        datetime.combine(day, SESSION_ACCEPT_UNTIL, TAIPEI),
+    )
+
+
+def matcher_open(now: datetime) -> bool:
+    """True while the live matcher should run: the session plus the closing-print grace."""
+    moment = local(now)
+    return is_trading_day(moment.date()) and SESSION_OPEN <= moment.time() <= SESSION_ACCEPT_UNTIL
 
 
 def in_session(now: datetime) -> bool:

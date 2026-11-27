@@ -120,6 +120,58 @@ def test_account_crud_defaults_and_validation(client) -> None:
     assert client.get(f"/api/v1/paper/accounts/{created['id']}").status_code == 404
 
 
+def test_huge_and_malformed_inputs_are_422_with_chinese_messages(client) -> None:
+    acct = _account(client)
+    base = f"/api/v1/paper/accounts/{acct['id']}/orders"
+    cases = [
+        (_order(lots=3_000_000_000), "張數"),
+        (_order(lots=0), "張數"),
+        (_order(lots=10_001), "張數"),
+        (_order(order_type="limit", limit_price=1e11), "限價"),
+        (_order(order_type="limit", limit_price=100_000), "限價"),
+        (_order(order_type="limit", limit_price=0), "限價"),
+        (_order(order_type="limit", limit_price=-1), "限價"),
+        (_order(order_type="limit", limit_price=10.123), "2 位小數"),
+    ]
+    for body, needle in cases:
+        for url in (base, base + "?preview=true"):
+            response = client.post(url, json=body)
+            assert response.status_code == 422, (body, response.text)
+            assert needle in response.text, (body, response.text)
+    assert client.get(base).json() == {"orders": [], "has_more": False}  # nothing was stored
+    edge = client.post(base + "?preview=true", json=_order(lots=10_000))
+    assert edge.status_code == 200 and edge.json()["ok"] is False  # funds, not a 500
+    for bad in (
+        {"name": "y", "initial_cash": 10**15},
+        {"name": "y", "commission_discount": 0.0999},
+        {"name": "y", "commission_discount": 1.0001},
+    ):
+        response = client.post("/api/v1/paper/accounts", json=bad)
+        assert response.status_code == 422, bad
+    patch = client.patch(f"/api/v1/paper/accounts/{acct['id']}", json={"commission_discount": 0.05})
+    assert patch.status_code == 422 and "手續費折數" in patch.text
+
+
+def test_raising_the_discount_without_the_cash_is_a_409(client) -> None:
+    acct = _account(client, initial_cash=200_200, commission_discount=0.6)
+    url = f"/api/v1/paper/accounts/{acct['id']}"
+    for _ in range(2):
+        placed = client.post(url + "/orders", json=_order(order_type="limit", limit_price=100))
+        assert placed.status_code == 200 and placed.json()["reserved_cash"] == 100_085
+    refused = client.patch(url, json={"commission_discount": 1.0})
+    assert refused.status_code == 409 and "可用資金不足" in refused.json()["detail"]
+    assert client.get(url).json()["commission_discount"] == 0.6
+
+
+def test_etf_without_a_price_limit_previews_null_limits(client, repo) -> None:
+    repo.quotes_latest["0050.TW"] = quote("0050.TW", 150, at(FRI, 9, 59), reference=150)
+    acct = _account(client)
+    url = f"/api/v1/paper/accounts/{acct['id']}/orders?preview=true"
+    preview = client.post(url, json={**_order(), "symbol": "0050.TW"}).json()
+    assert preview["limit_up"] is None and preview["limit_down"] is None
+    assert preview["ok"] is True and preview["reserve"] == 165_235
+
+
 def test_max_accounts_and_duplicate_names(client) -> None:
     for name in ("A", "B", "C"):
         _account(client, name)
@@ -231,12 +283,14 @@ def test_sell_preview_reports_net_proceeds_and_zero_reserve(client, repo) -> Non
 def test_preview_returns_market_facts_even_when_the_order_is_invalid(client) -> None:
     acct = _account(client)
     url = f"/api/v1/paper/accounts/{acct['id']}/orders?preview=true"
-    zero = client.post(url, json=_order(lots=0)).json()
-    assert zero["ok"] is False and "1 張" in zero["reject_reason"]
-    assert (zero["reference_price"], zero["last_price"], zero["limit_up"]) == (100.0, 100.0, 110.0)
-    assert (zero["limit_down"], zero["tick"]) == (90.0, 0.5)
     broke = client.post(url, json=_order(lots=500)).json()
     assert broke["ok"] is False and "資金不足" in broke["reject_reason"] and broke["tick"] == 0.5
+    assert (broke["reference_price"], broke["last_price"], broke["limit_up"]) == (
+        100.0,
+        100.0,
+        110.0,
+    )
+    assert broke["limit_down"] == 90.0
     unknown = client.post(url, json={**_order(), "symbol": "9999.TW"}).json()
     assert unknown["ok"] is False and "找不到股票" in unknown["reject_reason"]
 

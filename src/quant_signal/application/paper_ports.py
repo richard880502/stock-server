@@ -24,6 +24,10 @@ from quant_signal.domain.paper import (
 PaperOrderFinish = Literal["cancelled", "expired", "rejected"]
 
 
+class PaperInsufficientCash(Exception):
+    """A fill would cost more than the cash not reserved for the account's other orders."""
+
+
 class PaperRepository(Protocol):
     async def create_paper_account(
         self, account: PaperAccountRecord, *, max_accounts: int
@@ -48,7 +52,11 @@ class PaperRepository(Protocol):
         name: str | None = None,
         commission_discount: Decimal | None = None,
         allow_day_trade: bool | None = None,
-    ) -> Literal["ok", "duplicate", "missing"]: ...
+    ) -> Literal["ok", "duplicate", "missing", "insufficient"]:
+        """Apply the patch under the account lock. A new ``commission_discount`` re-sizes
+        the reserves of working buy orders in the same transaction; ``insufficient`` (and
+        nothing written) when the cash would no longer cover them all."""
+        ...
 
     async def reset_paper_account(
         self, account_id: UUID, *, now: datetime
@@ -93,8 +101,10 @@ class PaperRepository(Protocol):
         self, fill: PaperFillRecord, ledger: list[LedgerEntry], *, now: datetime
     ) -> bool:
         """Book a fill: lock the order, require ``working``, insert the fill and ledger
-        postings, mark it ``filled`` and release the reserve, all in one transaction.
-        False (nothing written) when the order is not working any more."""
+        postings, mark it ``filled`` and release the reserve, all in one transaction under
+        the account lock. False (nothing written) when the order is not working any more;
+        raises ``PaperInsufficientCash`` (nothing written) when a buy costs more than the
+        cash left after the reserves of the account's OTHER working orders."""
         ...
 
     async def list_paper_fills(
@@ -104,6 +114,16 @@ class PaperRepository(Protocol):
         ...
 
     async def paper_cash(self, account_id: UUID, epoch: int) -> int: ...
+
+    async def paper_cash_and_working(
+        self, account_id: UUID, epoch: int
+    ) -> tuple[int, list[PaperOrderRecord]]:
+        """Cash and the working orders of one account from a single consistent read."""
+        ...
+
+    async def list_open_position_symbols(self) -> list[str]:
+        """Symbols some active account holds right now (current epoch, net shares > 0)."""
+        ...
 
     async def list_paper_ledger(self, account_id: UUID, epoch: int) -> list[LedgerEntry]: ...
 

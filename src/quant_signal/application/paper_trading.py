@@ -28,6 +28,7 @@ from quant_signal.application.paper_market import (
 from quant_signal.application.paper_ports import PaperRepository
 from quant_signal.domain.paper import (
     MAX_ACCOUNTS,
+    MAX_LOTS_PER_ORDER,
     AccountCreate,
     AccountDetail,
     AccountPatch,
@@ -49,7 +50,9 @@ from quant_signal.domain.paper import (
 from quant_signal.domain.tw_trading import (
     BOARD_LOT,
     DEFAULT_COSTS,
+    LEVERAGED_ETF_LIMIT_PCT,
     PRICE_LIMIT_PCT,
+    price_limit_pct_for,
     tick_size,
 )
 from quant_signal.quant.paper_book import Book, replay
@@ -65,7 +68,7 @@ from quant_signal.quant.paper_matching import (
     day_trade_shares,
     estimate_price,
     limit_price_problem,
-    limits_for,
+    limits_for_symbol,
     reserve_for_buy,
     resolve_reference,
     symbol_is_etf,
@@ -73,7 +76,7 @@ from quant_signal.quant.paper_matching import (
 )
 
 D = Decimal
-MAX_LOTS_PER_ORDER = 10_000
+NO_LIMIT_RESERVE_FACTOR = D("1.10")  # a market buy of a limitless symbol reserves last x 1.10
 VOLUME_WARNING_SHARE = 0.01
 DONE_STATUSES = ["filled", "cancelled", "expired", "rejected"]
 
@@ -135,7 +138,9 @@ class Evaluation:
     limit_down: Decimal | None = None
     tick: Decimal | None = None
     estimated_price: Decimal | None = None
+    last_price: Decimal | None = None
     reserve: int = 0
+    reserve_amount: int = 0
     available_cash: int = 0
     estimated_amount: int | None = None
     estimated_commission: int | None = None
@@ -194,7 +199,11 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
             f"賣出證交稅：股票 {costs.stock_tax_rate * 100:.1f}%、"
             f"ETF {costs.etf_tax_rate * 100:.1f}%；"
             f"現股當沖（需開啟）股票 {costs.day_trade_tax_rate * 100:.2f}%。",
-            f"漲跌幅限制為參考價 ±{limit_pct * 100:.0f}%，限價必須落在升降單位上。",
+            f"漲跌幅限制為參考價 ±{limit_pct * 100:.0f}%（槓桿型 ETF 代號尾碼 L 為 "
+            f"±{float(LEVERAGED_ETF_LIMIT_PCT) * 100:.0f}%、反向型 ETF 尾碼 R 為 "
+            f"±{limit_pct * 100:.0f}%），限價必須落在升降單位上。",
+            "其餘 ETF 多含國外成分、可能沒有漲跌幅限制，無法由代號分辨，因此不檢查漲跌幅、"
+            "也不判斷鎖漲跌停；預覽不會顯示漲跌停價，市價買單改以最新成交價的 1.10 倍預留資金。",
             f"委託當日有效（ROD），依即時行情撮合，成交價另加 {slippage_ticks} 檔滑價。",
             "非交易時段下的委託會排入下一個交易日開盤撮合；漲停鎖死不會買進、跌停鎖死不會賣出。",
             "全部成交或不成交，不會部分成交；這是模擬交易，不會送出任何真實委託。",
@@ -267,6 +276,11 @@ class PaperService:
         )
         if outcome == "duplicate":
             raise PaperConflict(f"已有名為「{patch.name}」的模擬帳戶")
+        if outcome == "insufficient":
+            raise PaperConflict(
+                "調高手續費折數後，可用資金不足以預留所有未成交買單的費用，"
+                "請先取消部分委託或維持原折數"
+            )
         if outcome == "missing":
             raise PaperNotFound("找不到這個模擬帳戶")
         return (await self._summaries([await self._own(user_id, account_id)]))[0]
@@ -299,8 +313,7 @@ class PaperService:
     ) -> Valuation:
         fills = await self.repo.list_paper_fills(account.id, epoch=account.epoch)
         book = replay(fills)
-        cash = await self.repo.paper_cash(account.id, account.epoch)
-        working = await self.repo.list_working_paper_orders(account.id)
+        cash, working = await self.repo.paper_cash_and_working(account.id, account.epoch)
         reserved = sum(o.reserved_cash for o in working if o.side == "buy")
         reserved_sells = _reserved_sells(working)
         today = local(now).date()
@@ -455,14 +468,22 @@ class PaperService:
             official_close=view.official_close,
             official_date=view.official_date,
         )
-        if result.reference is not None:
-            result.limit_down, result.limit_up = limits_for(result.reference, etf)
+        limitless = price_limit_pct_for(symbol) is None
+        if result.reference is not None and not limitless:
+            result.limit_down, result.limit_up = limits_for_symbol(result.reference, symbol)
+        info = price_info(view, now)
+        last = info.price if info else None
+        result.last_price = last
         if request.lots < 1:
             result.reject_reason = "張數必須為 1 張以上"
         elif request.lots > MAX_LOTS_PER_ORDER:
             result.reject_reason = f"單筆委託最多 {MAX_LOTS_PER_ORDER:,} 張"
-        elif result.reference is None:
+        elif result.reference is None and not limitless:
             result.reject_reason = "查無參考價，暫時無法計算漲跌停，請稍後再試"
+        elif (
+            limitless and last is None and request.side == "buy" and request.order_type == "market"
+        ):
+            result.reject_reason = "查無報價，暫時無法預留資金，請稍後再試或改用限價單"
         elif request.order_type == "limit":
             assert request.limit_price is not None
             result.reject_reason = limit_price_problem(
@@ -471,8 +492,6 @@ class PaperService:
                 limit_down=result.limit_down,
                 limit_up=result.limit_up,
             )
-        info = price_info(view, now)
-        last = info.price if info else None
         result.estimated_price = estimate_price(
             request.side,
             request.order_type,
@@ -531,7 +550,10 @@ class PaperService:
         )
         if request.side == "buy":
             cap = request.limit_price if request.order_type == "limit" else result.limit_up
+            if cap is None and result.last_price is not None:  # no daily limit: last x 1.10
+                cap = result.last_price * NO_LIMIT_RESERVE_FACTOR
             if cap is not None:
+                result.reserve_amount = to_money(D(result.shares) * cap)
                 result.reserve = reserve_for_buy(result.shares, cap, account.commission_discount)
 
     def _funds_or_shares_problem(
@@ -653,6 +675,8 @@ class PaperService:
         self._check_shape(request)
         account = await self._own(user_id, account_id)
         await self.repo.lock_paper_account(account.id)  # serialise concurrent placements
+        # The account may have been reset, renamed or archived while we waited for the lock.
+        account = await self._own(user_id, account_id)
         now = self.clock()
         result = await self.evaluate(account, request, now=now)
         rejected = result.reject_reason is not None
@@ -673,6 +697,7 @@ class PaperService:
             updated_at=now,
             reject_reason=result.reject_reason,
             reserved_cash=0 if rejected or request.side == "sell" else result.reserve,
+            reserve_amount=0 if rejected or request.side == "sell" else result.reserve_amount,
             note=request.note,
         )
         if request.lots < 1:
