@@ -293,7 +293,7 @@ describe("入金／出金", () => {
       expect(markup).toContain(text);
     expect(markup).toContain("NT$ 800,000");
     expect(markup).toContain("NT$ 700,000");
-    expect(markup).toContain("這是模擬資金，不會動到真實的錢。入金不算獲利、出金不算虧損，報酬率以時間加權計算。");
+    expect(markup).toContain("這是模擬資金，不會動到真實的錢。入金不算獲利、出金不算虧損。報酬率以時間加權計算：收盤後的入出金算在下一個交易日。");
     expect(markup).toMatch(/type="submit"[^>]*disabled/); // nothing entered yet
   });
 

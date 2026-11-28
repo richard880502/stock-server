@@ -84,8 +84,10 @@ async def cash_of(sessions, account, epoch=0) -> int:
 
 async def test_deposit_withdrawal_and_ledger_round_trip(sessions) -> None:
     account = await make_account(sessions)
-    assert (await post(sessions, entry(account, 250_000, at=NOW))).status == "ok"
-    out = await post(sessions, entry(account, -100_000, at=NOW + timedelta(seconds=1)))
+    assert (
+        await post(sessions, entry(account, 250_000, at=NOW + timedelta(seconds=1)))
+    ).status == "ok"
+    out = await post(sessions, entry(account, -100_000, at=NOW + timedelta(seconds=2)))
     assert out.status == "ok" and out.cash == 1_150_000
     assert await cash_of(sessions, account) == 1_150_000
     async with sessions() as session:

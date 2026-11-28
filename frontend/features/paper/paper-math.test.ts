@@ -189,17 +189,18 @@ describe("applyLivePrices", () => {
 });
 
 describe("applyLivePrices with transfers", () => {
-  it("moves only today's time-weighted factor, not the day's deposit", () => {
+  it("moves only the open window's time-weighted factor, not the deposit", () => {
     // previous close 1,000,000; +1,000,000 deposited today; the market made +0.5% so far
     const quotes = new Map([["2330.TW", { price: 1100, change_pct: 0.0243 }]]);
     const live = applyLivePrices(DETAIL_AFTER_DEPOSIT, quotes); // +20,000 on 2,000 shares
     expect(live.equity).toBe(2_025_000);
     expect(live.total_pnl).toBe(25_000);
     expect(live.day_pnl).toBe(25_000);
-    // day: 25,000 / previous close 1,000,000 (NOT / (equity - day_pnl) = 2,000,000)
-    expect(live.day_return_pct).toBeCloseTo(2.5, 8);
-    // total: yesterday's factor 1.00 x (1,025,000 / 1,005,000) x 1.005 = 1.025
-    expect(live.total_return_pct).toBeCloseTo(2.5, 8);
+    // day: 25,000 / (previous close 1,000,000 + the deposit at the start of the window)
+    // = 25,000 / 2,000,000 = 1.25%
+    expect(live.day_return_pct).toBeCloseTo(1.25, 8);
+    // total: factor 1.0025 (= 2,005,000 / 2,000,000) x (2,025,000 / 2,005,000) = 1.0125
+    expect(live.total_return_pct).toBeCloseTo(1.25, 8);
   });
 
   it("keeps the plain ratios on an API that does not send the new fields", () => {
@@ -226,13 +227,13 @@ describe("rebaseBenchmark with transfers", () => {
     expect(plain.flows).toEqual([0, 0, 0, 0, 0]);
   });
 
-  it("buys and sells the index with each transfer: B_t = B_{t-1} x idx_t / idx_{t-1} + F_t", () => {
+  it("buys and sells the index at the start of each window: B_t = (B_{t-1} + F_t) x idx_t / idx_{t-1}", () => {
     // 11/23  equity 1,000,000, index 100               -> B = 1,000,000
     // 11/24  index 110 (+10%)                          -> B = 1,100,000
-    // 11/25  index 110, deposit 1,100,000              -> B = 1,100,000 + 1,100,000 = 2,200,000
-    // 11/26  index 121 (+10%), withdraw 200,000        -> B = 2,200,000 x 1.1 - 200,000 = 2,220,000
+    // 11/25  index 110, deposit 1,100,000              -> B = (1,100,000 + 1,100,000) x 1 = 2,200,000
+    // 11/26  index 121 (+10%), withdraw 200,000        -> B = (2,200,000 - 200,000) x 1.1 = 2,200,000
     // 11/27  no index close, deposit 50,000            -> null, carried
-    // 11/28  index 121                                 -> B = 2,220,000 x 1 + 50,000 = 2,270,000
+    // 11/28  index 121                                 -> B = (2,200,000 + 50,000) x 1 = 2,250,000
     const series = rebaseBenchmark([
       point("2026-11-23", 1_000_000, 100, 0),
       point("2026-11-24", 1_100_000, 110, 0),
@@ -246,20 +247,29 @@ describe("rebaseBenchmark with transfers", () => {
     expect(b[0]).toBe(1_000_000);
     expect(b[1]).toBeCloseTo(1_100_000, 4);
     expect(b[2]).toBeCloseTo(2_200_000, 4);
-    expect(b[3]).toBeCloseTo(2_220_000, 4);
+    expect(b[3]).toBeCloseTo(2_200_000, 4);
     expect(b[4]).toBeNull();
-    expect(b[5]).toBeCloseTo(2_270_000, 4);
+    expect(b[5]).toBeCloseTo(2_250_000, 4);
   });
 
   it("never goes below zero and starts at the first day both series exist", () => {
     const series = rebaseBenchmark([
       point("2026-11-23", 1_000_000, null, 0),
       point("2026-11-24", 1_000_000, 100, 0),
-      point("2026-11-25", 10_000, 50, -999_000),
+      point("2026-11-25", 10_000, 50, -1_100_000),
     ]);
     expect(series.benchmark[0]).toBeNull();
     expect(series.benchmark[1]).toBe(1_000_000);
     expect(series.benchmark[2]).toBe(0);
+  });
+
+  it("a deposit earns the day's index move, unlike an end-of-day rule", () => {
+    const series = rebaseBenchmark([
+      point("2026-11-23", 1_000_000, 100, 0),
+      point("2026-11-24", 2_200_000, 110, 1_000_000),
+    ]);
+    // (1,000,000 + 1,000,000) x 1.10 = 2,200,000 (the end-of-day rule gave 2,100,000)
+    expect(series.benchmark[1]).toBeCloseTo(2_200_000, 4);
   });
 });
 

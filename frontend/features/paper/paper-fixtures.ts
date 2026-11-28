@@ -300,7 +300,7 @@ export const ACTION_CASH: CorporateAction = {
 /** The main account after those dividends were credited. */
 export const DETAIL_WITH_DIVIDENDS: AccountDetail = { ...DETAIL_MAIN, dividend_income: 8_000 };
 
-/** Today's deposit of 1,000,000 on top of a flat 1,000,000 account, then the market's +0.5%. */
+/** A deposit of 1,000,000 at the start of today's window on a 1,000,000 account that is up 5,000. */
 export const DETAIL_AFTER_DEPOSIT: AccountDetail = {
   ...DETAIL_MAIN,
   initial_cash: 1_000_000,
@@ -308,9 +308,9 @@ export const DETAIL_AFTER_DEPOSIT: AccountDetail = {
   day_net_transfer: 1_000_000,
   equity: 2_005_000,
   total_pnl: 5_000,
-  total_return_pct: 0.5,
+  total_return_pct: 0.25,
   day_pnl: 5_000,
-  day_return_pct: 0.5,
+  day_return_pct: 0.25,
 };
 
 export const TRANSFERS: Transfer[] = [

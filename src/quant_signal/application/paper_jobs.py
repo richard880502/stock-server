@@ -35,7 +35,7 @@ from quant_signal.application.paper_market import (
     past_references,
 )
 from quant_signal.application.paper_ports import PaperInsufficientCash, PaperRepository
-from quant_signal.application.paper_transfers import transfer_flow
+from quant_signal.application.paper_transfers import is_transfer, session_close, transfer_flow
 from quant_signal.domain.paper import (
     LedgerEntry,
     PaperAccountRecord,
@@ -681,10 +681,19 @@ class PaperJobs:
         """(snapshot, every position valued at the official close)."""
         book = await load_book(repo, account.id, account.epoch, through=day)
         ledger = await repo.list_paper_ledger(account.id, account.epoch)
-        cash = sum(e.amount for e in ledger if local(e.at).date() <= day)
-        # The day's flow: transfers dated after the previous trading day, through ``day``
-        # (a weekend deposit belongs to Monday). Every snapshot writer goes through here.
-        net_transfer = transfer_flow(ledger, after=previous_trading_day(day), through=day)
+        # Close-to-close windows (see ``paper_transfers``): the row holds the equity at
+        # ``day``'s close, so a transfer stamped after 13:30 belongs to the next window; the
+        # day's flow is what was stamped in (previous close, this close]. Every snapshot
+        # writer (job, rewrite, dividend re-valuation) goes through here, for any past day.
+        close = session_close(day)
+        cash = sum(
+            e.amount
+            for e in ledger
+            if local(e.at).date() <= day and not (is_transfer(e) and e.at > close)
+        )
+        net_transfer = transfer_flow(
+            ledger, after=session_close(previous_trading_day(day)), through=close
+        )
         open_positions = book.open_positions()
         closes = await official_closes_on(repo, [p.symbol for p in open_positions], day)
         views = await load_market(repo, [p.symbol for p in open_positions])

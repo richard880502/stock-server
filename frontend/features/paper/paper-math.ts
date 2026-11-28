@@ -185,16 +185,15 @@ export function applyLivePrices(detail: AccountDetail, quotes: ReadonlyMap<strin
     ...position,
     weight_pct: equity > 0 ? (position.market_value / equity) * 100 : 0,
   }));
-  // Returns are time-weighted: today's factor is (equity - today's transfers) / previous
-  // close, so the live move changes only that last factor. A server older than 入金／出金
-  // sends neither field and keeps the plain ratios.
-  const flow = detail.day_net_transfer ?? 0;
-  const dayBase = detail.equity - flow - detail.day_pnl;
-  const exFlow = detail.equity - flow;
+  // Returns are time-weighted over close-to-close windows with flows at the start of the
+  // window: the open window's factor is equity / (previous close + its transfers), so the
+  // live move scales only that last factor, and equity - day_pnl is its denominator. A
+  // server older than 入金／出金 sends no contributed_capital and keeps the plain ratios.
+  const dayBase = equity - dayPnl;
   const totalReturn =
     detail.contributed_capital != null
-      ? exFlow > 0
-        ? ((1 + detail.total_return_pct / 100) * ((exFlow + delta) / exFlow) - 1) * 100
+      ? detail.equity > 0
+        ? ((1 + detail.total_return_pct / 100) * (equity / detail.equity) - 1) * 100
         : detail.total_return_pct
       : detail.initial_cash > 0
         ? (totalPnl / detail.initial_cash) * 100
@@ -227,8 +226,8 @@ export type EquitySeries = {
 /**
  * The account's equity against 加權指數, as if the account's transfers had been made in the
  * index: from the first day both exist the benchmark starts at the account's equity and then
- * follows `B_t = B_{t-1} x idx_t / idx_{t-1} + F_t` (a deposit buys the index that day, a
- * withdrawal sells it; floored at 0). A day without an index close carries its transfer to
+ * follows `B_t = (B_{t-1} + F_t) x idx_t / idx_{t-1}` (a transfer buys or sells the index at
+ * the start of its close-to-close window, so it earns that day's move; floored at 0). A day without an index close carries its transfer to
  * the next day that has one. Without any transfer this is exactly the plain rebase
  * `equity_0 x idx_t / idx_0`.
  */
@@ -252,7 +251,7 @@ export function rebaseBenchmark(points: EquityPoint[]): EquitySeries {
       pending += flows[index];
       return null;
     }
-    value = Math.max(0, value * (close / lastClose) + pending + flows[index]);
+    value = Math.max(0, (value + pending + flows[index]) * (close / lastClose));
     lastClose = close;
     pending = 0;
     return value;

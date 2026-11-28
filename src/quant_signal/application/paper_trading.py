@@ -33,6 +33,7 @@ from quant_signal.application.paper_market import (
 from quant_signal.application.paper_ports import PaperRepository
 from quant_signal.application.paper_transfers import (
     contributed_capital,
+    session_close,
     transfer_flow,
     twr_index,
     twr_return_pct,
@@ -230,7 +231,7 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
             "非交易時段下的委託會排入下一個交易日開盤撮合；漲停鎖死不會買進、跌停鎖死不會賣出。",
             "全部成交或不成交，不會部分成交；這是模擬交易，不會送出任何真實委託。",
             "可隨時入金或出金（每筆 NT$1,000 至 1 億、每天最多 20 筆，出金不得超過可用資金）；"
-            "入金不算獲利、出金不算虧損，累計與單日報酬率以時間加權計算，不受入出金金額與時點影響。",
+            "入金不算獲利、出金不算虧損。報酬率以時間加權計算：收盤後的入出金算在下一個交易日。",
         ],
     }
 
@@ -447,7 +448,9 @@ class PaperService:
         base = previous.equity if previous else initial
         capital = contributed_capital(initial, transfers)
         total_pnl = valuation.equity - capital
-        today_flow = transfer_flow(transfers, after=previous.trading_date if previous else None)
+        today_flow = transfer_flow(
+            transfers, after=session_close(previous.trading_date) if previous else None
+        )
         day_pnl = valuation.equity - base - today_flow
         if transfers:
             steps = [(s.equity, s.net_transfer) for s in snapshots if s.trading_date < day_ref]
@@ -471,7 +474,7 @@ class PaperService:
             total_pnl=total_pnl,
             total_return_pct=total_return,
             day_pnl=day_pnl,
-            day_return_pct=_pct(day_pnl, base),
+            day_return_pct=_pct(day_pnl, base + today_flow),
             positions_count=len(valuation.positions),
             working_orders=len(valuation.working),
             commission_discount=float(account.commission_discount),
@@ -993,7 +996,9 @@ class PaperService:
                     market_value=valuation.market_value,
                     benchmark_close=closes.get(live_day, newest),
                     live=True,
-                    net_transfer=transfer_flow(transfers, after=max(earlier, default=None)),
+                    net_transfer=transfer_flow(
+                        transfers, after=session_close(max(earlier)) if earlier else None
+                    ),
                 )
             )
         index = twr_index([(p.equity, p.net_transfer) for p in points])

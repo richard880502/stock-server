@@ -14,7 +14,7 @@ export const TRANSFER_PICKS = [100_000, 500_000, 1_000_000, 5_000_000];
 export const DIRECTION_LABEL: Record<TransferDirection, string> = { in: "入金", out: "出金" };
 
 export const TRANSFER_NOTE =
-  "這是模擬資金，不會動到真實的錢。入金不算獲利、出金不算虧損，報酬率以時間加權計算。";
+  "這是模擬資金，不會動到真實的錢。入金不算獲利、出金不算虧損。報酬率以時間加權計算：收盤後的入出金算在下一個交易日。";
 
 /** "1,000,000" -> 1000000; null unless the text is a whole number of digits (commas allowed). */
 export function parseAmount(text: string): number | null {
@@ -122,4 +122,4 @@ export function resetInitialCash(text: string, current: number): number | undefi
 /** The rules-dialog line (mirrors the API's rules text). */
 export const TRANSFER_RULE =
   "可隨時入金或出金（每筆 NT$1,000 至 1 億、每天最多 20 筆，出金不得超過可用資金）；" +
-  "入金不算獲利、出金不算虧損，累計與單日報酬率以時間加權計算，不受入出金金額與時點影響。";
+  "入金不算獲利、出金不算虧損。報酬率以時間加權計算：收盤後的入出金算在下一個交易日。";
