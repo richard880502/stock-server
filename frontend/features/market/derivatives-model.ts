@@ -56,11 +56,12 @@ const grouped = (n: number): string => Math.round(n).toLocaleString("zh-TW");
 
 /** 「買權 50,000（2,429 口）」; the contract count is left out when the server has none. */
 export const strikeLine = (label: "買權" | "賣權", side: StrikeSide): string =>
-  `${label} ${grouped(side.strike)}${side.contracts === null ? "" : `（${grouped(side.contracts)} 口）`}`;
+  `${label} ${grouped(side.strike)}${side.contracts == null ? "" : `（${grouped(side.contracts)} 口）`}`;
 
 /** Index level for reference, dated when it is not the derivatives date. */
 export function indexReference(latest: MarketDerivativesLatest | null): string | null {
-  if (!latest || latest.index_close === null) return null;
+  // `== null`: an API one release behind sends no such field at all.
+  if (!latest || latest.index_close == null) return null;
   const date = latest.index_close_date && latest.index_close_date !== latest.date ? `（${latest.index_close_date}）` : "";
   return `加權指數收盤 ${latest.index_close.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}${date}`;
 }

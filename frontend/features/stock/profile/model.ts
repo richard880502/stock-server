@@ -62,7 +62,7 @@ export function percentileReason(
 ): string | null {
   if (percentile !== null && percentile !== undefined) return null;
   if (value === null || value === undefined) return "目前沒有數值，無法比較。";
-  if (progress && progress.observations < progress.required) {
+  if (progress && progress.observations != null && progress.required != null && progress.observations < progress.required) {
     return `已累積 ${progress.observations} / ${progress.required} 個交易日，滿 ${progress.required} 日後顯示分位`;
   }
   return "近一年的觀測不足 60 筆，累積到 60 筆才計算分位。";
