@@ -522,6 +522,7 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "flow",
         "accumulation",
         "fundamental",
+        "value",
         "stability",
     }
     assert factors["flow"]["inputs"][0] == {"key": "inst_flow_ratio_20d", "weight": 0.255}
@@ -537,6 +538,10 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "big_holder_increase",
         "momentum",
         "revenue_growth",
+        "value_yield",
+        "earnings_growth",
+        "sbl_high_inst_buy",
+        "futures_oi_up",
         "chip_transfer",
         "stable",
     ]
@@ -643,6 +648,7 @@ async def test_rest_routes_return_the_contract_shapes(repository, client) -> Non
         "flow",
         "accumulation",
         "fundamental",
+        "value",
         "stability",
     }
 

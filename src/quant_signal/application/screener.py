@@ -30,11 +30,13 @@ from quant_signal.quant.screener import (
     COMPOSITE_WEIGHTS,
     FACTOR_LABELS,
     FAMILY_INPUTS,
+    GROUP_NOTES,
     GROUPS,
     HISTORY_SESSIONS,
     METRIC_BY_KEY,
     METRICS,
     NUMERIC_KEYS,
+    PLEDGE_FLAG_MIN,
     SCORE_KEYS,
     SHORT_LABELS,
     VERSION,
@@ -60,7 +62,7 @@ PRESETS: list[dict[str, Any]] = [
         "sort": "composite",
         "order": "desc",
         "filters": [_LIQUID_2E7],
-        "columns": ["composite", "momentum", "flow", "fundamental", "stability"],
+        "columns": ["composite", "momentum", "flow", "fundamental", "value", "stability"],
     },
     {
         "key": "money_flow",
@@ -141,16 +143,108 @@ PRESETS: list[dict[str, Any]] = [
     {
         "key": "revenue_growth",
         "label": "營收成長",
-        "description": "最新月營收年增率達 20% 以上，依營收分數排序。",
-        "sort": "fundamental",
+        "description": "最新月營收年增率達 20% 以上，依最新月營收年增率排序。",
+        "sort": "revenue_yoy_pct",
         "order": "desc",
         "filters": [{"key": "revenue_yoy_pct", "min": 20}, _LIQUID_1E7],
         "columns": [
-            "fundamental",
             "revenue_yoy_pct",
+            "revenue_yoy_3m_pct",
             "revenue_mom_pct",
             "revenue_cum_yoy_pct",
+            "revenue_growth_streak_months",
             "ret_20d",
+        ],
+    },
+    {
+        "key": "value_yield",
+        "label": "低估值高殖利率",
+        "description": (
+            "本益比位於自身近一年 30% 分位以下、殖利率 4% 以上、近四季 EPS 為正，"
+            "且近 20 日均成交值 1,000 萬元以上，依估值分數排序。"
+            "估值分數 = 本益比分位（反向）35% + 淨值比分位（反向）25%"
+            " + 殖利率 25% + 本益比（反向）15%。"
+        ),
+        "sort": "value",
+        "order": "desc",
+        "filters": [
+            {"key": "pe_percentile_250d", "max": 30},
+            {"key": "dividend_yield_pct", "min": 4},
+            {"key": "eps_ttm", "min": 0.0001},
+            _LIQUID_1E7,
+        ],
+        "columns": [
+            "value",
+            "pe_ratio",
+            "pe_percentile_250d",
+            "dividend_yield_pct",
+            "pb_ratio",
+            "roe_ttm_pct",
+        ],
+    },
+    {
+        "key": "earnings_growth",
+        "label": "獲利成長",
+        "description": (
+            "最新單季 EPS 年增 20% 以上、近 3 月營收年增 10% 以上、"
+            "毛利率不低於去年同季，且近 20 日均成交值 1,000 萬元以上，依成長與獲利分數排序。"
+        ),
+        "sort": "fundamental",
+        "order": "desc",
+        "filters": [
+            {"key": "eps_yoy_pct", "min": 20},
+            {"key": "revenue_yoy_3m_pct", "min": 10},
+            {"key": "gross_margin_change_pct", "min": 0},
+            _LIQUID_1E7,
+        ],
+        "columns": [
+            "fundamental",
+            "eps_yoy_pct",
+            "revenue_yoy_3m_pct",
+            "gross_margin_change_pct",
+            "roe_ttm_pct",
+            "pe_ratio",
+        ],
+    },
+    {
+        "key": "sbl_high_inst_buy",
+        "label": "借券偏高且法人買超",
+        "description": (
+            "借券賣出餘額佔股本 2% 以上、法人 20 日淨買超、20 日報酬為正，"
+            "依借券佔股本排序。僅陳列資料，借券與法人方向不代表後勢。"
+        ),
+        "sort": "sbl_pct_of_shares",
+        "order": "desc",
+        "filters": [
+            {"key": "sbl_pct_of_shares", "min": 2},
+            {"key": "inst_flow_ratio_20d", "min": 0.0001},
+            {"key": "ret_20d", "min": 0.0001},
+        ],
+        "columns": [
+            "sbl_pct_of_shares",
+            "sbl_change_20d_pct",
+            "days_to_cover",
+            "inst_flow_ratio_20d",
+            "ret_20d",
+            "flow",
+        ],
+    },
+    {
+        "key": "futures_oi_up",
+        "label": "個股期貨未平倉增加",
+        "description": "有個股期貨且全部契約未平倉量較 5 個交易日前增加 10% 以上，依增加幅度排序。",
+        "sort": "futures_oi_change_5d_pct",
+        "order": "desc",
+        "filters": [
+            {"key": "has_futures", "equals": True},
+            {"key": "futures_oi_change_5d_pct", "min": 10},
+        ],
+        "columns": [
+            "futures_oi_change_5d_pct",
+            "futures_basis_pct",
+            "ret_5d",
+            "inst_flow_ratio_20d",
+            "flow",
         ],
     },
     {
@@ -201,6 +295,15 @@ MCP_DEFAULT_COLUMNS = [
     "big_holder_pct_change",
     "foreign_holding_pct",
     "market_cap",
+    "pe_ratio",
+    "pe_percentile_250d",
+    "dividend_yield_pct",
+    "eps_yoy_pct",
+    "sbl_pct_of_shares",
+    "day_trade_ratio_pct",
+    "pledge_ratio_pct",
+    "futures_oi_change_5d_pct",
+    "next_ex_date",
 ]
 
 
@@ -455,6 +558,15 @@ class ScreenerSnapshotService:
         flow_through = await repo.market_flow_through(trading_date)
         holders = await repo.latest_shareholding_pairs(cutoff)
         foreign = await repo.latest_foreign_holdings(cutoff)
+        # One whole-market read per feed, all at the same cutoff (point-in-time).
+        valuation = await repo.latest_valuation_metrics(cutoff)
+        trends = await repo.revenue_trends(cutoff)
+        earnings = await repo.earnings_summaries(cutoff)
+        short_lending = await repo.latest_short_lending_metrics(cutoff)
+        day_trade = await repo.latest_day_trade_metrics(cutoff)
+        pledges = await repo.latest_insider_pledges(cutoff)
+        futures = await repo.latest_stock_futures_metrics(cutoff)
+        events = await repo.next_dividend_events(cutoff)
 
         staged: list[tuple[str, str, str, float, dict[str, Any], list[str], date | None]] = []
         async for symbol, name, market, rows in repo.iter_market_histories(
@@ -470,6 +582,15 @@ class ScreenerSnapshotService:
                 through,
                 holders.get(symbol),
                 foreign.get(symbol),
+                valuation=valuation.get(symbol),
+                trend=trends.get(symbol),
+                earnings=earnings.get(symbol),
+                short_lending=short_lending.get(symbol),
+                day_trade=day_trade.get(symbol),
+                pledge=pledges.get(symbol),
+                futures=futures.get(symbol),
+                has_futures=(symbol in futures) if futures else None,
+                event=events.get(symbol),
             )
             if metrics is None:
                 continue
@@ -478,7 +599,11 @@ class ScreenerSnapshotService:
             metrics["revenue_yoy_pct"] = item.yoy_pct if item else None
             metrics["revenue_mom_pct"] = item.mom_pct if item else None
             metrics["revenue_cum_yoy_pct"] = item.cumulative_yoy_pct if item else None
-            flags = sorted(risk.get(symbol, ()))
+            flag_set = set(risk.get(symbol, ()))
+            pledge_ratio = metrics.get("pledge_ratio_pct")
+            if pledge_ratio is not None and pledge_ratio >= PLEDGE_FLAG_MIN:
+                flag_set.add("high_pledge")
+            flags = sorted(flag_set)
             staged.append((symbol, name, market, close, metrics, flags, through))
 
         signature = _signature(calendar, trading_date)
@@ -517,6 +642,7 @@ class ScreenerSnapshotService:
             )
         written = await repo.replace_market_factors(trading_date, VERSION, snapshots)
         await repo.prune_market_factors(VERSION, self.retention)
+        await repo.delete_other_factor_versions(VERSION)  # old scoring versions are never served
         self._settled[trading_date] = (signature, True)
         return written
 
@@ -665,7 +791,14 @@ class ScreenerService:
             "version": VERSION,
             "factors": screener_meta_factors(),
             "metrics": screener_meta_metrics(),
-            "groups": [{"key": key, "label": label} for key, label in GROUPS],
+            "groups": [
+                {
+                    "key": key,
+                    "label": label,
+                    **({"note": GROUP_NOTES[key]} if key in GROUP_NOTES else {}),
+                }
+                for key, label in GROUPS
+            ],
             "presets": [
                 {k: v for k, v in preset.items() if k != "exclude_risk"} for preset in PRESETS
             ],

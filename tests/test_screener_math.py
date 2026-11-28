@@ -360,7 +360,7 @@ def test_composite_renormalises_over_available_families() -> None:
         "stability": 100.0,
         "accumulation": 10.0,  # not part of the composite
     }
-    assert s.composite_score(scores) == pytest.approx((80 * 0.25 + 60 * 0.30 + 100 * 0.15) / 0.70)
+    assert s.composite_score(scores) == pytest.approx((80 * 0.20 + 60 * 0.25 + 100 * 0.15) / 0.60)
     assert s.composite_score({"momentum": None, "flow": None, "trend": 90.0}) is None
     assert s.composite_score({"momentum": None, "flow": 40.0}) == pytest.approx(40.0)
 
@@ -411,9 +411,9 @@ def test_score_universe_composite_is_a_weighted_mean() -> None:
     ]
     (low_scores, low), (high_scores, high) = s.score_universe(metrics)
     assert low_scores["momentum"] == 0.0 and low_scores["flow"] == 100.0
-    # momentum 0 (weight .25) and flow 100 (weight .30) only
-    assert low == pytest.approx(100 * 0.30 / 0.55, abs=0.01)
-    assert high == pytest.approx(100 * 0.25 / 0.55, abs=0.01)
+    # momentum 0 (weight .20) and flow 100 (weight .25) only
+    assert low == pytest.approx(100 * 0.25 / 0.45, abs=0.01)
+    assert high == pytest.approx(100 * 0.20 / 0.45, abs=0.01)
     assert high_scores["momentum"] == 100.0
 
 
