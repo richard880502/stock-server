@@ -171,6 +171,8 @@ export type PaperRules = {
   commission_min?: number;
   tax_rate?: number;
   etf_tax_rate?: number;
+  /** Last day a 債券 ETF sale is exempt from the transaction tax (ISO date). */
+  bond_etf_tax_exempt_through?: string;
   day_trade_tax_rate?: number;
   [extra: string]: unknown;
 };

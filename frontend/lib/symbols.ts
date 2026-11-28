@@ -27,3 +27,14 @@ export function normalizeSymbolInput(text: string): string | null {
   if (!SYMBOL_SHAPE.test(upper)) return null;
   return /^\d/.test(upper) && !upper.includes(".") ? `${upper}.TW` : upper;
 }
+
+const ETF_CODE = /^00\d{2,4}[A-Z]?$/;
+
+/**
+ * Whether a symbol is an ETF (0050, 00878.TW, 006208, 00631L, 00679B.TWO). Mirrors the
+ * backend rule (`is_etf_symbol`): a code starting with "00" that is 4–6 characters long;
+ * ETNs (02xxxx) and ordinary stocks are not.
+ */
+export function isEtfSymbol(symbol: string): boolean {
+  return ETF_CODE.test(symbol.trim().toUpperCase().split(".")[0]);
+}

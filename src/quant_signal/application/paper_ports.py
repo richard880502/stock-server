@@ -2,7 +2,8 @@
 
 The market-data reads paper trading needs (``latest_quotes``, ``list_minute_bars``,
 ``list_market_stock_rows``, ``list_market_trading_dates``, ``list_market_observations``,
-``search_market_stocks``) already exist on ``QuantRepository``; the same repository object
+``search_market_stocks``, and for ETFs ``list_etf_rows`` / ``search_etf_instruments``)
+already exist on ``QuantRepository``; the same repository object
 serves both.
 """
 

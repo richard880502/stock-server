@@ -139,7 +139,7 @@ def test_twse_dividends_structured_amounts() -> None:
     assert rights.cash_capital_increase_ratio == pytest.approx(0.01782156)
     assert rights.subscription_price == 1217.0
     assert rows["2646.TW"].subscription_price is None  # 尚未公告
-    assert "00939.TW" not in rows  # ETFs are out of scope
+    assert "00939.TW" in rows  # ETF distributions (收益分配) are kept
 
 
 def test_tpex_dividends() -> None:
@@ -150,7 +150,7 @@ def test_tpex_dividends() -> None:
     assert rows["6488.TWO"].cash_dividend_per_share == 6.0
     assert rows["6160.TWO"].cash_capital_increase_ratio == pytest.approx(0.16060945)
     assert rows["6160.TWO"].subscription_price is None  # 註4
-    assert "00758B.TWO" not in rows
+    assert "00758B.TWO" in rows  # ETF distributions (收益分配) are kept
 
 
 def test_request_params() -> None:
@@ -469,7 +469,7 @@ async def test_evening_refresh_stores_today_and_is_idempotent_per_slot() -> None
         repo, ex, ex, now=now, attempts={}, backfill_sessions=0, request_interval=0
     )
     assert written["sbl"] == 6 and written["daytrade"] == 4 and written["insider"] == 3
-    assert written["dividend"] == 8
+    assert written["dividend"] == 11  # 8 stock events + 3 ETF distributions now kept
     sbl_rows = await repo.sd_sbl_rows(date(2026, 11, 1), FAR)
     assert {r.symbol for r in sbl_rows} == {
         "1101.TW",

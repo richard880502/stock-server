@@ -5,6 +5,7 @@ from uuid import UUID
 
 from quant_signal.application.data_sync import ensure_symbol_bar_coverage
 from quant_signal.application.ports import QuantRepository
+from quant_signal.domain.etf import is_etf_symbol
 from quant_signal.domain.models import (
     BacktestJob,
     BacktestSpec,
@@ -84,15 +85,17 @@ class InstrumentSearchService:
         """
         tracked = await self.repository.search_instruments(query, limit=limit)
         listed = await self.repository.search_market_stocks(query, limit=limit)
-        merged = {
-            item.symbol: item.model_copy(update={"tracked": True}) for item in tracked
-        }
-        for item in listed:
+        etfs = await self.repository.search_etf_instruments(query, limit=limit)
+        merged = {item.symbol: item.model_copy(update={"tracked": True}) for item in tracked}
+        for item in (*listed, *etfs):
             merged.setdefault(item.symbol, item.model_copy(update={"tracked": False}))
+        for symbol, item in merged.items():
+            if is_etf_symbol(symbol) and item.kind != "etf":
+                merged[symbol] = item.model_copy(update={"kind": "etf"})
         needle = query.strip()
         upper = needle.upper()
 
-        def rank(item: Instrument) -> tuple[int, int, str]:
+        def rank(item: Instrument) -> tuple[int, int, int, str]:
             symbol = item.symbol.upper()
             name = item.name or ""
             if symbol == upper or symbol.split(".")[0] == upper:
@@ -105,7 +108,9 @@ class InstrumentSearchService:
                 score = 3
             else:
                 score = 4
-            return (score, 0 if item.tracked else 1, symbol)
+            # Within a score an ordinary stock comes before an ETF; an exact ETF code
+            # ("0050") still beats a stock that merely starts with the query.
+            return (score, 1 if item.kind == "etf" else 0, 0 if item.tracked else 1, symbol)
 
         return sorted(merged.values(), key=rank)[: max(limit, 1)]
 

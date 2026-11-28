@@ -17,6 +17,7 @@ import { useDashboard } from "@/lib/dashboard-context";
 import { useLiveQuotes } from "@/lib/live-quotes";
 import { searchInstruments } from "@/lib/api/endpoints";
 import { backtestHref, stockHref } from "@/lib/stock-routes";
+import { isEtfSymbol } from "@/lib/symbols";
 import { PriceChartCard } from "./price-chart-card";
 import { profileAsOf } from "./profile/model";
 import { StockProfileSection } from "./profile/profile-section";
@@ -128,8 +129,30 @@ function StockPageBody({ symbol }: { symbol: string }) {
     </div>
   );
 
+  const etf = isEtfSymbol(symbol);
   let body: ReactNode;
-  if (!signal || !synced) {
+  if (etf) {
+    // ETFs have official daily quotes only: no signal, filings or chip data exist for them.
+    body = (
+      <div className="stock-grid">
+        <Cell id="summary" className="stock-main">
+          <QuickStockPanel
+            symbol={symbol}
+            syncWait={null}
+            signalLoading={false}
+            onCancelSync={cancelSync}
+            onReload={() => refresh()}
+          />
+        </Cell>
+        {rail}
+        <Cell id="profile" className="stock-main">
+          <EmptyState icon={<SearchIcon size={22} />} title="個股全貌">
+            ETF 不適用個股財報與籌碼分析。
+          </EmptyState>
+        </Cell>
+      </div>
+    );
+  } else if (!signal || !synced) {
     if (synced && (syncWait || (error && !loading))) {
       // No full signal yet (history still being prepared, too short, or the wait ran out):
       // the instant snapshot view with the status of the full analysis.
@@ -223,7 +246,7 @@ function StockPageBody({ symbol }: { symbol: string }) {
   return (
     <div className="stock-page">
       <StockHeader symbol={symbol} name={name} price={price} liveEnabled={liveEnabled} />
-      <SectionNav active={activeSection} />
+      <SectionNav active={activeSection} etf={etf} />
       {body}
     </div>
   );

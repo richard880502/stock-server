@@ -18,6 +18,7 @@ from paper_support import (
     FakeDemand,
     at,
     bar,
+    etf_row,
     market_repo,
     new_user,
     quote,
@@ -491,10 +492,10 @@ async def test_limitless_etf_has_no_band_no_lock_and_a_last_x_110_reserve() -> N
 
 async def test_leveraged_and_inverse_etfs_use_their_own_band() -> None:
     repo = await market_repo()
-    await repo.upsert_market_stock_days(
+    await repo.upsert_etf_days(
         [
-            stock_row("00631L.TW", THU, close=100.0, name="元大台灣50正2"),
-            stock_row("00632R.TW", THU, close=100.0, name="元大台灣50反1"),
+            etf_row("00631L.TW", THU, close=100.0, name="元大台灣50正2"),
+            etf_row("00632R.TW", THU, close=100.0, name="元大台灣50反1"),
         ]
     )
     for symbol in ("00631L.TW", "00632R.TW"):

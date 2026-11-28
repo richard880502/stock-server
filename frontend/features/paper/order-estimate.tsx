@@ -205,6 +205,8 @@ export function RulesDialog({
     ]);
   if (rules?.tax_rate != null) costs.push(["證券交易稅（賣出）", pct(rules.tax_rate)]);
   if (rules?.etf_tax_rate != null) costs.push(["ETF 交易稅（賣出）", pct(rules.etf_tax_rate)]);
+  if (rules?.bond_etf_tax_exempt_through)
+    costs.push(["債券 ETF 交易稅（賣出）", `免徵至 ${rules.bond_etf_tax_exempt_through}，之後依 ETF 稅率`]);
   if (rules?.day_trade_tax_rate != null) costs.push(["現股當沖交易稅（賣出）", pct(rules.day_trade_tax_rate)]);
   if (rules?.price_limit_pct != null) costs.push(["漲跌幅限制", `參考價 ±${rules.price_limit_pct}%`]);
   if (rules?.slippage_ticks != null) costs.push(["滑價", `${rules.slippage_ticks} 檔`]);
@@ -220,6 +222,11 @@ export function RulesDialog({
           <li>全部成交或不成交，沒有部分成交；當日未成交的委託收盤後失效。</li>
           <li>買單會先圈存「價格 × 股數 ＋ 手續費」，市價單以漲停價估算。</li>
           <li>現股當沖需在帳戶選項中開啟，否則當天買進的股票當天不能賣。</li>
+          <li>債券 ETF（代號尾碼 B）賣出免徵證交稅，現行法定期限至 2026-12-31，之後自動依 ETF 稅率計算。</li>
+          <li>
+            ETF 的漲跌幅限制無法由代號判斷（例如 0050 實際有 ±10%，國外成分 ETF 則沒有），因此 ETF
+            不檢查漲跌幅、預覽不顯示漲跌停價；撮合只用真實成交價，不會產生市場上沒有成交過的價格。
+          </li>
         </ul>
         {loading && !rules && <span className="skeleton block" style={{ height: "6rem" }} />}
         {error && <p className="inline-error">無法載入最新規則：{error}</p>}

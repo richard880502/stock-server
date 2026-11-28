@@ -344,6 +344,7 @@ def compute_fill(
     symbol: str,
     commission_discount: Decimal | float = 1,
     day_trade_qty: int = 0,
+    trade_date: date | None = None,
 ) -> FillAmounts:
     """Amount, commission and tax of one fill (whole NT$).
 
@@ -358,14 +359,20 @@ def compute_fill(
     qty = min(max(day_trade_qty, 0), shares)
     etf = is_etf(symbol)
     if qty == 0:
-        tax = transaction_tax(amount, symbol=symbol, etf=etf, config=config)
+        tax = transaction_tax(
+            amount, symbol=symbol, etf=etf, trade_date=trade_date, config=config
+        )
     elif qty == shares:
-        tax = transaction_tax(amount, symbol=symbol, etf=etf, day_trade=True, config=config)
+        tax = transaction_tax(
+            amount, symbol=symbol, etf=etf, day_trade=True, trade_date=trade_date, config=config
+        )
     else:
         part = to_money(D(amount) * D(qty) / D(shares))
         tax = transaction_tax(
-            part, symbol=symbol, etf=etf, day_trade=True, config=config
-        ) + transaction_tax(amount - part, symbol=symbol, etf=etf, config=config)
+            part, symbol=symbol, etf=etf, day_trade=True, trade_date=trade_date, config=config
+        ) + transaction_tax(
+            amount - part, symbol=symbol, etf=etf, trade_date=trade_date, config=config
+        )
     return FillAmounts(amount, fee, tax, qty > 0)
 
 

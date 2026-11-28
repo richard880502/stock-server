@@ -89,6 +89,7 @@ from quant_signal.application.user_auth import (
     unsign,
     utcnow,
 )
+from quant_signal.domain.etf import is_etf_symbol
 from quant_signal.domain.models import (
     BacktestJob,
     BacktestSpec,
@@ -475,6 +476,8 @@ def create_app() -> FastAPI:
         benchmark: str | None = None,
         strategy_version: str = "regime_v1",
     ) -> SignalSnapshot:
+        if is_etf_symbol(normalize_symbol(symbol)):
+            raise HTTPException(status_code=422, detail="ETF 不適用個股訊號分析")
         service = SignalService(repository, auto_sync=True)
         try:
             return await service.analyze(

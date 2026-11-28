@@ -244,6 +244,8 @@ export type Instrument = {
   name: string;
   market: "TW" | "TWO";
   tracked?: boolean | null;
+  /** "etf" for exchange-traded funds; absent (older API) or "stock" otherwise. */
+  kind?: "stock" | "etf";
 };
 
 /** Readiness of signal / backtest / forecast for one stock. */
@@ -311,6 +313,8 @@ export type StockOverview = {
   summary: StockSummary;
   /** Ascending by date, up to ~360 sessions. */
   days: StockDayPoint[];
+  /** "etf": no flows, credit balances or full analysis exist for this symbol. */
+  kind?: "stock" | "etf";
 };
 
 export type WatchlistItem = {

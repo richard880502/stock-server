@@ -1,0 +1,58 @@
+[
+ {
+  "ExRrightsExDividendDate": "1151120",
+  "SecuritiesCompanyCode": "006201",
+  "CompanyName": "元大富櫃50",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "0.90000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ },
+ {
+  "ExRrightsExDividendDate": "1151120",
+  "SecuritiesCompanyCode": "00679B",
+  "CompanyName": "元大美債20年",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "0.28000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ },
+ {
+  "ExRrightsExDividendDate": "1151201",
+  "SecuritiesCompanyCode": "00986B",
+  "CompanyName": "FT金融債10+",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "尚未公告",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ },
+ {
+  "ExRrightsExDividendDate": "1151126",
+  "SecuritiesCompanyCode": "6523",
+  "CompanyName": "達爾膚",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "4.00000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ }
+]
