@@ -15,12 +15,18 @@ callers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Literal
 
 BOARD_LOT = 1_000
 PRICE_LIMIT_PCT = Decimal("0.10")
 LEVERAGED_ETF_LIMIT_PCT = Decimal("0.20")
+
+# 證券交易稅條例 §2-1: 債券 ETF（受益憑證，代號尾碼 B）賣出時停徵證券交易稅，現行法定期限
+# 至民國 115 年 12 月 31 日（2026-12-31）。行政院 2026-10 已通過再延 10 年的修正草案，
+# 但截至撰寫時未確認三讀；本常數只在立法通過後才需改動，過了這一天會自動恢復課稅。
+BOND_ETF_TAX_EXEMPT_THROUGH = date(2026, 12, 31)
 
 D = Decimal
 
@@ -50,6 +56,12 @@ def is_etf(symbol: str) -> bool:
     return code.startswith("00")
 
 
+def is_bond_etf(symbol: str) -> bool:
+    """債券 ETF: an ETF code ending in ``B`` (00679B, 00937B)."""
+    code = symbol.strip().upper().split(".")[0]
+    return is_etf(code) and code.endswith("B")
+
+
 def commission(amount: float | Decimal, config: TWCostConfig = DEFAULT_COSTS) -> int:
     """Brokerage fee for one fill, in whole NT$.
 
@@ -71,16 +83,26 @@ def transaction_tax(
     symbol: str = "",
     etf: bool | None = None,
     day_trade: bool = False,
+    trade_date: date | None = None,
     config: TWCostConfig = DEFAULT_COSTS,
 ) -> int:
     """Securities transaction tax on a SELL, in whole NT$ (floored). Buys pay none.
 
-    Day-trade rate applies to stocks only; ETFs keep their own rate.
+    Day-trade rate applies to stocks only; ETFs keep their own rate. A 債券 ETF sold on
+    ``trade_date`` up to ``BOND_ETF_TAX_EXEMPT_THROUGH`` pays none; without a ``trade_date``
+    the exemption is not assumed.
     """
     value = D(str(amount))
     if value <= 0:
         return 0
     etf_flag = is_etf(symbol) if etf is None else etf
+    if (
+        etf_flag
+        and trade_date is not None
+        and trade_date <= BOND_ETF_TAX_EXEMPT_THROUGH
+        and is_bond_etf(symbol)
+    ):
+        return 0
     if etf_flag:
         rate = config.etf_tax_rate
     elif day_trade:
@@ -97,12 +119,20 @@ def fill_cost(
     symbol: str = "",
     etf: bool | None = None,
     day_trade: bool = False,
+    trade_date: date | None = None,
     config: TWCostConfig = DEFAULT_COSTS,
 ) -> int:
     """Commission plus (for sells) tax for one fill."""
     total = commission(amount, config)
     if side == "sell":
-        total += transaction_tax(amount, symbol=symbol, etf=etf, day_trade=day_trade, config=config)
+        total += transaction_tax(
+            amount,
+            symbol=symbol,
+            etf=etf,
+            day_trade=day_trade,
+            trade_date=trade_date,
+            config=config,
+        )
     return total
 
 

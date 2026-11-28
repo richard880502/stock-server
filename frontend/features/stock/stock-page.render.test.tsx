@@ -95,6 +95,21 @@ describe("StockPage states", () => {
     expect(out).toContain("/watchlist?view=terminal");
   });
 
+  it("marks an ETF, hides the stock-only sections and says why", () => {
+    setDashboard({ symbol: "0050.TW", signal: null, error: "ETF 不適用個股訊號分析" });
+    const out = html("0050.TW");
+    expect(out).toContain("ETF");
+    expect(out).toContain("上市");
+    expect(out).toContain('data-testid="quick-panel"');
+    expect(out).toContain("ETF 不適用個股財報與籌碼分析");
+    expect(out).toContain('href="#profile"');
+    expect(out).not.toContain('href="#chips"');
+    expect(out).not.toContain('id="chips"');
+    expect(out).not.toContain("/backtest?symbol=0050.TW");
+    expect(out).toContain("/paper");
+    expect(out).not.toContain('data-testid="star"');
+  });
+
   it("never shows another stock's verdict under the new name", () => {
     setDashboard({ symbol: "2330.TW", signal: SIGNAL, loading: true });
     const out = html("2317.TW");

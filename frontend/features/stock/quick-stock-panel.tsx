@@ -58,7 +58,9 @@ function Balance({ balance, change }: { balance: number | null; change: number |
   );
 }
 
-function SessionRow({ day }: { day: StockDayPoint }) {
+const ETF_TABLE_HEADERS = ["日期", "收盤", "漲跌 %", "成交量（張）"];
+
+function SessionRow({ day, etf = false }: { day: StockDayPoint; etf?: boolean }) {
   return (
     <tr>
       <td>{shortDate(day.trading_date)}</td>
@@ -67,24 +69,28 @@ function SessionRow({ day }: { day: StockDayPoint }) {
         <PctChange value={day.change_pct} arrow={false} />
       </td>
       <td>{formatLots(day.volume_lots)}</td>
-      <td>
-        <Lots value={day.foreign_net_lots} />
-      </td>
-      <td>
-        <Lots value={day.trust_net_lots} />
-      </td>
-      <td>
-        <Lots value={day.dealer_net_lots} />
-      </td>
-      <td>
-        <Lots value={day.total_net_lots} />
-      </td>
-      <td>
-        <Balance balance={day.margin_balance} change={day.margin_change} />
-      </td>
-      <td>
-        <Balance balance={day.short_balance} change={day.short_change} />
-      </td>
+      {!etf && (
+        <>
+          <td>
+            <Lots value={day.foreign_net_lots} />
+          </td>
+          <td>
+            <Lots value={day.trust_net_lots} />
+          </td>
+          <td>
+            <Lots value={day.dealer_net_lots} />
+          </td>
+          <td>
+            <Lots value={day.total_net_lots} />
+          </td>
+          <td>
+            <Balance balance={day.margin_balance} change={day.margin_change} />
+          </td>
+          <td>
+            <Balance balance={day.short_balance} change={day.short_change} />
+          </td>
+        </>
+      )}
     </tr>
   );
 }
@@ -144,6 +150,7 @@ function OverviewBody({ data }: { data: StockOverview }) {
   const { summary } = data;
   const recent = useMemo(() => data.days.slice(-RECENT_SESSIONS).reverse(), [data.days]);
   const lag = flowsLagNote(summary.flows_through, data.data_through);
+  const etf = data.kind === "etf";
   const flowNote = summary.flows_through ? `至 ${shortDate(summary.flows_through)}` : "尚未公布";
 
   return (
@@ -160,32 +167,36 @@ function OverviewBody({ data }: { data: StockOverview }) {
             value={<PctChange value={summary.return_20d_pct} />}
             valueClassName="num"
           />
-          <Stat
-            label="外資 5 日買賣超"
-            value={
-              summary.foreign_net_5d_lots === null ? (
-                <span className="text-muted">尚未公布</span>
-              ) : (
-                <Direction value={summary.foreign_net_5d_lots}>
-                  {formatSignedLots(summary.foreign_net_5d_lots)} 張
-                </Direction>
-              )
-            }
-            note={flowNote}
-          />
-          <Stat
-            label="三大法人 5 日買賣超"
-            value={
-              summary.total_net_5d_lots === null ? (
-                <span className="text-muted">尚未公布</span>
-              ) : (
-                <Direction value={summary.total_net_5d_lots}>
-                  {formatSignedLots(summary.total_net_5d_lots)} 張
-                </Direction>
-              )
-            }
-            note={flowNote}
-          />
+          {!etf && (
+            <>
+              <Stat
+                label="外資 5 日買賣超"
+                value={
+                  summary.foreign_net_5d_lots === null ? (
+                    <span className="text-muted">尚未公布</span>
+                  ) : (
+                    <Direction value={summary.foreign_net_5d_lots}>
+                      {formatSignedLots(summary.foreign_net_5d_lots)} 張
+                    </Direction>
+                  )
+                }
+                note={flowNote}
+              />
+              <Stat
+                label="三大法人 5 日買賣超"
+                value={
+                  summary.total_net_5d_lots === null ? (
+                    <span className="text-muted">尚未公布</span>
+                  ) : (
+                    <Direction value={summary.total_net_5d_lots}>
+                      {formatSignedLots(summary.total_net_5d_lots)} 張
+                    </Direction>
+                  )
+                }
+                note={flowNote}
+              />
+            </>
+          )}
           <Stat
             label="20 日均量"
             value={
@@ -206,14 +217,20 @@ function OverviewBody({ data }: { data: StockOverview }) {
         title={`最近 ${recent.length} 個交易日`}
         sub="由新到舊 · 買賣超與融資融券單位皆為張（1 張 = 1,000 股）"
       >
-        <ResearchTable label="最近交易日行情與籌碼" headers={TABLE_HEADERS} className="table-tall">
+        <ResearchTable
+          label={etf ? "最近交易日行情" : "最近交易日行情與籌碼"}
+          headers={etf ? ETF_TABLE_HEADERS : TABLE_HEADERS}
+          className="table-tall"
+        >
           {recent.map((day) => (
-            <SessionRow key={day.trading_date} day={day} />
+            <SessionRow key={day.trading_date} day={day} etf={etf} />
           ))}
         </ResearchTable>
-        <p className="note quick-table-note">
-          「尚未公布」表示交易所該日報表還沒出來，不是 0。
-        </p>
+        {!etf && (
+          <p className="note quick-table-note">
+            「尚未公布」表示交易所該日報表還沒出來，不是 0。
+          </p>
+        )}
       </Card>
     </>
   );
@@ -286,6 +303,7 @@ export function QuickStockPanel({
   }
 
   const close = data.summary.last_close;
+  const etf = data.kind === "etf";
   return (
     <>
       <section className="card quick-head" aria-labelledby="quick-title">
@@ -295,12 +313,15 @@ export function QuickStockPanel({
             <span className="quick-name">{data.name}</span>
           </h1>
           <span className="chip plain">{marketLabel[data.market]}</span>
+          {etf && <span className="chip plain">ETF</span>}
           <span className="chip tone-warn" title="先用全市場快照顯示行情與籌碼">
             快速檢視
           </span>
-          <div className="quick-actions">
-            <WatchlistStar symbol={data.symbol} />
-          </div>
+          {!etf && (
+            <div className="quick-actions">
+              <WatchlistStar symbol={data.symbol} />
+            </div>
+          )}
         </div>
         <div className="quick-price">
           <span className="quick-close num">{formatPrice(close)}</span>
@@ -311,12 +332,24 @@ export function QuickStockPanel({
         </div>
       </section>
 
-      {status}
+      {etf ? (
+        <div className="notice">
+          <InfoIcon className="notice-icon" size={20} />
+          <div className="notice-body" role="status">
+            <strong>ETF 只提供官方日行情</strong>
+            <p>訊號、回測、預測與法人、融資融券資料不適用 ETF；仍可在模擬交易下單。</p>
+          </div>
+        </div>
+      ) : (
+        status
+      )}
 
       <OverviewBody data={data} />
 
       <p className="note quick-foot">
-        快速檢視取自全市場每日快照，只含行情、三大法人與融資融券；訊號、回測與預測需完整歷史資料。
+        {etf
+          ? "ETF 行情取自交易所每日收盤行情。"
+          : "快速檢視取自全市場每日快照，只含行情、三大法人與融資融券；訊號、回測與預測需完整歷史資料。"}
         {WATCHLIST_COVERAGE_NOTE}{" "}
         <Link className="button link" href="/market">
           看看市場排行

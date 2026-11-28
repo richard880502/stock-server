@@ -19,6 +19,7 @@ type Option = {
   symbol: string;
   name?: string;
   market?: Instrument["market"];
+  instrumentKind?: Instrument["kind"];
   /** false = snapshot only: opens as a quick view while full analysis is prepared. */
   tracked?: boolean | null;
   kind: "recent" | "result" | "typed";
@@ -124,6 +125,7 @@ export function SymbolCombobox({
       symbol: row.symbol,
       name: row.name,
       market: row.market,
+      instrumentKind: row.kind,
       tracked: row.tracked,
       kind: "result" as const,
     }));
@@ -268,7 +270,7 @@ export function SymbolCombobox({
                 <span className="combobox-symbol mono">{option.symbol}</span>
                 <span className="combobox-name">
                   {option.kind === "typed"
-                    ? "直接查詢此代號（僅限上市、上櫃股票）"
+                    ? "直接查詢此代號（上市、上櫃股票與 ETF）"
                     : option.name || "—"}
                 </span>
                 <span className="combobox-tags">
@@ -283,6 +285,7 @@ export function SymbolCombobox({
                       快速檢視
                     </span>
                   )}
+                  {option.instrumentKind === "etf" && <span className="combobox-quick">ETF</span>}
                   {option.market && (
                     <span className="combobox-market">{marketLabel[option.market]}</span>
                   )}
@@ -298,12 +301,12 @@ export function SymbolCombobox({
                   ? "搜尋中…"
                   : search?.status === "error"
                     ? "搜尋服務暫時無法使用，仍可直接輸入代號後按 Enter。"
-                    : "找不到符合的標的。目前僅收錄上市、上櫃股票，不含 ETF。"}
+                    : "找不到符合的標的。目前收錄上市、上櫃股票與 ETF（不含 ETN、權證）。"}
             </p>
           )}
           {options.length > 0 && noMatches && (
             <p className="combobox-empty" role="status">
-              清單中沒有符合的標的。目前僅收錄上市、上櫃股票，不含 ETF。
+              清單中沒有符合的標的。目前收錄上市、上櫃股票與 ETF（不含 ETN、權證）。
             </p>
           )}
           {options.length > 0 && searching && (

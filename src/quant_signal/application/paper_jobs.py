@@ -26,6 +26,7 @@ from quant_signal.application.paper_market import (
     account_start_date,
     benchmark_closes,
     load_market,
+    official_closes_on,
     past_references,
 )
 from quant_signal.application.paper_ports import PaperInsufficientCash, PaperRepository
@@ -415,6 +416,7 @@ class PaperJobs:
             symbol=order.symbol,
             commission_discount=account.commission_discount,
             day_trade_qty=dt_qty,
+            trade_date=local(found.time).date(),
         )
         fill = PaperFillRecord(
             order_id=order.id,
@@ -621,12 +623,7 @@ class PaperJobs:
         ledger = await repo.list_paper_ledger(account.id, account.epoch)
         cash = sum(e.amount for e in ledger if local(e.at).date() <= day)
         open_positions = book.open_positions()
-        rows = (
-            await repo.list_market_stock_rows([p.symbol for p in open_positions], [day])
-            if open_positions
-            else []
-        )
-        closes = {r.symbol: to_price(r.close) for r in rows}
+        closes = await official_closes_on(repo, [p.symbol for p in open_positions], day)
         views = await load_market(repo, [p.symbol for p in open_positions])
         market_value = 0
         official = True

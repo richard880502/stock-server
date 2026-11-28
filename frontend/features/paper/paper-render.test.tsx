@@ -175,6 +175,23 @@ describe("rules dialog, forms and chart", () => {
     expect(markup).toContain("1,000 以上");
   });
 
+  it("states the bond-ETF tax rule and the ETF price-limit limitation", () => {
+    const markup = html(
+      <RulesDialog
+        open
+        onClose={noop}
+        rules={{ ...RULES, bond_etf_tax_exempt_through: "2026-12-31" }}
+        loading={false}
+        error={null}
+        discount={1}
+      />,
+    );
+    expect(markup).toContain("債券 ETF");
+    expect(markup).toContain("2026-12-31");
+    expect(markup).toContain("0050 實際有 ±10%");
+    expect(markup).toContain("不會產生市場上沒有成交過的價格");
+  });
+
   it("first-run form has the defaults and quick picks", () => {
     const markup = html(<NewAccountForm onSubmit={noop} busy={false} error={null} />);
     for (const text of ["主帳戶", "1000000", "50 萬", "100 萬", "300 萬", "1,000 萬", "不打折", "6 折", "2.8 折", "允許現股當沖", "建立模擬帳戶"])

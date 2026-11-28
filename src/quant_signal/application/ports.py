@@ -11,6 +11,7 @@ from quant_signal.domain.derivatives import (
     StockFuturesDay,
     StockFuturesMetrics,
 )
+from quant_signal.domain.etf import EtfDay
 from quant_signal.domain.feed_stats import FeedDayStat
 from quant_signal.domain.fundamentals import (
     EarningsMetrics,
@@ -375,6 +376,14 @@ class QuantRepository(Protocol):
     ) -> tuple[bool, int]: ...
 
     async def search_market_stocks(self, query: str, *, limit: int = 10) -> list[Instrument]: ...
+
+    async def upsert_etf_days(self, rows: list[EtfDay]) -> int: ...
+
+    async def list_etf_rows(
+        self, symbols: list[str], *, as_of: date | None = None, sessions: int = 3
+    ) -> list[EtfDay]: ...
+
+    async def search_etf_instruments(self, query: str, *, limit: int = 10) -> list[Instrument]: ...
 
     async def list_market_stock_rows(
         self, symbols: list[str], dates: list[date]

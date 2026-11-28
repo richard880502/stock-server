@@ -7,6 +7,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+from quant_signal.domain.etf import EtfDay
 from quant_signal.domain.models import MarketObservation, MarketStockDay
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.memory import MemoryQuantRepository
@@ -49,6 +50,33 @@ def stock_row(
     )
 
 
+def etf_row(
+    symbol: str,
+    day: date,
+    *,
+    close: float,
+    name: str,
+    change: float = 0.0,
+    open_: float | None = None,
+) -> EtfDay:
+    return EtfDay(
+        symbol=symbol,
+        name=name,
+        market="TWO" if symbol.endswith(".TWO") else "TW",
+        trading_date=day,
+        open=open_ or close,
+        high=close,
+        low=close,
+        close=close,
+        change=change,
+        volume=10_000_000,
+        turnover_value=close * 10_000_000,
+        trades=1000,
+        available_at=datetime.combine(day, time(10), tzinfo=UTC),
+        source="twse_official",
+    )
+
+
 def quote(
     symbol: str,
     price: float,
@@ -85,9 +113,15 @@ async def market_repo() -> MemoryQuantRepository:
     rows = []
     for day in (date(2026, 11, 25), THU):
         rows.append(stock_row("1101.TW", day, close=100.0, name="台泥"))
-        rows.append(stock_row("0050.TW", day, close=150.0, name="元大台灣50"))
         rows.append(stock_row("6488.TWO", day, close=700.0, name="環球晶"))
     await repo.upsert_market_stock_days(rows)
+    # ETFs live in their own table; they are never part of the whole-market stock table.
+    await repo.upsert_etf_days(
+        [
+            etf_row("0050.TW", day, close=150.0, name="元大台灣50")
+            for day in (date(2026, 11, 25), THU)
+        ]
+    )
     return repo
 
 

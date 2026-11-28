@@ -49,6 +49,7 @@ from quant_signal.domain.paper import (
 )
 from quant_signal.domain.tw_trading import (
     BOARD_LOT,
+    BOND_ETF_TAX_EXEMPT_THROUGH,
     DEFAULT_COSTS,
     LEVERAGED_ETF_LIMIT_PCT,
     PRICE_LIMIT_PCT,
@@ -181,6 +182,7 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
         "min_commission": costs.min_commission,
         "stock_tax_rate": float(costs.stock_tax_rate),
         "etf_tax_rate": float(costs.etf_tax_rate),
+        "bond_etf_tax_exempt_through": BOND_ETF_TAX_EXEMPT_THROUGH.isoformat(),
         "day_trade_tax_rate": float(costs.day_trade_tax_rate),
         "price_limit_pct": limit_pct,
         "slippage_ticks": slippage_ticks,
@@ -202,8 +204,12 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
             f"漲跌幅限制為參考價 ±{limit_pct * 100:.0f}%（槓桿型 ETF 代號尾碼 L 為 "
             f"±{float(LEVERAGED_ETF_LIMIT_PCT) * 100:.0f}%、反向型 ETF 尾碼 R 為 "
             f"±{limit_pct * 100:.0f}%），限價必須落在升降單位上。",
-            "其餘 ETF 多含國外成分、可能沒有漲跌幅限制，無法由代號分辨，因此不檢查漲跌幅、"
-            "也不判斷鎖漲跌停；預覽不會顯示漲跌停價，市價買單改以最新成交價的 1.10 倍預留資金。",
+            f"債券 ETF（代號尾碼 B）賣出免徵證交稅，現行法定期限至 "
+            f"{BOND_ETF_TAX_EXEMPT_THROUGH.isoformat()}，之後自動依 ETF 稅率計算。",
+            "其餘 ETF 多含國外成分、可能沒有漲跌幅限制，無法由代號分辨（例如 0050 實際有 ±10% "
+            "漲跌幅，但國外成分 ETF 沒有），因此不檢查漲跌幅、也不判斷鎖漲跌停；"
+            "預覽不會顯示漲跌停價，市價買單改以最新成交價的 1.10 倍預留資金。"
+            "模擬撮合只用真實成交價，不會產生市場上沒有成交過的價格。",
             f"委託當日有效（ROD），依即時行情撮合，成交價另加 {slippage_ticks} 檔滑價。",
             "非交易時段下的委託會排入下一個交易日開盤撮合；漲停鎖死不會買進、跌停鎖死不會賣出。",
             "全部成交或不成交，不會部分成交；這是模擬交易，不會送出任何真實委託。",
@@ -453,7 +459,8 @@ class PaperService:
         if view is None or not view.known:
             symbol = request.symbol.strip().upper()
             result.reject_reason = (
-                f"找不到股票 {symbol}（目前只支援上市櫃普通股，ETF 尚未收錄）"
+                f"找不到股票 {symbol}"
+                "（目前支援上市櫃普通股與 ETF；ETN、權證、特別股、受益證券尚未收錄）"
             )
             return result
         etf = symbol_is_etf(symbol)
@@ -540,6 +547,7 @@ class PaperService:
             symbol=result.symbol,
             commission_discount=account.commission_discount,
             day_trade_qty=dt_qty,
+            trade_date=session_date,
         )
         result.estimated_amount = amounts.amount
         result.estimated_commission = amounts.commission
@@ -617,11 +625,11 @@ class PaperService:
             raise PaperInvalid("股票代號格式不正確，請輸入如 2330 或 2330.TW")
         if "." in symbol:
             return symbol
-        matches = [
-            item.symbol
-            for item in await self.repo.search_market_stocks(symbol, limit=20)
-            if item.symbol.split(".")[0] == symbol
+        found = [
+            *await self.repo.search_market_stocks(symbol, limit=20),
+            *await self.repo.search_etf_instruments(symbol, limit=20),
         ]
+        matches = [item.symbol for item in found if item.symbol.split(".")[0] == symbol]
         return matches[0] if matches else f"{symbol}.TW"
 
     @staticmethod

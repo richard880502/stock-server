@@ -9,24 +9,29 @@ import { QuoteDayStats } from "@/features/terminal/quote-header";
 import { taipeiClock } from "@/features/terminal/rail-session";
 import { referencePrice } from "@/features/terminal/rail-stale";
 import { directionOf, formatPrice, formatSigned, formatSignedPct } from "@/lib/format";
-import { marketOf } from "@/lib/symbols";
+import { isEtfSymbol, marketOf } from "@/lib/symbols";
 import { backtestHref, forecastHref } from "@/lib/stock-routes";
 import { bareCode, type HeaderPrice } from "./model";
 
 const MARKET_LABEL = { TW: "上市", TWO: "上櫃" } as const;
 
 export function StockActions({ symbol }: { symbol: string }) {
+  const etf = isEtfSymbol(symbol);
   return (
     <nav className="stock-actions" aria-label="個股操作">
       <Link href={paperLink(symbol, "buy")} className="button small primary" title="到模擬交易下單，不會送出真實委託">
         模擬買進
       </Link>
-      <Link href={backtestHref(symbol)} className="button small">
-        回測
-      </Link>
-      <Link href={forecastHref(symbol)} className="button small">
-        情境預測
-      </Link>
+      {!etf && (
+        <>
+          <Link href={backtestHref(symbol)} className="button small">
+            回測
+          </Link>
+          <Link href={forecastHref(symbol)} className="button small">
+            情境預測
+          </Link>
+        </>
+      )}
       <Link href="/watchlist?view=terminal" className="button small" title="在看盤工作區開啟即時報價與 K 線">
         在看盤開啟
       </Link>
@@ -90,7 +95,13 @@ export function StockHeader({
             {name && <span className="stock-name">{name}</span>}
           </h1>
           <span className="chip plain">{MARKET_LABEL[marketOf(symbol)]}</span>
-          <WatchlistStar symbol={symbol} variant="icon" />
+          {isEtfSymbol(symbol) ? (
+            <span className="chip plain" title="交易所買賣基金：不適用個股財報與籌碼分析">
+              ETF
+            </span>
+          ) : (
+            <WatchlistStar symbol={symbol} variant="icon" />
+          )}
         </div>
         <PriceBlock price={price} liveEnabled={liveEnabled} />
         <div className="stock-asof">

@@ -38,6 +38,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
+from quant_signal.domain.etf import is_etf_code
 from quant_signal.domain.short_data import (
     DayTradeDay,
     DividendEvent,
@@ -278,6 +279,12 @@ _KIND: dict[str, DividendKind] = {
 }
 
 
+def _dividend_code(code: str) -> bool:
+    """Ordinary stocks and ETFs (收益分配): ETFs pay cash distributions, often monthly or
+    quarterly. ETNs (02xxxx) and 受益證券 (01xxxT), which the feeds list too, stay out."""
+    return bool(_COMMON_STOCK.match(code)) or is_etf_code(code)
+
+
 def _amount(value: Any) -> float | None:
     """A number, or None for blanks, ``待公告...`` HTML, ``尚未公告``, ``註4`` and the like."""
     text = str(value if value is not None else "")
@@ -310,7 +317,7 @@ def parse_twse_dividends(payload: Any, *, available_at: datetime) -> list[Divide
         code = str(item[idx["code"]]).strip()
         ex_date = parse_roc_date(item[idx["date"]])
         kind = _KIND.get(str(item[idx["kind"]]).strip())
-        if not _COMMON_STOCK.match(code) or ex_date is None or kind is None:
+        if not _dividend_code(code) or ex_date is None or kind is None:
             continue
         event = DividendEvent(
             symbol=code + ".TW",
@@ -338,7 +345,7 @@ def parse_tpex_dividends(payload: Any, *, available_at: datetime) -> list[Divide
         code = str(item.get("SecuritiesCompanyCode") or "").strip()
         ex_date = parse_roc_date(item.get("ExRrightsExDividendDate"))
         kind = _KIND.get(str(item.get("ExRrightsExDividend") or "").strip())
-        if not _COMMON_STOCK.match(code) or ex_date is None or kind is None:
+        if not _dividend_code(code) or ex_date is None or kind is None:
             continue
         event = DividendEvent(
             symbol=code + ".TWO",

@@ -42,6 +42,7 @@ from quant_signal.infrastructure.column_limits import enforce_column_limits
 from quant_signal.infrastructure.db.models import FetchCoverageRow
 from quant_signal.infrastructure.db.prices import LatestQuote, MinuteBar
 from quant_signal.infrastructure.memory_derivatives import MemoryDerivativesMixin
+from quant_signal.infrastructure.memory_etf import MemoryEtfMixin
 from quant_signal.infrastructure.memory_factors import MemoryFactorDataMixin
 from quant_signal.infrastructure.memory_feed_stats import MemoryFeedStatsMixin
 from quant_signal.infrastructure.memory_fundamentals import MemoryFundamentalsMixin
@@ -60,6 +61,7 @@ class MemoryQuantRepository(
     MemoryFundamentalsMixin,
     MemoryDerivativesMixin,
     MemoryPaperMixin,
+    MemoryEtfMixin,
 ):
     """Test and demo repository with the same contract as PostgreSQL."""
 
