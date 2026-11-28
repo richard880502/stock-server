@@ -66,17 +66,20 @@ function StockPageBody({ symbol }: { symbol: string }) {
   const synced = query.symbol === symbol;
   const refreshing = Boolean(signal) && loading;
 
-  const name = instrumentName?.symbol === symbol ? instrumentName.name || null : null;
-  useEffect(() => {
-    if (name) document.title = stockTitle(symbol, name);
-  }, [symbol, name]);
-
   // Exactly one live stream for this page; the chart and the AI rail share its quote.
   const liveEnabled = config?.quotes === true;
   const symbols = useMemo(() => [symbol], [symbol]);
   const stream = useLiveQuotes(liveEnabled ? symbols : NO_SYMBOLS);
   const quote = liveEnabled ? stream.quotes.get(symbol.toUpperCase()) : undefined;
   const overview = useStockOverview(symbol, 0);
+  // The instrument name is resolved once the signal has loaded; until then (or when the full
+  // analysis is not ready) the snapshot carries it.
+  const overviewName = overview.data?.symbol === symbol ? overview.data.name || null : null;
+  const name = (instrumentName?.symbol === symbol ? instrumentName.name || null : null) ?? overviewName;
+  useEffect(() => {
+    if (name) document.title = stockTitle(symbol, name);
+  }, [symbol, name]);
+
   const now = useNow(5000);
   const price = pickHeaderPrice({
     quote,

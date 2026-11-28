@@ -9,7 +9,7 @@ describe("routeUsesSignalData", () => {
     expect(routeUsesSignalData("/watchlist/")).toBe(true);
   });
   it("skips it on routes that never read it", () => {
-    for (const path of ["/", "", null, "/market", "/screener", "/paper", "/backtest", "/forecast", "/market/", "/terminal", "/unknown"]) {
+    for (const path of ["/", "", null, "/market", "/screener", "/paper", "/backtest", "/forecast", "/market/", "/terminal", "/unknown", "/stock/abc", "/stock/"]) {
       expect(routeUsesSignalData(path)).toBe(false);
     }
   });

@@ -1,4 +1,4 @@
-import { isStockRoute } from "./stock-routes";
+import { isStockRoute, symbolFromPath } from "./stock-routes";
 
 /**
  * Routes that render the analysis symbol's signal, chip flow and market environment
@@ -24,5 +24,7 @@ export function normalizePath(pathname: string | null | undefined): string {
 
 export function routeUsesSignalData(pathname: string | null | undefined): boolean {
   const path = normalizePath(pathname);
-  return isStockRoute(path) || (SIGNAL_DATA_ROUTES as readonly string[]).includes(path);
+  // A stock route whose code is not a stock (`/stock/abc`) shows an empty state and loads nothing.
+  if (isStockRoute(path)) return symbolFromPath(path) !== null;
+  return (SIGNAL_DATA_ROUTES as readonly string[]).includes(path);
 }
