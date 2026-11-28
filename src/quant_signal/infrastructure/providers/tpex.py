@@ -8,8 +8,10 @@ from typing import Any
 
 import httpx
 
+from quant_signal.domain.etf import EtfDay
 from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow, MarketStockDay
 from quant_signal.infrastructure.providers.cache import TAIPEI, ReportCache, is_settled
+from quant_signal.infrastructure.providers.etf_quotes import parse_tpex_etfs
 from quant_signal.infrastructure.providers.market_snapshot import (
     StockCredit,
     StockFlow,
@@ -219,9 +221,17 @@ class TpexProvider:
         Needs only the day's quotes: the index close is a market-observation figure, and a
         missing one must not erase every stock row of a trading day.
         """
-        parsed = self.parse_daily_quotes(await self._daily_quotes_payload(trading_date))
+        return (await self.fetch_market_day_rows(trading_date))[0]
+
+    async def fetch_market_day_rows(
+        self, trading_date: date
+    ) -> tuple[list[MarketStockDay], list[EtfDay]]:
+        """The day's stock rows and ETF rows from one dailyQuotes download."""
+        payload = await self._daily_quotes_payload(trading_date)
+        etfs = self.parse_etf_day(payload, trading_date)
+        parsed = self.parse_daily_quotes(payload)
         if parsed is None or parsed[0] != trading_date:
-            return []
+            return [], etfs
         requested = trading_date.strftime("%Y/%m/%d")
         flow_payload = await self._get_json(
             "/www/zh-tw/insti/dailyTrade",
@@ -231,7 +241,7 @@ class TpexProvider:
             "/www/zh-tw/margin/balance",
             {"date": requested, "response": "json"},
         )
-        return build_market_stock_days(
+        stocks = build_market_stock_days(
             parsed[1],
             market="TWO",
             source=TPEX_SOURCE,
@@ -240,6 +250,18 @@ class TpexProvider:
             credit=self.parse_all_stock_credit(credit_payload),
             trading_date=trading_date,
         )
+        return stocks, etfs
+
+    async def fetch_market_etf_day(self, trading_date: date) -> list[EtfDay]:
+        """ETF rows only: one dailyQuotes request, for a day whose stock rows are stored."""
+        return self.parse_etf_day(await self._daily_quotes_payload(trading_date), trading_date)
+
+    @staticmethod
+    def parse_etf_day(payload: dict[str, Any], trading_date: date) -> list[EtfDay]:
+        rows = parse_tpex_etfs(
+            payload, available_at=_available_at(trading_date), source=TPEX_SOURCE
+        )
+        return [row for row in rows if row.trading_date == trading_date]
 
     @staticmethod
     def parse_all_stock_flows(payload: dict[str, Any]) -> dict[str, StockFlow]:

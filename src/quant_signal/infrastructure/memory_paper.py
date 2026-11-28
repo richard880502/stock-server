@@ -139,6 +139,7 @@ class MemoryPaperMixin:
         if account is None or account.archived:
             return None
         self._cancel_working(account_id, now)
+        self._pprop_expire_pending(account_id, now)
         account.epoch += 1
         account.reset_at = now
         self.paper.ledger.append(
@@ -284,6 +285,12 @@ class MemoryPaperMixin:
                 continue
             key = (fill.account_id, fill.symbol)
             net[key] = net.get(key, 0) + (fill.shares if fill.side == "buy" else -fill.shares)
+        for action in self.__dict__.get("_paper_actions", {}).values():
+            account = self.paper.accounts.get(action.account_id)
+            if account is None or account.archived or account.epoch != action.epoch:
+                continue
+            key = (action.account_id, action.symbol)
+            net[key] = net.get(key, 0) + action.shares_added
         return sorted({symbol for (_, symbol), shares in net.items() if shares > 0})
 
     async def list_paper_ledger(self, account_id: UUID, epoch: int) -> list[LedgerEntry]:

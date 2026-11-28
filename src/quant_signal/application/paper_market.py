@@ -1,7 +1,8 @@
 """Price context for paper trading, read only from our own storage.
 
 ``quote_latest`` (live ticks / 10-minute snapshots), ``market_stock_daily`` (official
-daily rows). Nothing here talks to a broker or the Shioaji SDK.
+daily rows of ordinary stocks) and ``etf_daily`` (official daily rows of ETFs). Nothing
+here talks to a broker or the Shioaji SDK.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from quant_signal.application.paper_ports import PaperRepository
+from quant_signal.domain.etf import is_etf_symbol
 from quant_signal.domain.paper import PaperAccountRecord, SnapshotRecord
 from quant_signal.infrastructure.db.prices import LatestQuote
 from quant_signal.quant.paper_calendar import (
@@ -91,23 +93,46 @@ def price_info(view: MarketView, now: datetime) -> PriceInfo | None:
     return None
 
 
+async def _official_rows(
+    repo: PaperRepository,
+    symbols: list[str],
+    *,
+    as_of: date | None,
+    stock_sessions: int,
+    etf_sessions: int,
+) -> dict[str, list]:
+    """Official daily rows per symbol, oldest first: stocks from ``market_stock_daily``,
+    ETFs (never present there) from ``etf_daily``. Rows share the fields paper reads."""
+    stocks = [s for s in symbols if not is_etf_symbol(s)]
+    etfs = [s for s in symbols if is_etf_symbol(s)]
+    rows: list = []
+    if stocks:
+        dates = await repo.list_market_trading_dates(None, as_of=as_of, limit=stock_sessions)
+        rows += await repo.list_market_stock_rows(stocks, dates) if dates else []
+    if etfs:
+        rows += await repo.list_etf_rows(etfs, as_of=as_of, sessions=etf_sessions)
+    by_symbol: dict[str, list] = {}
+    for row in rows:
+        by_symbol.setdefault(row.symbol, []).append(row)
+    for history in by_symbol.values():
+        history.sort(key=lambda r: (r.trading_date, r.source))
+    return by_symbol
+
+
 async def load_market(
     repo: PaperRepository, symbols: list[str], *, with_volume: bool = False
 ) -> dict[str, MarketView]:
     wanted = sorted({s.upper() for s in symbols})
     if not wanted:
         return {}
-    dates = await repo.list_market_trading_dates(
-        None, as_of=None, limit=VOLUME_SESSIONS if with_volume else 3
+    sessions = VOLUME_SESSIONS if with_volume else 3
+    by_symbol = await _official_rows(
+        repo, wanted, as_of=None, stock_sessions=sessions, etf_sessions=sessions
     )
-    rows = await repo.list_market_stock_rows(wanted, dates) if dates else []
     quotes = await repo.latest_quotes(wanted)
-    by_symbol: dict[str, list] = {}
-    for row in rows:
-        by_symbol.setdefault(row.symbol, []).append(row)
     views: dict[str, MarketView] = {}
     for symbol in wanted:
-        history = sorted(by_symbol.get(symbol, []), key=lambda r: (r.trading_date, r.source))
+        history = by_symbol.get(symbol, [])
         newest = history[-1] if history else None
         volumes = [r.volume for r in history]
         views[symbol] = MarketView(
@@ -130,6 +155,26 @@ async def load_market(
     return views
 
 
+async def official_closes_on(
+    repo: PaperRepository, symbols: list[str], day: date
+) -> dict[str, Decimal]:
+    """Official close of exactly ``day`` for each symbol that has a row for it."""
+    wanted = sorted({s.upper() for s in symbols})
+    if not wanted:
+        return {}
+    stocks = [s for s in wanted if not is_etf_symbol(s)]
+    etfs = [s for s in wanted if is_etf_symbol(s)]
+    closes: dict[str, Decimal] = {}
+    if stocks:
+        for row in await repo.list_market_stock_rows(stocks, [day]):
+            closes[row.symbol] = to_price(row.close)
+    if etfs:
+        for row in await repo.list_etf_rows(etfs, as_of=day, sessions=1):
+            if row.trading_date == day:
+                closes[row.symbol] = to_price(row.close)
+    return closes
+
+
 async def past_references(
     repo: PaperRepository, symbols: list[str], day: date
 ) -> dict[str, Decimal]:
@@ -141,14 +186,9 @@ async def past_references(
     wanted = sorted({s.upper() for s in symbols})
     if not wanted:
         return {}
-    dates = await repo.list_market_trading_dates(None, as_of=day, limit=3)
-    rows = await repo.list_market_stock_rows(wanted, dates) if dates else []
-    by_symbol: dict[str, list] = {}
-    for row in rows:
-        by_symbol.setdefault(row.symbol, []).append(row)
+    by_symbol = await _official_rows(repo, wanted, as_of=day, stock_sessions=3, etf_sessions=3)
     found: dict[str, Decimal] = {}
     for symbol, history in by_symbol.items():
-        history.sort(key=lambda r: (r.trading_date, r.source))
         own = [r for r in history if r.trading_date == day]
         before = [r for r in history if r.trading_date < day]
         reference = past_session_reference(

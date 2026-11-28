@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from quant_signal.adapters.rest.paper_actions import install_paper_actions
 from quant_signal.adapters.rest.security import Principal, require_principal
 from quant_signal.application.paper_ports import PaperRepository
 from quant_signal.application.paper_trading import (
@@ -80,7 +81,13 @@ def install_paper(app: FastAPI, settings: Settings, get_repository: Callable) ->
     async def rules(principal: User) -> dict:
         _user_id(principal)
         live = get_settings()
-        return paper_rules(live.paper_slippage_ticks, live.paper_max_accounts)
+        rules_ = paper_rules(live.paper_slippage_ticks, live.paper_max_accounts)
+        rules_["proposals"] = {
+            "enabled": live.paper_proposals_enabled,
+            "max_position_pct": live.paper_proposal_max_position_pct,
+            "max_risk_pct": live.paper_proposal_max_risk_pct,
+        }
+        return rules_
 
     @router.get("/accounts", response_model=AccountList)
     async def list_accounts(principal: User, svc: Service) -> AccountList:
@@ -170,4 +177,5 @@ def install_paper(app: FastAPI, settings: Settings, get_repository: Callable) ->
     ):
         return await svc.equity(_user_id(principal), account_id, days)
 
+    install_paper_actions(router, User, Service, _user_id)
     app.include_router(router)

@@ -17,6 +17,7 @@ import { useDashboard } from "@/lib/dashboard-context";
 import { useLiveQuotes } from "@/lib/live-quotes";
 import { searchInstruments } from "@/lib/api/endpoints";
 import { backtestHref, stockHref } from "@/lib/stock-routes";
+import { isEtfSymbol } from "@/lib/symbols";
 import { PriceChartCard } from "./price-chart-card";
 import { profileAsOf } from "./profile/model";
 import { StockProfileSection } from "./profile/profile-section";
@@ -128,6 +129,7 @@ function StockPageBody({ symbol }: { symbol: string }) {
     </div>
   );
 
+  const etf = isEtfSymbol(symbol);
   let body: ReactNode;
   if (!signal || !synced) {
     if (synced && (syncWait || (error && !loading))) {
@@ -197,7 +199,14 @@ function StockPageBody({ symbol }: { symbol: string }) {
           </div>
         </Cell>
         <Cell id="profile" className="stock-main">
-          <StockProfileSection symbol={signal.symbol} asOf={profileAsOf(query.asOf, signal.as_of)} />
+          {etf ? (
+            // Price-based analysis applies to an ETF; filings, holders and chip data do not exist for it.
+            <EmptyState icon={<SearchIcon size={22} />} title="個股全貌">
+              ETF 不適用個股財報與籌碼分析。
+            </EmptyState>
+          ) : (
+            <StockProfileSection symbol={signal.symbol} asOf={profileAsOf(query.asOf, signal.as_of)} />
+          )}
         </Cell>
         <Cell id="chips" className={`stock-main${dim}`}>
           <ChipPanel chipFlow={chipFlow} />
@@ -212,7 +221,8 @@ function StockPageBody({ symbol }: { symbol: string }) {
               <Link href={paperLink(symbol, "buy")} className="button">
                 模擬買進
               </Link>
-              <WatchlistStar symbol={symbol} />
+              {/* The watchlist does not take ETFs yet. */}
+              {!etf && <WatchlistStar symbol={symbol} />}
             </div>
           </div>
         </Cell>

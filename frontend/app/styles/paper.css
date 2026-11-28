@@ -1049,3 +1049,18 @@
   grid-auto-columns: minmax(0, 1fr);
   justify-self: stretch;
 }
+
+/* A muted one-line footnote under a table. */
+.paper-note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* 累計股利 adds a fifth figure on wide screens; narrow screens keep two columns. */
+@media (min-width: 960px) {
+  .paper-figures:has(> .paper-figure:nth-child(5)) {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}

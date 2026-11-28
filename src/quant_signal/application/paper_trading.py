@@ -14,6 +14,11 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
+from quant_signal.application.paper_actions import (
+    list_corporate_actions,
+    load_book,
+    realized_by_fill,
+)
 from quant_signal.application.paper_market import (
     SYMBOL_RE,
     MarketView,
@@ -47,15 +52,18 @@ from quant_signal.domain.paper import (
     PaperOrderRecord,
     Position,
 )
+from quant_signal.domain.paper_actions import CorporateActionList
+from quant_signal.domain.paper_proposals import ProposalRecord
 from quant_signal.domain.tw_trading import (
     BOARD_LOT,
+    BOND_ETF_TAX_EXEMPT_THROUGH,
     DEFAULT_COSTS,
     LEVERAGED_ETF_LIMIT_PCT,
     PRICE_LIMIT_PCT,
     price_limit_pct_for,
     tick_size,
 )
-from quant_signal.quant.paper_book import Book, replay
+from quant_signal.quant.paper_book import Book
 from quant_signal.quant.paper_calendar import (
     SESSION_CLOSE,
     SESSION_OPEN,
@@ -181,6 +189,7 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
         "min_commission": costs.min_commission,
         "stock_tax_rate": float(costs.stock_tax_rate),
         "etf_tax_rate": float(costs.etf_tax_rate),
+        "bond_etf_tax_exempt_through": BOND_ETF_TAX_EXEMPT_THROUGH.isoformat(),
         "day_trade_tax_rate": float(costs.day_trade_tax_rate),
         "price_limit_pct": limit_pct,
         "slippage_ticks": slippage_ticks,
@@ -202,8 +211,12 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
             f"漲跌幅限制為參考價 ±{limit_pct * 100:.0f}%（槓桿型 ETF 代號尾碼 L 為 "
             f"±{float(LEVERAGED_ETF_LIMIT_PCT) * 100:.0f}%、反向型 ETF 尾碼 R 為 "
             f"±{limit_pct * 100:.0f}%），限價必須落在升降單位上。",
-            "其餘 ETF 多含國外成分、可能沒有漲跌幅限制，無法由代號分辨，因此不檢查漲跌幅、"
-            "也不判斷鎖漲跌停；預覽不會顯示漲跌停價，市價買單改以最新成交價的 1.10 倍預留資金。",
+            f"債券 ETF（代號尾碼 B）賣出免徵證交稅，現行法定期限至 "
+            f"{BOND_ETF_TAX_EXEMPT_THROUGH.isoformat()}，之後自動依 ETF 稅率計算。",
+            "其餘 ETF 多含國外成分、可能沒有漲跌幅限制，無法由代號分辨（例如 0050 實際有 ±10% "
+            "漲跌幅，但國外成分 ETF 沒有），因此不檢查漲跌幅、也不判斷鎖漲跌停；"
+            "預覽不會顯示漲跌停價，市價買單改以最新成交價的 1.10 倍預留資金。"
+            "模擬撮合只用真實成交價，不會產生市場上沒有成交過的價格。",
             f"委託當日有效（ROD），依即時行情撮合，成交價另加 {slippage_ticks} 檔滑價。",
             "非交易時段下的委託會排入下一個交易日開盤撮合；漲停鎖死不會買進、跌停鎖死不會賣出。",
             "全部成交或不成交，不會部分成交；這是模擬交易，不會送出任何真實委託。",
@@ -304,15 +317,14 @@ class PaperService:
     ) -> dict[str, MarketView]:
         symbols: set[str] = set(extra or [])
         for account in accounts:
-            fills = await self.repo.list_paper_fills(account.id, epoch=account.epoch)
-            symbols.update(p.symbol for p in replay(fills).open_positions())
+            book = await load_book(self.repo, account.id, account.epoch)
+            symbols.update(p.symbol for p in book.open_positions())
         return await load_market(self.repo, sorted(symbols))
 
     async def _value(
         self, account: PaperAccountRecord, views: dict[str, MarketView], now: datetime
     ) -> Valuation:
-        fills = await self.repo.list_paper_fills(account.id, epoch=account.epoch)
-        book = replay(fills)
+        book = await load_book(self.repo, account.id, account.epoch)
         cash, working = await self.repo.paper_cash_and_working(account.id, account.epoch)
         reserved = sum(o.reserved_cash for o in working if o.side == "buy")
         reserved_sells = _reserved_sells(working)
@@ -357,6 +369,7 @@ class PaperService:
                         round((float(price) / float(reference) - 1) * 100, 2) if reference else None
                     ),
                     weight_pct=_pct(market_value, equity) if equity > 0 else 0.0,
+                    dividend_income=state.dividends,
                 )
             )
         return Valuation(
@@ -394,6 +407,7 @@ class PaperService:
             equity=valuation.equity,
             unrealized_pnl=unrealized,
             realized_pnl=realized,
+            dividend_income=valuation.book.dividend_income,
             total_pnl=total_pnl,
             total_return_pct=_pct(total_pnl, initial),
             day_pnl=day_pnl,
@@ -453,7 +467,8 @@ class PaperService:
         if view is None or not view.known:
             symbol = request.symbol.strip().upper()
             result.reject_reason = (
-                f"找不到股票 {symbol}（目前只支援上市櫃普通股，ETF 尚未收錄）"
+                f"找不到股票 {symbol}"
+                "（目前支援上市櫃普通股與 ETF；ETN、權證、特別股、受益證券尚未收錄）"
             )
             return result
         etf = symbol_is_etf(symbol)
@@ -540,6 +555,7 @@ class PaperService:
             symbol=result.symbol,
             commission_discount=account.commission_discount,
             day_trade_qty=dt_qty,
+            trade_date=session_date,
         )
         result.estimated_amount = amounts.amount
         result.estimated_commission = amounts.commission
@@ -617,11 +633,11 @@ class PaperService:
             raise PaperInvalid("股票代號格式不正確，請輸入如 2330 或 2330.TW")
         if "." in symbol:
             return symbol
-        matches = [
-            item.symbol
-            for item in await self.repo.search_market_stocks(symbol, limit=20)
-            if item.symbol.split(".")[0] == symbol
+        found = [
+            *await self.repo.search_market_stocks(symbol, limit=20),
+            *await self.repo.search_etf_instruments(symbol, limit=20),
         ]
+        matches = [item.symbol for item in found if item.symbol.split(".")[0] == symbol]
         return matches[0] if matches else f"{symbol}.TW"
 
     @staticmethod
@@ -631,10 +647,33 @@ class PaperService:
         if request.order_type == "market" and request.limit_price is not None:
             raise PaperInvalid("市價單不可帶限價")
 
+    async def _proposal_to_accept(
+        self, account: PaperAccountRecord, request: OrderRequest, now: datetime
+    ) -> ProposalRecord:
+        """The pending proposal ``request`` would accept, or ``PaperConflict`` (409)."""
+        assert request.proposal_id is not None
+        # Read-only on purpose: a commit here would release the account lock taken by
+        # ``place_order``. Overdue proposals are caught by the expiry comparison below.
+        proposal = await self.repo.get_paper_proposal(  # type: ignore[attr-defined]
+            request.proposal_id
+        )
+        if proposal is None or proposal.account_id != account.id:
+            raise PaperConflict("找不到這個提案，或它不屬於這個帳戶")
+        if proposal.status != "pending" or proposal.epoch != account.epoch:
+            raise PaperConflict("此提案已不是待決定狀態（已採用、拒絕、過期或被新提案取代）")
+        if proposal.expires_at <= now:
+            raise PaperConflict("此提案已過期")
+        symbol = await self._normalize(request.symbol)
+        if proposal.symbol != symbol or proposal.side != request.side:
+            raise PaperConflict("委託的股票或買賣方向與提案不同，無法以此提案下單")
+        return proposal
+
     async def preview(self, user_id: UUID, account_id: UUID, request: OrderRequest) -> OrderPreview:
         self._check_shape(request)
         account = await self._own(user_id, account_id)
         now = self.clock()
+        if request.proposal_id is not None:
+            await self._proposal_to_accept(account, request, now)  # validates, changes nothing
         result = await self.evaluate(account, request, now=now)
         info = price_info(result.view, now) if result.view else None
         after = None
@@ -679,6 +718,9 @@ class PaperService:
         # The account may have been reset, renamed or archived while we waited for the lock.
         account = await self._own(user_id, account_id)
         now = self.clock()
+        proposal = None
+        if request.proposal_id is not None:
+            proposal = await self._proposal_to_accept(account, request, now)
         result = await self.evaluate(account, request, now=now)
         rejected = result.reject_reason is not None
         order = PaperOrderRecord(
@@ -692,7 +734,7 @@ class PaperService:
             limit_price=request.limit_price if request.order_type == "limit" else None,
             lots=request.lots,
             status="rejected" if rejected else "working",
-            source="manual",
+            source="manual" if proposal is None else "ai",
             session_date=result.session_date,
             created_at=now,
             updated_at=now,
@@ -704,7 +746,14 @@ class PaperService:
         if request.lots < 1:
             # Keep the stored row valid (lots > 0) while still showing what was asked.
             order = order.model_copy(update={"lots": 1})
-        await self.repo.add_paper_order(order)
+        if proposal is not None and not rejected:
+            # The order row and the proposal's "accepted" commit together or not at all.
+            if not await self.repo.accept_paper_proposal(  # type: ignore[attr-defined]
+                proposal.id, order, now=now
+            ):
+                raise PaperConflict("此提案已不是待決定狀態（可能剛被採用、過期或取代）")
+        else:
+            await self.repo.add_paper_order(order)
         return self._order(order, None, None)
 
     async def cancel_order(self, user_id: UUID, account_id: UUID, order_id: UUID) -> Order:
@@ -776,14 +825,26 @@ class PaperService:
             has_more=offset + len(page) < len(newest_first),
         )
 
+    async def list_corporate_actions(
+        self,
+        user_id: UUID,
+        account_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_archived: bool = False,
+    ) -> CorporateActionList:
+        account = await self._own(user_id, account_id)
+        return await list_corporate_actions(
+            self.repo, account, limit=limit, offset=offset, include_archived=include_archived
+        )
+
     async def _fills_and_pnl(
         self, account: PaperAccountRecord
     ) -> tuple[list[PaperFillRecord], dict[UUID, int]]:
         fills = await self.repo.list_paper_fills(account.id, epoch=None)
-        realized: dict[UUID, int] = {}
-        for epoch in {f.epoch for f in fills}:
-            realized.update(replay([f for f in fills if f.epoch == epoch]).realized_by_fill)
-        return fills, realized
+        actions = await self.repo.list_paper_corporate_actions(account.id, epoch=None)
+        return fills, realized_by_fill(fills, actions)
 
     @staticmethod
     def _fill(fill: PaperFillRecord, realized: int | None) -> Fill:

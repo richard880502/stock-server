@@ -8,7 +8,7 @@ import math
 import re
 import secrets
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from quant_signal.adapters.rest.derivatives import install_derivatives
 from quant_signal.adapters.rest.fundamentals import install_fundamentals
 from quant_signal.adapters.rest.paper import install_paper
+from quant_signal.adapters.rest.paper_proposals import install_paper_proposals
 from quant_signal.adapters.rest.quotes import install_quotes
 from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
 from quant_signal.adapters.rest.short_data import install_short_data
@@ -88,6 +89,7 @@ from quant_signal.application.user_auth import (
     unsign,
     utcnow,
 )
+from quant_signal.domain.etf import is_etf_symbol
 from quant_signal.domain.models import (
     BacktestJob,
     BacktestSpec,
@@ -239,6 +241,7 @@ def create_app() -> FastAPI:
     install_fundamentals(application)
     install_derivatives(application, get_repository)
     install_paper(application, settings, get_repository)
+    install_paper_proposals(application, settings, get_repository)
 
     @application.exception_handler(DataSyncPending)
     async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:
@@ -473,6 +476,17 @@ def create_app() -> FastAPI:
         benchmark: str | None = None,
         strategy_version: str = "regime_v1",
     ) -> SignalSnapshot:
+        normalized = normalize_symbol(symbol)
+        if is_etf_symbol(normalized):
+            # The signal is price-based, so it works for an ETF whose daily bars are tracked
+            # (0050 has been since the start). One without bars cannot be synced on demand:
+            # answer plainly instead of looping on sync_pending.
+            end = as_of or date.today()
+            recent = await repository.list_bars(normalized, start=end - timedelta(days=30), end=end)
+            if not recent:
+                raise HTTPException(
+                    status_code=422, detail="這檔 ETF 尚無歷史行情，無法計算量化訊號"
+                )
         service = SignalService(repository, auto_sync=True)
         try:
             return await service.analyze(

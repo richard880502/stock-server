@@ -215,7 +215,9 @@ def test_http_overview_and_search_include_untracked_stocks(client) -> None:
     assert overview.status_code == 200 and overview.json()["full_analysis"] == "preparing"
     assert client.get("/api/v1/stocks/0000/overview").status_code == 404
     found = client.get("/api/v1/instruments/search", params={"q": "鴻海"}).json()
-    assert found == [{"symbol": "2317.TW", "name": "鴻海", "market": "TW", "tracked": False}]
+    assert found == [
+        {"symbol": "2317.TW", "name": "鴻海", "market": "TW", "tracked": False, "kind": "stock"}
+    ]
 
 
 def test_watchlist_needs_a_signed_in_user(repo) -> None:

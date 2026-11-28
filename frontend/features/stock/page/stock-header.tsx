@@ -9,7 +9,7 @@ import { QuoteDayStats } from "@/features/terminal/quote-header";
 import { taipeiClock } from "@/features/terminal/rail-session";
 import { referencePrice } from "@/features/terminal/rail-stale";
 import { directionOf, formatPrice, formatSigned, formatSignedPct } from "@/lib/format";
-import { marketOf } from "@/lib/symbols";
+import { isEtfSymbol, marketOf } from "@/lib/symbols";
 import { backtestHref, forecastHref } from "@/lib/stock-routes";
 import { bareCode, type HeaderPrice } from "./model";
 
@@ -90,7 +90,13 @@ export function StockHeader({
             {name && <span className="stock-name">{name}</span>}
           </h1>
           <span className="chip plain">{MARKET_LABEL[marketOf(symbol)]}</span>
-          <WatchlistStar symbol={symbol} variant="icon" />
+          {isEtfSymbol(symbol) ? (
+            <span className="chip plain" title="交易所買賣基金：不適用個股財報與籌碼分析">
+              ETF
+            </span>
+          ) : (
+            <WatchlistStar symbol={symbol} variant="icon" />
+          )}
         </div>
         <PriceBlock price={price} liveEnabled={liveEnabled} />
         <div className="stock-asof">

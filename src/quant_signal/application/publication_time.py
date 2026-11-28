@@ -33,3 +33,7 @@ def publication_moment(day: date, at: time) -> datetime:
 def stamp_available_at(publication: datetime, fetched_at: datetime) -> datetime:
     """``min(fetched_at, publication)``, both timezone-aware (returned in UTC)."""
     return min(fetched_at, publication).astimezone(UTC)
+
+# ETF end-of-day quotes come from the same MI_INDEX / dailyQuotes reports as stock quotes,
+# which the stock rows stamp at 18:00 Taipei on the trading day.
+ETF_DAILY_PUBLISHED = time(18, 0)

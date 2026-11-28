@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/card";
 import { ErrorBanner } from "@/components/error-banner";
 import { SegmentedControl } from "@/components/segmented-control";
-import { cancelOrder, type Fill, listFills, listOrders, type Order, type OrderStatus } from "@/lib/api/paper";
+import {
+  cancelOrder,
+  type CorporateAction,
+  type Fill,
+  listCorporateActions,
+  listFills,
+  listOrders,
+  type Order,
+  type OrderStatus,
+} from "@/lib/api/paper";
 import { formatPrice } from "@/lib/format";
+import { stockHref } from "@/lib/stock-routes";
 import {
   formatDateTime,
   formatMoney,
@@ -21,7 +32,7 @@ import { usePagedList, usePolled } from "./use-paper-data";
 const code = (symbol: string) => symbol.replace(/\.TWO?$/, "");
 const PAGE = 20;
 
-type Tab = "working" | "done" | "fills";
+type Tab = "working" | "done" | "fills" | "actions";
 
 function Stock({ symbol, name }: { symbol: string; name?: string }) {
   return (
@@ -82,6 +93,11 @@ export function OrdersTable({
               <td className="num">{formatDateTime(order.created_at)}</td>
               <th scope="row" className="paper-stock-cell">
                 <Stock symbol={order.symbol} name={order.name} />
+                {order.source === "ai" && (
+                  <span className="paper-ai-badge" title="由 AI 提案帶入的委託">
+                    AI
+                  </span>
+                )}
               </th>
               <td><Side side={order.side} /></td>
               <td className="num">{order.lots}</td>
@@ -160,6 +176,46 @@ export function FillsTable({ fills, names }: { fills: Fill[]; names?: ReadonlyMa
   );
 }
 
+/** The simplification the simulator makes, shown once under the 除權息 list. */
+export const DIVIDEND_NOTE =
+  "模擬於除息日以全額入帳現金股利（實際約數週後發放，並可能扣二代健保補充保費與所得稅）；" +
+  "配股不足一股的零股捨去；現金增資認購不模擬。";
+
+export function CorporateActionsTable({ actions }: { actions: CorporateAction[] }) {
+  return (
+    <div className="table-wrap paper-table-wrap" tabIndex={0} role="region" aria-label="除權息紀錄">
+      <table className="data-table paper-table paper-actions-table">
+        <thead>
+          <tr>
+            <th scope="col">除權息日</th>
+            <th scope="col">股票</th>
+            <th scope="col">參與股數</th>
+            <th scope="col">現金股利</th>
+            <th scope="col">配股</th>
+          </tr>
+        </thead>
+        <tbody>
+          {actions.map((action) => (
+            <tr key={action.id}>
+              <td className="num">{formatSessionDate(action.ex_date)}</td>
+              <th scope="row" className="paper-stock-cell">
+                <Link href={stockHref(action.symbol)} className="paper-link" title="開啟個股頁">
+                  <Stock symbol={action.symbol} name={action.name} />
+                </Link>
+              </th>
+              <td className="num">{formatMoney(action.entitled_shares)}</td>
+              <td className={`num ${action.cash_amount > 0 ? toneClass(action.cash_amount) : ""}`}>
+                {action.cash_amount > 0 ? `現金股利入帳 NT$${formatMoney(action.cash_amount)}` : "—"}
+              </td>
+              <td className="num">{action.shares_added > 0 ? `配股 +${formatMoney(action.shares_added)} 股` : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function LoadMore({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
   if (!hasMore) return null;
   return (
@@ -175,10 +231,11 @@ const EMPTY: Record<Tab, string> = {
   working: "目前沒有委託中的單。",
   done: "還沒有已完成的委託。",
   fills: "還沒有成交紀錄。",
+  actions: "還沒有除權息紀錄。持股須在除權息日前一個交易日收盤仍持有才會參與。",
 };
 
 /**
- * 委託中 / 已完成 / 成交紀錄. Working orders poll every few seconds while any exist; the
+ * 委託中 / 已完成 / 成交紀錄 / 除權息. Working orders poll every few seconds while any exist; the
  * other two tabs load only when opened. `refreshToken` bumps after the page places or cancels
  * an order so everything refetches at once; `onWorkingChanged` tells the page a working order
  * left the book (filled / expired) so balances refetch too.
@@ -219,16 +276,24 @@ export function OrdersPanel({
     PAGE,
   );
 
+  const actions = usePagedList(
+    tab === "actions" ? `actions|${accountId}` : null,
+    (offset, limit, signal) => listCorporateActions(accountId, { limit, offset }, { signal }),
+    PAGE,
+  );
+
   const { reload: reloadWorking } = working;
   const { reload: reloadDone } = done;
   const { reload: reloadFills } = fills;
+  const { reload: reloadActions } = actions;
   const firstToken = useRef(refreshToken);
   useEffect(() => {
     if (refreshToken === firstToken.current) return;
     reloadWorking();
     reloadDone();
     reloadFills();
-  }, [refreshToken, reloadWorking, reloadDone, reloadFills]);
+    reloadActions();
+  }, [refreshToken, reloadWorking, reloadDone, reloadFills, reloadActions]);
 
   const workingCount = working.data?.length ?? null;
   const lastCount = useRef<number | null>(null);
@@ -261,11 +326,12 @@ export function OrdersPanel({
       { value: "working" as const, label: workingCount ? `委託中 ${workingCount}` : "委託中" },
       { value: "done" as const, label: "已完成" },
       { value: "fills" as const, label: "成交紀錄" },
+      { value: "actions" as const, label: "除權息" },
     ],
     [workingCount],
   );
 
-  const active = tab === "working" ? working : tab === "done" ? done : fills;
+  const active = tab === "working" ? working : tab === "done" ? done : tab === "fills" ? fills : actions;
   const error = active.error;
   const loading = tab === "working" ? working.loading && !working.data : active.loading;
 
@@ -303,14 +369,24 @@ export function OrdersPanel({
           ) : (
             !error && <p className="paper-empty">{EMPTY.done}</p>
           )
-        ) : fills.items.length > 0 ? (
+        ) : tab === "fills" ? (
+          fills.items.length > 0 ? (
+            <>
+              <FillsTable fills={fills.items} names={names} />
+              <LoadMore hasMore={fills.hasMore} loading={fills.loadingMore} onClick={fills.loadMore} />
+            </>
+          ) : (
+            !error && <p className="paper-empty">{EMPTY.fills}</p>
+          )
+        ) : actions.items.length > 0 ? (
           <>
-            <FillsTable fills={fills.items} names={names} />
-            <LoadMore hasMore={fills.hasMore} loading={fills.loadingMore} onClick={fills.loadMore} />
+            <CorporateActionsTable actions={actions.items} />
+            <LoadMore hasMore={actions.hasMore} loading={actions.loadingMore} onClick={actions.loadMore} />
           </>
         ) : (
-          !error && <p className="paper-empty">{EMPTY.fills}</p>
+          !error && <p className="paper-empty">{EMPTY.actions}</p>
         )}
+        {tab === "actions" && <p className="paper-note">{DIVIDEND_NOTE}</p>}
       </div>
     </Card>
   );

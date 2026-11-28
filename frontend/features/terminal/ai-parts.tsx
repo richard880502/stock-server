@@ -5,6 +5,7 @@ import { RegimeChip } from "@/components/status-chip";
 import { EvidenceColumns, ScenarioRow } from "@/features/llm/judgement-detail";
 import type { ChipFlow, DebateCase, DebateReport, MarketEnvironment, Signal } from "@/lib/api/types";
 import { actionCopy, actionTone, severityCopy } from "@/lib/copy";
+import { backtestHref } from "@/lib/stock-routes";
 import { directionOf, formatNumber, formatPct, formatPrice, formatSignedPct } from "@/lib/format";
 import { changeSinceGeneration } from "./ai-price";
 import { collectAlerts, topFactors } from "./ai-signal";
@@ -13,10 +14,10 @@ export const AI_DISCLAIMER =
   "AI 內容是模型產生的文字，不構成投資建議；模型只整理已有證據，可能出錯。";
 
 /** Every AI suggestion area ends here: numbers must be checked by the deterministic backtest. */
-export function BacktestLink({ label = "用回測驗證" }: { label?: string }) {
+export function BacktestLink({ symbol, label = "用回測驗證" }: { symbol?: string; label?: string }) {
   return (
     <div className="ai-verify">
-      <Link href="/backtest" className="button small">
+      <Link href={symbol ? backtestHref(symbol) : "/backtest"} className="button small">
         {label}
       </Link>
       <span>AI 只提出觀點，數字策略要經回測檢驗。</span>

@@ -16,6 +16,7 @@ from quant_signal.application.data_sync import _recently_synced
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.prices import price_now
 from quant_signal.application.sync_jobs import request_symbol_sync
+from quant_signal.domain.etf import EtfDay, is_etf_symbol
 from quant_signal.domain.models import (
     MarketStockDay,
     PriceBar,
@@ -36,7 +37,9 @@ WATCHLIST_SESSIONS = 21  # 20 sessions of sparkline plus the base close for the 
 
 class StockNotFound(LookupError):
     def __init__(self, symbol: str) -> None:
-        super().__init__(f"找不到股票 {symbol}（目前僅收錄上市、上櫃股票，不含 ETF）")
+        super().__init__(
+            f"找不到股票 {symbol}（目前收錄上市、上櫃股票與 ETF；ETF 不適用個股財報與籌碼資料）"
+        )
         self.symbol = symbol
 
 
@@ -56,7 +59,7 @@ def _pct(new: float, old: float | None) -> float | None:
     return round((new / old - 1) * 100, 2)
 
 
-def _points(rows: list[MarketStockDay]) -> list[StockDayPoint]:
+def _points(rows: list[MarketStockDay] | list[EtfDay]) -> list[StockDayPoint]:
     ordered = sorted(rows, key=lambda item: item.trading_date)
     points: list[StockDayPoint] = []
     for row in ordered:
@@ -71,14 +74,14 @@ def _points(rows: list[MarketStockDay]) -> list[StockDayPoint]:
                 volume_lots=row.volume // 1000,
                 turnover_value=row.turnover_value,
                 change_pct=_pct(row.close, previous) if previous > 0 else None,
-                foreign_net_lots=_lots(row.foreign_net),
-                trust_net_lots=_lots(row.trust_net),
-                dealer_net_lots=_lots(row.dealer_net),
-                total_net_lots=_lots(row.total_net),
-                margin_balance=row.margin_balance,
-                margin_change=row.margin_change,
-                short_balance=row.short_balance,
-                short_change=row.short_change,
+                foreign_net_lots=_lots(getattr(row, "foreign_net", None)),
+                trust_net_lots=_lots(getattr(row, "trust_net", None)),
+                dealer_net_lots=_lots(getattr(row, "dealer_net", None)),
+                total_net_lots=_lots(getattr(row, "total_net", None)),
+                margin_balance=getattr(row, "margin_balance", None),
+                margin_change=getattr(row, "margin_change", None),
+                short_balance=getattr(row, "short_balance", None),
+                short_change=getattr(row, "short_change", None),
             )
         )
     return points
@@ -124,18 +127,23 @@ def _summary(points: list[StockDayPoint]) -> StockSummary:
     )
 
 
-async def normalize_listed_symbol(repository: QuantRepository, raw: str) -> str:
-    """Accept ``2330`` or ``2330.TW``; return the listed symbol or raise."""
+async def normalize_listed_symbol(
+    repository: QuantRepository, raw: str, *, include_etf: bool = False
+) -> str:
+    """Accept ``2330`` or ``2330.TW``; return the listed symbol or raise.
+
+    ETFs resolve only with ``include_etf`` (the quick stock page); every stock-only
+    dataset keeps rejecting a bare ETF code.
+    """
     symbol = raw.strip().upper()
     if not symbol:
         raise StockNotFound(raw)
     if "." in symbol:
         return symbol
-    matches = [
-        item.symbol
-        for item in await repository.search_market_stocks(symbol, limit=20)
-        if item.symbol.split(".")[0] == symbol
-    ]
+    found = await repository.search_market_stocks(symbol, limit=20)
+    if include_etf:
+        found = [*found, *await repository.search_etf_instruments(symbol, limit=20)]
+    matches = [item.symbol for item in found if item.symbol.split(".")[0] == symbol]
     if not matches:
         raise StockNotFound(symbol)
     return matches[0]
@@ -191,22 +199,32 @@ class StockOverviewService:
         self.repository = repository
 
     async def get(self, raw_symbol: str, *, sessions: int = OVERVIEW_SESSIONS) -> StockOverview:
-        symbol = await normalize_listed_symbol(self.repository, raw_symbol)
-        dates = await self.repository.list_market_trading_dates(
-            None, as_of=None, limit=sessions
-        )
-        rows = await self.repository.list_market_stock_rows([symbol], dates)
+        symbol = await normalize_listed_symbol(self.repository, raw_symbol, include_etf=True)
+        etf = is_etf_symbol(symbol)
+        if etf:
+            rows: list = await self.repository.list_etf_rows([symbol], sessions=sessions)
+        else:
+            dates = await self.repository.list_market_trading_dates(
+                None, as_of=None, limit=sessions
+            )
+            rows = await self.repository.list_market_stock_rows([symbol], dates)
         if not rows:
             raise StockNotFound(symbol)
         points = _points(rows)
         latest = max(rows, key=lambda item: item.trading_date)
         return StockOverview(
+            kind="etf" if etf else "stock",
             symbol=symbol,
             name=latest.name,
             market=latest.market,
             data_through=points[-1].trading_date,
             trading_days=len(points),
-            full_analysis=await self._analysis_state(symbol, points[-1].trading_date),
+            # No stock analytics apply to an ETF: no history sync is queued for it.
+            full_analysis=(
+                "insufficient"
+                if etf
+                else await self._analysis_state(symbol, points[-1].trading_date)
+            ),
             summary=_summary(points),
             days=points,
         )

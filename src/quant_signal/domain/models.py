@@ -273,6 +273,8 @@ class Instrument(BaseModel):
     # True when full adjusted history is stored (signals, backtests and forecasts work
     # immediately); False for stocks that only exist in the whole-market snapshot.
     tracked: bool | None = None
+    # "etf" for exchange-traded funds (stored in ``etf_daily``); additive, absent = stock.
+    kind: Literal["stock", "etf"] = "stock"
 
 
 class DataStatus(BaseModel):
@@ -874,6 +876,9 @@ class StockOverview(BaseModel):
     full_analysis: Literal["ready", "preparing", "insufficient"]
     summary: StockSummary
     days: list[StockDayPoint]
+    # "etf": quotes come from ``etf_daily``; flows and credit are absent and full_analysis
+    # stays "insufficient" (no stock analytics apply). Absent = stock.
+    kind: Literal["stock", "etf"] = "stock"
 
 
 class WatchlistItem(BaseModel):

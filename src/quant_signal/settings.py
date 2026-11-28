@@ -193,6 +193,12 @@ class Settings(BaseSettings):
     # Ticks of slippage on every simulated fill (no order book to walk).
     paper_slippage_ticks: int = Field(default=1, ge=0, le=5)
     paper_max_accounts: int = Field(default=3, ge=1, le=20)
+    # AI trade proposals (AI 提案): the model suggests, a deterministic layer sizes and caps.
+    paper_proposals_enabled: bool = True
+    # Largest share of equity one symbol may reach after a proposed buy.
+    paper_proposal_max_position_pct: float = Field(default=0.20, gt=0, le=1)
+    # Largest loss, as a share of equity, if the proposed stop is hit (costs included).
+    paper_proposal_max_risk_pct: float = Field(default=0.02, gt=0, le=1)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

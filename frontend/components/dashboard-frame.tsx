@@ -4,7 +4,8 @@ import { usePathname } from "next/navigation";
 import { type ReactNode, useCallback, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
 import { normalizePath } from "@/lib/signal-routes";
-import { isStockRoute } from "@/lib/stock-routes";
+import { isStockRoute, symbolFromPath } from "@/lib/stock-routes";
+import { isEtfSymbol } from "@/lib/symbols";
 import { CommandPalette, useCommandPaletteShortcut } from "./command-palette";
 import { ErrorBanner } from "./error-banner";
 import { Topbar } from "./topbar";
@@ -24,7 +25,9 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   // The shared error comes from the stock analysis or a backtest run. Pages that show neither
   // (今日總覽, 市場, 選股, 模擬交易 — each reports its own errors) must not carry it around.
   const path = normalizePath(usePathname());
-  const showsSharedError = isStockRoute(path) || ERROR_ROUTES.includes(path);
+  // An ETF page explains its own "no tracked history" state; the banner would only repeat it.
+  const etfPage = isEtfSymbol(symbolFromPath(path) ?? "");
+  const showsSharedError = (isStockRoute(path) && !etfPage) || ERROR_ROUTES.includes(path);
 
   return (
     <div className="app">

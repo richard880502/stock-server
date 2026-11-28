@@ -8,8 +8,10 @@ from typing import Any
 
 import httpx
 
+from quant_signal.domain.etf import EtfDay
 from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow, MarketStockDay
 from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
+from quant_signal.infrastructure.providers.etf_quotes import parse_twse_etfs
 from quant_signal.infrastructure.providers.market_snapshot import (
     StockCredit,
     StockFlow,
@@ -369,8 +371,8 @@ class TwseProvider:
             capital_data_complete=complete,
         )
 
-    async def fetch_market_quotes(self, trading_date: date) -> TwseDailyMarket | None:
-        payload = await self._get_json(
+    async def _mi_index_payload(self, trading_date: date) -> dict[str, Any]:
+        return await self._get_json(
             "/rwd/zh/afterTrading/MI_INDEX",
             {
                 "date": trading_date.strftime("%Y%m%d"),
@@ -378,13 +380,24 @@ class TwseProvider:
                 "response": "json",
             },
         )
+
+    async def fetch_market_quotes(self, trading_date: date) -> TwseDailyMarket | None:
+        payload = await self._mi_index_payload(trading_date)
         return self.parse_daily_market(payload) if payload.get("stat") == "OK" else None
 
     async def fetch_market_stock_day(self, trading_date: date) -> list[MarketStockDay]:
         """Every common stock's quote, institutional flow and credit balance for a day."""
-        market = await self.fetch_market_quotes(trading_date)
+        return (await self.fetch_market_day_rows(trading_date))[0]
+
+    async def fetch_market_day_rows(
+        self, trading_date: date
+    ) -> tuple[list[MarketStockDay], list[EtfDay]]:
+        """The day's stock rows and ETF rows from one MI_INDEX download."""
+        payload = await self._mi_index_payload(trading_date)
+        etfs = self.parse_etf_day(payload, trading_date)
+        market = self.parse_daily_market(payload) if payload.get("stat") == "OK" else None
         if market is None:
-            return []
+            return [], etfs
         requested = trading_date.strftime("%Y%m%d")
         flow_payload = await self._get_json(
             "/rwd/zh/fund/T86",
@@ -394,7 +407,7 @@ class TwseProvider:
             "/rwd/zh/marginTrading/MI_MARGN",
             {"date": requested, "selectType": "ALL", "response": "json"},
         )
-        return build_market_stock_days(
+        stocks = build_market_stock_days(
             market.quotes,
             market="TW",
             source=TWSE_SOURCE,
@@ -403,6 +416,18 @@ class TwseProvider:
             credit=self.parse_all_stock_credit(credit_payload),
             trading_date=trading_date,
         )
+        return stocks, etfs
+
+    async def fetch_market_etf_day(self, trading_date: date) -> list[EtfDay]:
+        """ETF rows only: one MI_INDEX request, for a day whose stock rows are stored."""
+        return self.parse_etf_day(await self._mi_index_payload(trading_date), trading_date)
+
+    @staticmethod
+    def parse_etf_day(payload: dict[str, Any], trading_date: date) -> list[EtfDay]:
+        rows = parse_twse_etfs(
+            payload, available_at=_available_at(trading_date), source=TWSE_SOURCE
+        )
+        return [row for row in rows if row.trading_date == trading_date]
 
     @staticmethod
     def parse_all_stock_flows(payload: dict[str, Any]) -> dict[str, StockFlow]:

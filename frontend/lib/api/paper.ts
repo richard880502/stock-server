@@ -21,6 +21,8 @@ export type AccountSummary = {
   equity: number;
   unrealized_pnl: number;
   realized_pnl: number;
+  /** Gross cash dividends credited since the last reset; absent on an API older than dividends. */
+  dividend_income?: number;
   total_pnl: number;
   total_return_pct: number;
   day_pnl: number;
@@ -50,6 +52,8 @@ export type Position = {
   unrealized_pct: number;
   day_change_pct: number | null;
   weight_pct: number;
+  /** Cash dividends received on this holding (not part of the price-only unrealized figures). */
+  dividend_income?: number;
 };
 
 export type AccountDetail = AccountSummary & {
@@ -139,6 +143,8 @@ export type OrderRequest = {
   limit_price?: number;
   lots: number;
   note?: string;
+  /** The AI proposal this order accepts (sent with the real submit only, never the preview). */
+  proposal_id?: string;
 };
 
 export type NewAccount = {
@@ -165,6 +171,8 @@ export type PaperRules = {
   commission_min?: number;
   tax_rate?: number;
   etf_tax_rate?: number;
+  /** Last day a 債券 ETF sale is exempt from the transaction tax (ISO date). */
+  bond_etf_tax_exempt_through?: string;
   day_trade_tax_rate?: number;
   [extra: string]: unknown;
 };
@@ -260,3 +268,30 @@ export async function getEquity(id: string, days: number, init?: Init): Promise<
 }
 
 export const getRules = (init?: Init) => fetchJson<PaperRules>(apiUrl(`${base}/rules`), init);
+
+/** One applied 除權息 on the account: cash credited on the ex-date and/or bonus shares added. */
+export type CorporateAction = {
+  id: string;
+  symbol: string;
+  name: string;
+  ex_date: string;
+  kind: "ex_dividend" | "ex_rights" | "ex_rights_dividend";
+  entitled_shares: number;
+  cash_amount: number;
+  shares_added: number;
+  cash_dividend_per_share: number | null;
+  stock_dividend_per_share: number | null;
+  applied_at: string;
+};
+
+export async function listCorporateActions(
+  id: string,
+  query: { limit: number; offset: number },
+  init?: Init,
+): Promise<Page<CorporateAction>> {
+  const params = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) });
+  return pageOf<CorporateAction>(
+    await fetchJson<unknown>(apiUrl(`${base}/accounts/${enc(id)}/corporate-actions?${params}`), init),
+    ["actions", "items"],
+  );
+}

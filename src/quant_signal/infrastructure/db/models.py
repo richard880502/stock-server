@@ -784,4 +784,8 @@ class QuarterlyFinancialRow(Base):
 
 # Paper-trading tables live in their own module; importing it registers them on ``Base``
 # (alembic and the schema-drift test only import this module).
-from quant_signal.infrastructure.db import derivatives_models, paper_models  # noqa: E402,F401,I001
+from quant_signal.infrastructure.db import (  # noqa: E402,F401,I001
+    derivatives_models,
+    etf_models,
+    paper_models,
+)

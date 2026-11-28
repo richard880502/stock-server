@@ -95,6 +95,27 @@ describe("StockPage states", () => {
     expect(out).toContain("/watchlist?view=terminal");
   });
 
+  it("shows an ETF without tracked history as the quick panel", () => {
+    setDashboard({ symbol: "0050.TW", signal: null, error: "這檔 ETF 尚無歷史行情，無法計算量化訊號" });
+    const out = html("0050.TW");
+    expect(out).toContain("ETF");
+    expect(out).toContain("上市");
+    expect(out).toContain('data-testid="quick-panel"');
+    expect(out).toContain("/paper");
+    expect(out).not.toContain('data-testid="star"');
+  });
+
+  it("gives an ETF with a signal the price-based analysis but not the stock-only profile", () => {
+    setDashboard({ symbol: "0050.TW", signal: { ...SIGNAL, symbol: "0050.TW" } });
+    const out = html("0050.TW");
+    expect(out).toContain("hero-action");
+    expect(out).toContain('data-testid="chart"');
+    expect(out).toContain("ETF 不適用個股財報與籌碼分析");
+    expect(out).not.toContain('data-testid="profile"');
+    expect(out).toContain("/backtest?symbol=0050.TW");
+    expect(out).not.toContain('data-testid="star"');
+  });
+
   it("never shows another stock's verdict under the new name", () => {
     setDashboard({ symbol: "2330.TW", signal: SIGNAL, loading: true });
     const out = html("2317.TW");

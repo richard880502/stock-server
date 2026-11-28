@@ -123,7 +123,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       seen.add(key);
       stocks.push({ id: `stock:${key}`, group: "股票", label: `${key}${name ? ` ${name}` : ""}`, hint, run: () => router.push(stockHref(key)) });
     };
-    if (q && results.q === q) results.rows.forEach((row) => addStock(row.symbol, row.name, row.market === "TW" ? "上市" : "上櫃"));
+    if (q && results.q === q) results.rows.forEach((row) => addStock(row.symbol, row.name, `${row.kind === "etf" ? "ETF · " : ""}${row.market === "TW" ? "上市" : "上櫃"}`));
     if (!q) {
       recentSymbols.slice(0, 5).forEach((r) => addStock(r.symbol, r.name, "最近查詢"));
       watchlist.watchlist?.items.slice(0, 8).forEach((item) => addStock(item.symbol, item.name, "自選股"));
