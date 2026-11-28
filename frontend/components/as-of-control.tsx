@@ -24,6 +24,7 @@ export function AsOfControl({ withBenchmark = false }: { withBenchmark?: boolean
   const rootRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
+  const benchmarkRef = useRef<HTMLInputElement>(null);
   const id = useId();
   const now = today();
   const historical = query.asOf !== now;
@@ -39,6 +40,21 @@ export function AsOfControl({ withBenchmark = false }: { withBenchmark?: boolean
   useEffect(() => {
     latest.current = { refresh, asOf: query.asOf };
   });
+  // The benchmark applies when its field is left. Closing the popover by pressing outside removes
+  // the field, and a removed element does not reliably fire blur, so that path commits too;
+  // `committedBenchmark` keeps the two from applying the same value twice.
+  const committedBenchmark = useRef(query.benchmark);
+  useEffect(() => {
+    committedBenchmark.current = query.benchmark;
+  }, [query.benchmark]);
+  const commitBenchmark = () => {
+    const field = benchmarkRef.current;
+    if (!field) return;
+    const next = field.value.trim().toUpperCase();
+    if (next === committedBenchmark.current) return;
+    committedBenchmark.current = next;
+    latest.current.refresh({ benchmark: next });
+  };
   const commit = (text: string) => {
     if (isCommittableAsOf(text, today()) && text !== latest.current.asOf) {
       latest.current.refresh({ asOf: text });
@@ -59,7 +75,9 @@ export function AsOfControl({ withBenchmark = false }: { withBenchmark?: boolean
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (rootRef.current?.contains(event.target as Node)) return;
+      commitBenchmark();
+      setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -122,6 +140,7 @@ export function AsOfControl({ withBenchmark = false }: { withBenchmark?: boolean
                 比較基準
               </label>
               <input
+                ref={benchmarkRef}
                 id={`${id}-benchmark`}
                 className="input mono"
                 defaultValue={query.benchmark}
@@ -129,10 +148,7 @@ export function AsOfControl({ withBenchmark = false }: { withBenchmark?: boolean
                 placeholder="^TWII"
                 autoComplete="off"
                 spellCheck={false}
-                onBlur={(event) => {
-                  const next = event.target.value.trim().toUpperCase();
-                  if (next !== query.benchmark) refresh({ benchmark: next });
-                }}
+                onBlur={commitBenchmark}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") (event.target as HTMLInputElement).blur();
                 }}

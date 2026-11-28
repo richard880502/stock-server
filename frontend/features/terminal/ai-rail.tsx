@@ -45,6 +45,10 @@ export function AiRail({
 }) {
   const { query, signalData, llm, llmStatus } = useDashboard();
   const key = aiCacheKey(symbol, query.asOf);
+  // The dashboard's LLM state belongs to `query.symbol`. On a stock page the rail mounts for the
+  // path's symbol one effect before the provider switches the query (and clears that state), so
+  // a result for the previous stock must be neither shown nor cached under this one.
+  const ownsLlm = query.symbol.trim().toUpperCase() === symbol.trim().toUpperCase();
   const entry = useSyncExternalStore(
     aiCache.subscribe,
     () => aiCache.get(key),
@@ -59,7 +63,7 @@ export function AiRail({
 
   const { streaming, streamedGuide, streamModel, streamError } = llm;
   useEffect(() => {
-    if (streaming || streamError || !streamedGuide) return;
+    if (!ownsLlm || streaming || streamError || !streamedGuide) return;
     if (aiCache.get(key)?.guide?.text === streamedGuide) return;
     aiCache.saveGuide(key, {
       text: streamedGuide,
@@ -67,18 +71,18 @@ export function AiRail({
       generatedAt: Date.now(),
       price: latestPrice.current,
     });
-  }, [key, streaming, streamError, streamedGuide, streamModel]);
+  }, [key, ownsLlm, streaming, streamError, streamedGuide, streamModel]);
 
   const { debating, debateReport, debateError } = llm;
   useEffect(() => {
-    if (debating || debateError || !debateReport) return;
+    if (!ownsLlm || debating || debateError || !debateReport) return;
     if (aiCache.get(key)?.debate?.report === debateReport) return;
     aiCache.saveDebate(key, {
       report: debateReport,
       generatedAt: Date.now(),
       price: latestPrice.current,
     });
-  }, [key, debating, debateError, debateReport]);
+  }, [key, ownsLlm, debating, debateError, debateReport]);
 
   const signal =
     signalData.signal && signalData.signal.symbol.toUpperCase() === symbol.toUpperCase()
@@ -87,11 +91,13 @@ export function AiRail({
   const dataAsOf = signal?.as_of;
 
   // LLM output is held by the dashboard only for the current query; otherwise fall back to the cache.
-  const guideLive = streaming || Boolean(streamedGuide) || Boolean(llm.streamSyncWait) || Boolean(streamError);
+  const guideLive =
+    ownsLlm && (streaming || Boolean(streamedGuide) || Boolean(llm.streamSyncWait) || Boolean(streamError));
   const guideText = guideLive ? streamedGuide : (entry?.guide?.text ?? "");
   const guideModel = guideLive ? streamModel : (entry?.guide?.model ?? null);
   const guideMeta = !streaming ? entry?.guide : undefined;
-  const debateLive = debating || Boolean(debateReport) || Boolean(llm.debateSyncWait) || Boolean(debateError);
+  const debateLive =
+    ownsLlm && (debating || Boolean(debateReport) || Boolean(llm.debateSyncWait) || Boolean(debateError));
   const report = debateLive ? debateReport : (entry?.debate?.report ?? null);
   const debateMeta = !debating ? entry?.debate : undefined;
 

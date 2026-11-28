@@ -33,6 +33,9 @@ function useDashboardState() {
   const [startSymbol] = useState(() => routeSymbol ?? DEFAULT_SYMBOL);
   const [symbol, setSymbolState] = useState(startSymbol);
   const [benchmark, setBenchmark] = useState(() => benchmarkForSymbol(startSymbol, DEFAULT_BENCHMARK));
+  // False while the symbol is only the built-in default nobody chose (a fresh load of 今日總覽,
+  // 市場…): such a symbol is not added to 最近看過.
+  const [picked, setPicked] = useState(routeSymbol !== null);
   const [asOf, setAsOf] = useState(today);
   const [error, setError] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
@@ -85,6 +88,7 @@ function useDashboardState() {
     overrides: Partial<{ symbol: string; benchmark: string; asOf: string }> = {},
   ) => {
     const nextSymbol = (overrides.symbol ?? symbol).trim().toUpperCase();
+    if (overrides.symbol) setPicked(true);
     const nextBenchmark =
       overrides.benchmark ?? benchmarkForSymbol(nextSymbol, benchmark);
     const nextAsOf = overrides.asOf ?? asOf;
@@ -141,9 +145,12 @@ function useDashboardState() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // Once a symbol's signal has loaded, resolve its name and remember it as recent.
-  // Routes that skip the signal still resolve the name of the symbol their query bar shows.
-  const loadedSymbol = signalData.signal?.symbol ?? (needsSignal ? null : symbol);
+  // Once a symbol's signal has loaded, resolve its name and remember it as recent. Routes that
+  // skip the signal (回測, 預測) resolve the name of the query's symbol instead — a signal left
+  // over from an earlier stock page must not stand in for it. A symbol is remembered only when
+  // it is shown on a signal route or was chosen, never the untouched default.
+  const loadedSymbol = needsSignal ? (signalData.signal?.symbol ?? null) : symbol;
+  const remember = needsSignal || picked;
   useEffect(() => {
     if (!loadedSymbol) return;
     const controller = new AbortController();
@@ -151,15 +158,15 @@ function useDashboardState() {
       .then((rows) => {
         const name = rows.find((row) => row.symbol === loadedSymbol)?.name;
         setInstrumentName({ symbol: loadedSymbol, name: name ?? "" });
-        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol, name }));
+        if (remember) setRecentSymbols(rememberSymbol({ symbol: loadedSymbol, name }));
       })
       .catch(() => {
         if (controller.signal.aborted) return;
         setInstrumentName({ symbol: loadedSymbol, name: "" });
-        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol }));
+        if (remember) setRecentSymbols(rememberSymbol({ symbol: loadedSymbol }));
       });
     return () => controller.abort();
-  }, [loadedSymbol]);
+  }, [loadedSymbol, remember]);
 
   useEffect(() => {
     getLlmStatus().then(setLlmStatus).catch(() => setLlmStatus(null));

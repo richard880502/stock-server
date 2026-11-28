@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useMemo } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { SearchIcon } from "@/components/icons";
@@ -14,7 +15,8 @@ import { useNow } from "@/features/terminal/rail-now";
 import { useSession } from "@/lib/api/session";
 import { useDashboard } from "@/lib/dashboard-context";
 import { useLiveQuotes } from "@/lib/live-quotes";
-import { backtestHref } from "@/lib/stock-routes";
+import { searchInstruments } from "@/lib/api/endpoints";
+import { backtestHref, stockHref } from "@/lib/stock-routes";
 import { PriceChartCard } from "./price-chart-card";
 import { profileAsOf } from "./profile/model";
 import { StockProfileSection } from "./profile/profile-section";
@@ -28,8 +30,35 @@ import { useStockOverview } from "./use-stock-overview";
 
 const NO_SYMBOLS: string[] = [];
 
-/** One stock's page at `/stock/<symbol>`. `symbol` is null when the path is not a stock code. */
-export function StockPage({ symbol }: { symbol: string | null }) {
+/**
+ * `/stock/6488` has no market suffix, so it cannot say 上市 or 上櫃. Look the code up and replace
+ * the URL with the full symbol; when the lookup fails, fall back to the listed market.
+ */
+function BareCodeRedirect({ code }: { code: string }) {
+  const router = useRouter();
+  useEffect(() => {
+    const controller = new AbortController();
+    const go = (symbol: string) => router.replace(stockHref(symbol) + window.location.hash);
+    searchInstruments(code, { signal: controller.signal })
+      .then((rows) => go(rows.find((row) => row.symbol.split(".")[0] === code)?.symbol ?? `${code}.TW`))
+      .catch(() => {
+        if (!controller.signal.aborted) go(`${code}.TW`);
+      });
+    return () => controller.abort();
+  }, [code, router]);
+  return (
+    <p className="note" role="status">
+      正在開啟 {code}…
+    </p>
+  );
+}
+
+/**
+ * One stock's page at `/stock/<symbol>`. `symbol` is null when the path is not a full symbol;
+ * `bareCode` is then set if it is a code without its market suffix.
+ */
+export function StockPage({ symbol, bareCode = null }: { symbol: string | null; bareCode?: string | null }) {
+  if (!symbol && bareCode) return <BareCodeRedirect code={bareCode} />;
   if (!symbol) {
     return (
       <EmptyState
@@ -41,7 +70,7 @@ export function StockPage({ symbol }: { symbol: string | null }) {
           </Link>
         }
       >
-        請確認網址中的代號（例如 2330 或 6488.TWO）。按 ⌘K 可以搜尋股票。
+        請確認網址中的代號（例如 2330.TW 或 6488.TWO）。按 ⌘K 可以搜尋股票。
       </EmptyState>
     );
   }

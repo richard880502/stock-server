@@ -36,7 +36,15 @@ export function useCommandPaletteShortcut(open: () => void) {
       if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey) && !event.altKey) {
         event.preventDefault();
         open();
-      } else if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey && !isTypingTarget(event.target)) {
+      } else if (
+        event.key === "/" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !isTypingTarget(event.target) &&
+        // Not over another open dialog, drawer or popover.
+        !document.querySelector('dialog[open], [role="dialog"]')
+      ) {
         event.preventDefault();
         open();
       }

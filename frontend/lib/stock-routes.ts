@@ -35,12 +35,40 @@ export function symbolFromParam(segment: string | null | undefined): string | nu
   return symbol && !symbol.startsWith("^") ? symbol : null;
 }
 
+const FULL_SYMBOL = /^\d{4,6}[A-Z]?\.TWO?$/;
+const BARE_CODE = /^\d{4,6}[A-Z]?$/;
+
+function decodeSegment(segment: string | null | undefined): string | null {
+  if (!segment) return null;
+  try {
+    return decodeURIComponent(segment).trim().toUpperCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The symbol named by a `/stock/<segment>` path segment. Unlike `symbolFromParam` this needs the
+ * market suffix: a bare code cannot tell 上市 from 上櫃, so the stock page looks it up and
+ * redirects to the full symbol (see `bareCodeFromSegment`) instead of guessing `.TW`.
+ */
+export function symbolFromSegment(segment: string | null | undefined): string | null {
+  const text = decodeSegment(segment);
+  return text && FULL_SYMBOL.test(text) ? text : null;
+}
+
+/** `2330` / `00631L` when the segment is a stock code without its market suffix, else null. */
+export function bareCodeFromSegment(segment: string | null | undefined): string | null {
+  const text = decodeSegment(segment);
+  return text && BARE_CODE.test(text) ? text : null;
+}
+
 /** The stock a pathname is about (`/stock/2330.TW/` → `2330.TW`), or null on any other route. */
 export function symbolFromPath(pathname: string | null | undefined): string | null {
   const path = pathname ?? "";
   if (!path.startsWith(STOCK_ROUTE_PREFIX)) return null;
   const segment = path.slice(STOCK_ROUTE_PREFIX.length).replace(/\/+$/, "");
-  return segment.includes("/") ? null : symbolFromParam(segment);
+  return segment.includes("/") ? null : symbolFromSegment(segment);
 }
 
 export const isStockRoute = (pathname: string | null | undefined) => (pathname ?? "").startsWith(STOCK_ROUTE_PREFIX);

@@ -5,6 +5,7 @@ import type { Signal } from "@/lib/api/types";
 const dashboard = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 
 vi.mock("@/lib/dashboard-context", () => ({ useDashboard: () => dashboard.current }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: () => {}, push: () => {} }) }));
 vi.mock("@/lib/api/session", () => ({ useSession: () => ({ config: { quotes: false } }) }));
 vi.mock("@/lib/live-quotes", () => ({ useLiveQuotes: () => ({ status: "disabled", quotes: new Map() }) }));
 vi.mock("./use-stock-overview", () => ({ useStockOverview: () => ({ data: null, error: null, loading: true }) }));
@@ -62,6 +63,12 @@ describe("StockPage states", () => {
     expect(out).toContain("查無此股票代號");
     expect(out).toContain('href="/screener"');
     expect(out).toContain("⌘K");
+  });
+
+  it("looks a bare code up instead of guessing its market", () => {
+    const out = renderToStaticMarkup(<StockPage symbol={null} bareCode="6488" />);
+    expect(out).toContain("正在開啟 6488");
+    expect(out).not.toContain("查無此股票代號");
   });
 
   it("shows header, section nav, verdict, rail and every section when ready", () => {

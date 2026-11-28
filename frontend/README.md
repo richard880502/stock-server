@@ -106,7 +106,7 @@ preflight and utilities; the system itself is plain CSS custom properties.
 - **Filters in the URL** – `?market=TW&window=5&metric=foreign_net&range=60&cum=1`
   (`use-market-params.ts`); defaults are omitted and bad values fall back.
 - **Boards** – `ranking-board.tsx` renders a real table; inside a container query
-  narrower than 33rem each row becomes a card. Clicking a row calls
+  narrower than 33rem each row becomes a card. The code / name cell
   links to the stock page, `/stock/<symbol>`.
 - **Honest data** – a session whose report is not out yet comes back from the API
   as zeros with `institutional_reported` / `credit_reported` false; charts hatch

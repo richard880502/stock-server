@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { backtestHref, isStockRoute, stockHref, symbolFromParam, symbolFromPath } from "./stock-routes";
+import {
+  backtestHref,
+  bareCodeFromSegment,
+  isStockRoute,
+  stockHref,
+  symbolFromParam,
+  symbolFromPath,
+  symbolFromSegment,
+} from "./stock-routes";
 
 describe("stock routes", () => {
   it("builds stock links", () => {
@@ -11,15 +19,23 @@ describe("stock routes", () => {
   it("reads the symbol back from a path", () => {
     expect(symbolFromPath("/stock/2330.TW")).toBe("2330.TW");
     expect(symbolFromPath("/stock/6488.two/")).toBe("6488.TWO");
-    expect(symbolFromPath("/stock/2330")).toBe("2330.TW");
+    expect(symbolFromParam("2330")).toBe("2330.TW");
     expect(symbolFromPath("/stock/00631L.TW")).toBe("00631L.TW");
   });
   it("rejects anything that is not one stock", () => {
-    for (const path of ["/", "/market", "/stock/", "/stock/abc", "/stock/%5ETWII", "/stock/2330.TW/extra", "/stock/%E0%A4%A", null]) {
+    for (const path of ["/", "/market", "/stock/", "/stock/abc", "/stock/2330", "/stock/%5ETWII", "/stock/2330.TW/extra", "/stock/%E0%A4%A", null]) {
       expect(symbolFromPath(path)).toBeNull();
     }
     expect(symbolFromParam("^TWII")).toBeNull();
     expect(symbolFromParam("")).toBeNull();
+  });
+  it("leaves a code without its market suffix to be looked up", () => {
+    expect(symbolFromSegment("6488")).toBeNull();
+    expect(bareCodeFromSegment("6488")).toBe("6488");
+    expect(bareCodeFromSegment("00631l")).toBe("00631L");
+    expect(bareCodeFromSegment("6488.TWO")).toBeNull();
+    expect(bareCodeFromSegment("abc")).toBeNull();
+    expect(bareCodeFromSegment("%E0%A4%A")).toBeNull();
   });
   it("recognizes stock routes even when the code is invalid", () => {
     expect(isStockRoute("/stock/abc")).toBe(true);

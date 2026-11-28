@@ -1,10 +1,15 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import { type ReactNode, useCallback, useState } from "react";
 import { useDashboard } from "@/lib/dashboard-context";
+import { normalizePath } from "@/lib/signal-routes";
+import { isStockRoute } from "@/lib/stock-routes";
 import { CommandPalette, useCommandPaletteShortcut } from "./command-palette";
 import { ErrorBanner } from "./error-banner";
 import { Topbar } from "./topbar";
+
+const ERROR_ROUTES = ["/watchlist", "/backtest", "/forecast"];
 
 /** Chrome shared by every route: sticky header, notices, content, footer. */
 export function DashboardFrame({ children }: { children: ReactNode }) {
@@ -16,6 +21,10 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   // load only on /stock/* and /watchlist (lib/signal-routes.ts), and both show their own wait
   // state. On every other route a notice would be about a stock the page is not showing.
   useCommandPaletteShortcut(openPalette);
+  // The shared error comes from the stock analysis or a backtest run. Pages that show neither
+  // (今日總覽, 市場, 選股, 模擬交易 — each reports its own errors) must not carry it around.
+  const path = normalizePath(usePathname());
+  const showsSharedError = isStockRoute(path) || ERROR_ROUTES.includes(path);
 
   return (
     <div className="app">
@@ -29,7 +38,7 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
       </header>
 
       <main id="main" className="container page" tabIndex={-1}>
-        {error && (
+        {error && showsSharedError && (
           <ErrorBanner message={error} onDismiss={() => setError(null)} onRetry={() => refresh()} />
         )}
         {children}

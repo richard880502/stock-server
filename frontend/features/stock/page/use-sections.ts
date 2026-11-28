@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { StockSection } from "@/lib/stock-routes";
 import { pickActiveSection, SECTION_LINKS, sectionFromHash } from "./model";
 
@@ -50,8 +50,11 @@ export function useActiveSection(enabled: boolean): StockSection | null {
  * hash's section into view, once per stock.
  */
 export function useHashScroll(ready: boolean, symbol: string) {
+  // `ready` also flips when the same stock reloads (as-of change, retry): do not jump again then.
+  const done = useRef<string | null>(null);
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || done.current === symbol) return;
+    done.current = symbol;
     const section = sectionFromHash(window.location.hash);
     if (!section) return;
     const timer = window.setTimeout(() => document.getElementById(section)?.scrollIntoView({ block: "start" }), 50);
