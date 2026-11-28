@@ -24,8 +24,27 @@ TWSE_FLOW = {
     "stat": "OK",
     "data": [
         # code, name, then foreign (3), foreign dealer (3), trust(3)...
-        ["2330", "台積電", "1", "2", "-15,005,014", "0", "0", "0", "100", "50", "3,682,223",
-         "1,885,893", "10", "5", "5", "8", "4", "4", "-9,436,898"],
+        [
+            "2330",
+            "台積電",
+            "1",
+            "2",
+            "-15,005,014",
+            "0",
+            "0",
+            "0",
+            "100",
+            "50",
+            "3,682,223",
+            "1,885,893",
+            "10",
+            "5",
+            "5",
+            "8",
+            "4",
+            "4",
+            "-9,436,898",
+        ],
     ],
 }
 TWSE_CREDIT = {
@@ -35,13 +54,31 @@ TWSE_CREDIT = {
         {
             "fields": ["代號", "名稱"],
             "data": [
-                ["2330", "台積電", "884", "608", "18", "34,961", "35,219", "6,483,092",
-                 "4", "8", "0", "9", "13", "6,483,092", "2", " "],
+                [
+                    "2330",
+                    "台積電",
+                    "884",
+                    "608",
+                    "18",
+                    "34,961",
+                    "35,219",
+                    "6,483,092",
+                    "4",
+                    "8",
+                    "0",
+                    "9",
+                    "13",
+                    "6,483,092",
+                    "2",
+                    " ",
+                ],
                 ["2317", "鴻海", "1", "1", "0", "10", "--"] + ["0"] * 9,
             ],
         },
     ],
 }
+
+
 def _tpex_flow_row() -> list[str]:
     row = ["0"] * 24
     row[0], row[1] = "6488", "環球晶"
@@ -54,8 +91,28 @@ TPEX_CREDIT = {
     "tables": [
         {
             "data": [
-                ["6488", "環球晶", "11,440", "200", "47", "0", "11,593", "0", "5.0", "100",
-                 "300", "10", "8", "0", "218", "0", "0", "0", "0", ""],
+                [
+                    "6488",
+                    "環球晶",
+                    "11,440",
+                    "200",
+                    "47",
+                    "0",
+                    "11,593",
+                    "0",
+                    "5.0",
+                    "100",
+                    "300",
+                    "10",
+                    "8",
+                    "0",
+                    "218",
+                    "0",
+                    "0",
+                    "0",
+                    "0",
+                    "",
+                ],
             ]
         }
     ]
@@ -171,7 +228,11 @@ async def test_worker_runs_a_market_job_for_the_right_exchange() -> None:
     job, _ = await repository.enqueue_sync_job(SyncJobKind.MARKET, "TW", lookback_days=7)
 
     outcome = await process_next_job(
-        repository, twse, tpex, max_attempts=2, today=date(2026, 10, 16)  # type: ignore[arg-type]
+        repository,
+        twse,
+        tpex,
+        max_attempts=2,
+        today=date(2026, 10, 16),  # type: ignore[arg-type]
     )
 
     assert outcome is True and repository.sync_jobs[job.id].status is JobStatus.COMPLETED
@@ -327,7 +388,11 @@ async def test_worker_queues_a_repair_job_and_the_job_heals_the_day() -> None:
     await two.sync(start=HOLIDAY, end=BROKEN)
 
     later = _at(date(2026, 10, 17))  # a Saturday: no daily refresh would come
-    assert await enqueue_market_repairs(repository, now=later, lookback_days=30) == ["TWO"]
+    # Providers without ETF rows: only the stock repair can queue, exactly as before.
+    providers = {"TW": twse, "TWO": tpex}
+    assert await enqueue_market_repairs(
+        repository, now=later, lookback_days=30, providers=providers
+    ) == ["TWO"]
     jobs = [j for j in repository.sync_jobs.values() if j.kind is SyncJobKind.MARKET]
     assert [(j.symbol, j.lookback_days) for j in jobs] == [("TWO", 30)]
 

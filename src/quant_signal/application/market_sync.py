@@ -90,10 +90,9 @@ class MarketSnapshotSyncService:
         self.sibling = sibling
         self._clock = clock or (lambda: datetime.now(UTC))
         # Providers that cannot supply ETF rows (test doubles) simply skip the ETF part.
-        has_etfs = hasattr(provider, "fetch_market_day_rows") and hasattr(
-            provider, "fetch_market_etf_day"
+        self._etf_provider: EtfSnapshotProvider | None = (
+            provider if supports_etfs(provider) else None  # type: ignore[assignment]
         )
-        self._etf_provider: EtfSnapshotProvider | None = provider if has_etfs else None  # type: ignore[assignment]
 
     async def sync(
         self,
@@ -205,45 +204,73 @@ class MarketSnapshotSyncService:
         the stock coverage says traded are asked for, so holidays cost nothing.
         """
         provider = self._etf_provider
-        if provider is None or in_session(now):
+        if provider is None:
             return 0, 0
-        local_now = now.astimezone(TAIPEI)
-        first = max(end - timedelta(days=ETF_BACKFILL_WINDOW_DAYS), date.min)
-        days = [
-            first + timedelta(days=offset)
-            for offset in range((end - first).days + 1)
-            if is_trading_day(first + timedelta(days=offset))
-            and first + timedelta(days=offset) <= local_now.date()
-        ]
-        # Today's report is not out before the evening publication window.
-        if days and days[-1] == local_now.date() and local_now.time() < time(15, 0):
-            days.pop()
-        if not days:
-            return 0, 0
-        periods = [day.isoformat() for day in days]
-        coverage = await self.repository.list_fetch_coverage(
-            self.source, ETF_DAY_DATASET, self.market, periods
-        )
-        stock_coverage = await self.repository.list_fetch_coverage(
-            self.source, MARKET_STOCK_DATASET, self.market, periods
+        days = await pending_etf_days(
+            self.repository, source=self.source, market=self.market, end=end, now=now
         )
         requests = rows = 0
-        for day in sorted(days, reverse=True):
-            if requests >= ETF_BACKFILL_DAYS:
-                break
-            entry = coverage.get(day.isoformat())
-            if entry is not None and (
-                entry.status == "ok" or now - entry.fetched_at < EMPTY_RETRY_AFTER
-            ):
-                continue
-            stocks = stock_coverage.get(day.isoformat())
-            if stocks is None or stocks.status != "ok":
-                continue  # not stored as a trading day (yet): the stock loop owns it
+        for day in days[:ETF_BACKFILL_DAYS]:
             requests += 1
             rows += await self._store_etfs(day, await provider.fetch_market_etf_day(day))
         if requests:
             logger.info("%s ETF backfill: %s day(s), %s rows", self.market, requests, rows)
         return requests, rows
+
+
+def supports_etfs(provider: object) -> bool:
+    """Whether a market sync with ``provider`` stores ETF rows (the real exchange providers do)."""
+    return hasattr(provider, "fetch_market_day_rows") and hasattr(provider, "fetch_market_etf_day")
+
+
+async def pending_etf_days(
+    repository: MarketSnapshotRepository,
+    *,
+    source: str,
+    market: MarketCode,
+    end: date,
+    now: datetime,
+) -> list[date]:
+    """Days the ETF backfill still has to ask for, newest first (it takes the first
+    ``ETF_BACKFILL_DAYS`` per run).
+
+    Trading days of the 3-week window ending at ``end`` (today only once its report is
+    out, from 15:00 Taipei) whose stock rows are stored (stock coverage ``ok``) and whose
+    ``etf_day`` coverage is missing, or ``empty`` and older than ``EMPTY_RETRY_AFTER``.
+    Nothing during the trading session. Coverage reads only, no exchange request.
+    """
+    if in_session(now):
+        return []
+    local_now = now.astimezone(TAIPEI)
+    first = max(end - timedelta(days=ETF_BACKFILL_WINDOW_DAYS), date.min)
+    days = [
+        first + timedelta(days=offset)
+        for offset in range((end - first).days + 1)
+        if is_trading_day(first + timedelta(days=offset))
+        and first + timedelta(days=offset) <= local_now.date()
+    ]
+    # Today's report is not out before the evening publication window.
+    if days and days[-1] == local_now.date() and local_now.time() < time(15, 0):
+        days.pop()
+    if not days:
+        return []
+    periods = [day.isoformat() for day in days]
+    coverage = await repository.list_fetch_coverage(source, ETF_DAY_DATASET, market, periods)
+    stock_coverage = await repository.list_fetch_coverage(
+        source, MARKET_STOCK_DATASET, market, periods
+    )
+    pending: list[date] = []
+    for day in sorted(days, reverse=True):
+        entry = coverage.get(day.isoformat())
+        if entry is not None and (
+            entry.status == "ok" or now - entry.fetched_at < EMPTY_RETRY_AFTER
+        ):
+            continue
+        stocks = stock_coverage.get(day.isoformat())
+        if stocks is None or stocks.status != "ok":
+            continue  # not stored as a trading day (yet): the stock loop owns it
+        pending.append(day)
+    return pending
 
 
 async def pending_snapshot_days(

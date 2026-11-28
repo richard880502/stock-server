@@ -7,7 +7,8 @@ touches the network.
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+import logging
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,19 +28,22 @@ from paper_support import (
     stock_row,
 )
 
+from quant_signal.application.data_sync import EMPTY_RETRY_AFTER
 from quant_signal.application.market_sync import (
     ETF_BACKFILL_DAYS,
     ETF_DAY_DATASET,
     MARKET_STOCK_DATASET,
     MarketSnapshotSyncService,
+    pending_etf_days,
 )
 from quant_signal.application.paper_jobs import PaperJobs
 from quant_signal.application.paper_market import load_market, past_references
 from quant_signal.application.paper_trading import PaperService, paper_rules
 from quant_signal.application.services import InstrumentSearchService
 from quant_signal.application.stocks import StockNotFound, StockOverviewService
+from quant_signal.application.sync_jobs import MARKET_SOURCES, enqueue_market_repairs
 from quant_signal.domain.etf import EtfDay, is_etf_code, is_etf_symbol
-from quant_signal.domain.models import MarketStockDay
+from quant_signal.domain.models import FetchCoverage, MarketStockDay, SyncJobKind
 from quant_signal.domain.paper import AccountCreate, OrderRequest
 from quant_signal.domain.tw_trading import (
     BOND_ETF_TAX_EXEMPT_THROUGH,
@@ -191,8 +195,11 @@ def _etf(symbol: str, day: date, close: float = 30.0) -> EtfDay:
 class EtfProvider:
     """Stock + ETF provider double: trades every weekday except ``holidays``."""
 
-    def __init__(self, holidays: set[date] | None = None) -> None:
+    def __init__(
+        self, holidays: set[date] | None = None, etf_gaps: set[date] | None = None
+    ) -> None:
         self.holidays = holidays or set()
+        self.etf_gaps = etf_gaps or set()  # trading days whose ETF report comes back empty
         self.full: list[date] = []
         self.etf_only: list[date] = []
 
@@ -216,7 +223,9 @@ class EtfProvider:
         return await self._etfs(day)
 
     async def _etfs(self, day: date):
-        return [_etf("0050.TW", day), _etf("00679B.TWO", day)] if self._trades(day) else []
+        if not self._trades(day) or day in self.etf_gaps:
+            return []
+        return [_etf("0050.TW", day), _etf("00679B.TWO", day)]
 
 
 def _service(repo, provider, now: dict):
@@ -308,6 +317,150 @@ async def test_backfill_skips_holidays_and_never_runs_in_session() -> None:
     now["value"] = SAT_EVENING
     await _service(repo, provider, now).sync(start=date(2026, 11, 23), end=DAY)
     assert holiday not in provider.etf_only and len(provider.etf_only) == 4
+
+
+async def test_pending_etf_days_keeps_the_backfill_selection() -> None:
+    """Regression for the extracted selection: same days, same order, same exclusions."""
+    holiday, today = date(2026, 11, 25), DAY
+    now = {"value": datetime(2026, 11, 26, 9, 0, tzinfo=UTC)}  # Thu 17:00 Taipei
+    repo = MemoryQuantRepository()
+    await _service(repo, FakeStockOnly(), now).sync(start=date(2026, 11, 16), end=today)
+    repo.fetch_coverage[("twse_official", MARKET_STOCK_DATASET, "TW", holiday.isoformat())] = (
+        repo.fetch_coverage[("twse_official", MARKET_STOCK_DATASET, "TW", "2026-11-24")].model_copy(
+            update={"period": holiday.isoformat(), "status": "empty", "row_count": 0}
+        )
+    )
+    now["value"] = datetime(2026, 11, 27, 6, 0, tzinfo=UTC)  # Fri 14:00 Taipei, after the close
+
+    def etf_cov(day: str, status: str, fetched: datetime) -> None:
+        repo.fetch_coverage[("twse_official", ETF_DAY_DATASET, "TW", day)] = FetchCoverage(
+            source="twse_official",
+            dataset=ETF_DAY_DATASET,
+            symbol="TW",
+            period=day,
+            status=status,  # type: ignore[arg-type]
+            row_count=2 if status == "ok" else 0,
+            fetched_at=fetched,
+        )
+
+    etf_cov("2026-11-26", "ok", now["value"] - timedelta(days=1))
+    etf_cov("2026-11-24", "empty", now["value"] - timedelta(hours=1))  # too recent
+    etf_cov("2026-11-23", "empty", now["value"] - EMPTY_RETRY_AFTER)  # due again
+    expected = [date(2026, 11, d) for d in (23, 20, 19, 18, 17, 16)]
+    # today: not before 15:00; 26: ok; 25: no stock rows; 24: retried too soon;
+    # before the 16th: no stock coverage, the stock loop owns those days.
+    pending = await pending_etf_days(
+        repo, source="twse_official", market="TW", end=today, now=now["value"]
+    )
+    assert pending == expected
+
+    provider = EtfProvider(holidays={holiday})
+    await _service(repo, provider, now)._backfill_etfs(end=today, now=now["value"])
+    assert provider.etf_only == expected
+    in_session = datetime(2026, 11, 27, 2, 0, tzinfo=UTC)  # 10:00 Taipei
+    assert (
+        await pending_etf_days(repo, source="twse_official", market="TW", end=today, now=in_session)
+        == []
+    )
+
+
+async def _store_legacy_stock_days(repo: MemoryQuantRepository) -> None:
+    """Both markets: four weeks of stock rows, no ETF rows (a database from before ETFs)."""
+    friday_night = {"value": datetime(2026, 11, 27, 14, 0, tzinfo=UTC)}  # 22:00 Taipei
+    for market, source in MARKET_SOURCES.items():
+        await MarketSnapshotSyncService(
+            repo, FakeStockOnly(), market=market, source=source, clock=lambda: friday_night["value"]
+        ).sync(start=date(2026, 11, 2), end=DAY)
+
+
+def _market_services(repo, providers: dict, now: dict) -> dict:
+    return {
+        market: MarketSnapshotSyncService(
+            repo, providers[market], market=market, source=source, clock=lambda: now["value"]
+        )
+        for market, source in MARKET_SOURCES.items()
+    }
+
+
+async def test_idle_repair_check_queues_both_markets_for_a_first_etf_fill(caplog) -> None:
+    repo = MemoryQuantRepository()
+    await _store_legacy_stock_days(repo)
+    providers = {"TW": EtfProvider(), "TWO": EtfProvider()}
+    with caplog.at_level(logging.INFO, logger="quant_signal.application.sync_jobs"):
+        queued = await enqueue_market_repairs(
+            repo, now=SAT_EVENING, lookback_days=30, providers=providers
+        )
+    assert queued == ["TW", "TWO"]
+    jobs = sorted(j.symbol for j in repo.sync_jobs.values() if j.kind is SyncJobKind.MARKET)
+    assert jobs == ["TW", "TWO"]
+    etf_lines = [r for r in caplog.records if "without ETF rows" in r.getMessage()]
+    assert len(etf_lines) == 2 and all(r.levelno == logging.INFO for r in etf_lines)
+    assert not [r for r in caplog.records if "stored empty" in r.getMessage()]
+    # nothing was asked of the exchanges
+    assert all(p.etf_only == [] and p.full == [] for p in providers.values())
+
+
+async def test_no_etf_repair_without_an_etf_provider() -> None:
+    repo = MemoryQuantRepository()
+    await _store_legacy_stock_days(repo)
+    assert await enqueue_market_repairs(repo, now=SAT_EVENING, lookback_days=30) == []
+    stock_only = {"TW": FakeStockOnly(), "TWO": FakeStockOnly()}
+    assert (
+        await enqueue_market_repairs(repo, now=SAT_EVENING, lookback_days=30, providers=stock_only)
+        == []
+    )
+    assert repo.sync_jobs == {}
+
+
+async def test_repeated_idle_checks_stop_once_the_etf_backfill_is_done() -> None:
+    repo, now = MemoryQuantRepository(), {"value": SAT_EVENING}
+    await _store_legacy_stock_days(repo)
+    providers = {"TW": EtfProvider(), "TWO": EtfProvider()}
+    services = _market_services(repo, providers, now)
+    runs = 0
+    while queued := await enqueue_market_repairs(
+        repo, now=now["value"], lookback_days=30, providers=providers
+    ):
+        runs += 1
+        assert runs <= 5, "the idle check must not loop"
+        for market in queued:  # what the queued MARKET job does
+            await services[market].sync(start=date(2026, 11, 2), end=now["value"].date())
+        repo.sync_jobs.clear()
+        now["value"] += timedelta(minutes=1)
+    assert runs == 2  # 15 trading days in the window: 10 + 5
+    for provider in providers.values():
+        assert provider.full == [DAY]  # Friday, fetched on the day itself, is refetched once
+        assert len(provider.etf_only) == 14 and DAY not in provider.etf_only
+    trading = {d for _, d in repo.etf_days}
+    assert len(trading) == 15 and min(trading) == date(2026, 11, 9)
+
+
+async def test_an_etf_day_that_returned_nothing_waits_before_it_is_queued_again() -> None:
+    gap = date(2026, 11, 20)
+    repo, now = MemoryQuantRepository(), {"value": SAT_EVENING}
+    await _store_legacy_stock_days(repo)
+    providers = {"TW": EtfProvider(etf_gaps={gap}), "TWO": EtfProvider()}
+    services = _market_services(repo, providers, now)
+    while queued := await enqueue_market_repairs(
+        repo, now=now["value"], lookback_days=30, providers=providers
+    ):
+        for market in queued:
+            await services[market].sync(start=date(2026, 11, 2), end=now["value"].date())
+        repo.sync_jobs.clear()
+        now["value"] += timedelta(minutes=1)
+    entry = repo.fetch_coverage[("twse_official", ETF_DAY_DATASET, "TW", gap.isoformat())]
+    assert entry.status == "empty"
+    fetched = entry.fetched_at
+    for later in (timedelta(minutes=30), timedelta(hours=3), EMPTY_RETRY_AFTER / 2):
+        assert (
+            await enqueue_market_repairs(
+                repo, now=fetched + later, lookback_days=30, providers=providers
+            )
+            == []
+        )
+    assert await enqueue_market_repairs(
+        repo, now=fetched + EMPTY_RETRY_AFTER, lookback_days=30, providers=providers
+    ) == ["TW"]
 
 
 async def test_available_at_follows_the_publication_time_convention() -> None:
