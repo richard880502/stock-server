@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { AsOfControl } from "@/components/as-of-control";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorBanner } from "@/components/error-banner";
 import { AlertIcon, ArrowDownIcon, ArrowUpIcon, InfoIcon, SearchIcon } from "@/components/icons";
@@ -35,8 +35,7 @@ import { useScreenerParams } from "./use-screener-params";
 import { useScreenerResults } from "./use-screener-results";
 
 export function ScreenerView() {
-  const { query, refresh } = useDashboard();
-  const router = useRouter();
+  const { query } = useDashboard();
   const { state, update } = useScreenerParams();
   const { meta, error: metaError, retry: retryMeta } = useScreenerMeta();
   const asOf = useCommittedAsOf(query.asOf);
@@ -56,16 +55,6 @@ export function ScreenerView() {
       update((current) => change(current, resolveEffective(current, meta))),
     [update, meta],
   );
-
-  const open = useCallback(
-    (symbol: string, to: string) => {
-      refresh({ symbol });
-      router.push(to);
-    },
-    [refresh, router],
-  );
-  const onSignal = useCallback((symbol: string) => open(symbol, "/"), [open]);
-  const onBacktest = useCallback((symbol: string) => open(symbol, "/backtest"), [open]);
 
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const onToggle = useCallback((symbol: string) => {
@@ -108,7 +97,10 @@ export function ScreenerView() {
   return (
     <div className="sc-page">
       <div className="view-heading">
-        <h1>選股</h1>
+        <div className="view-heading-row">
+          <h1>選股</h1>
+          <AsOfControl />
+        </div>
         <p>
           <span className="sc-sub-long">從全市場約 2,000 檔裡，用量化因子與資金流向找出值得進一步研究的股票。排名是計算結果，不是買賣建議。</span>
           <span className="sc-sub-short">用量化因子與資金流向篩出值得研究的股票。排名不是買賣建議。</span>
@@ -204,9 +196,9 @@ export function ScreenerView() {
         ) : entries.length > 0 && meta ? (
           <>
             {phone ? (
-              <ResultCards entries={entries} meta={meta} columns={columns} sort={effective.sort} order={effective.order} expanded={expanded} refreshing={refreshing} onToggle={onToggle} onSort={onSort} onSignal={onSignal} onBacktest={onBacktest} />
+              <ResultCards entries={entries} meta={meta} columns={columns} sort={effective.sort} order={effective.order} expanded={expanded} refreshing={refreshing} onToggle={onToggle} onSort={onSort} />
             ) : (
-              <ResultsTable entries={entries} meta={meta} columns={columns} sort={effective.sort} order={effective.order} expanded={expanded} refreshing={refreshing} onToggle={onToggle} onSort={onSort} onSignal={onSignal} onBacktest={onBacktest} />
+              <ResultsTable entries={entries} meta={meta} columns={columns} sort={effective.sort} order={effective.order} expanded={expanded} refreshing={refreshing} onToggle={onToggle} onSort={onSort} />
             )}
             <div className="sc-more">
               {results.moreError && (

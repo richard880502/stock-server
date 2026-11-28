@@ -31,7 +31,7 @@ export function BacktestResult() {
     <Card
       as="div"
       title="研究畫布"
-      sub={job ? `${query.symbol} · 任務 ${job.id.slice(0, 8)}` : undefined}
+      sub={job ? `任務 ${job.id.slice(0, 8)}` : undefined}
       aside={job && <JobStatusChip status={job.status} />}
       className="result-card"
     >

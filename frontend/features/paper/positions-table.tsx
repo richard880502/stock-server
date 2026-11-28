@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { Card } from "@/components/card";
 import type { OrderSide, Position } from "@/lib/api/paper";
 import { formatPrice } from "@/lib/format";
+import { stockHref } from "@/lib/stock-routes";
 import {
   formatMoney,
   formatPercent,
@@ -18,13 +20,11 @@ export function PositionsTable({
   loading,
   stale,
   onTrade,
-  onOpenSignal,
 }: {
   positions: Position[] | null;
   loading: boolean;
   stale: boolean;
   onTrade: (position: Position, side: OrderSide) => void;
-  onOpenSignal: (symbol: string) => void;
 }) {
   return (
     <Card title="持股" sub={positions ? `${positions.length} 檔` : undefined} className="paper-positions">
@@ -59,15 +59,10 @@ export function PositionsTable({
               {positions.map((position) => (
                 <tr key={position.symbol}>
                   <th scope="row" className="paper-stock-cell">
-                    <button
-                      type="button"
-                      className="paper-link"
-                      onClick={() => onOpenSignal(position.symbol)}
-                      title="查看個股訊號"
-                    >
+                    <Link href={stockHref(position.symbol)} className="paper-link" title="開啟個股頁">
                       <span className="paper-stock-name">{position.name}</span>
                       <span className="paper-stock-code num">{code(position.symbol)}</span>
-                    </button>
+                    </Link>
                   </th>
                   <td className="num">
                     {position.lots}

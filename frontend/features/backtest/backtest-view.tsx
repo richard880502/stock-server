@@ -1,13 +1,17 @@
 "use client";
 
 import { useDashboard } from "@/lib/dashboard-context";
+import { useSymbolParam } from "@/lib/use-symbol-param";
 import { useScrollIntoViewOnStart } from "@/lib/use-scroll-into-view";
+import { AsOfControl } from "@/components/as-of-control";
+import { TargetLine } from "@/components/target-line";
 import { ChartIcon, CheckIcon, FlaskIcon } from "@/components/icons";
 import { BacktestForm } from "./backtest-form";
 import { BacktestResult } from "./backtest-result";
 
 export function BacktestView() {
   const { backtest } = useDashboard();
+  useSymbolParam();
   useScrollIntoViewOnStart(backtest.loading, "backtest-result");
   return (
     <>
@@ -16,6 +20,9 @@ export function BacktestView() {
           <p className="lab-eyebrow"><FlaskIcon size={16} /> Quant Signal Lab</p>
           <h1 id="lab-title">你的股票回測實驗室</h1>
           <p>組合交易條件、納入真實成本，並在互動圖表上檢查策略的每一段表現。</p>
+          <TargetLine>
+            <AsOfControl withBenchmark />
+          </TargetLine>
         </div>
         <div className="lab-principles" aria-label="回測原則">
           <span><CheckIcon size={15} /> Point-in-time</span>

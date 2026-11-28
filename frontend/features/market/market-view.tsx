@@ -1,8 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { BackfillProgress, BackfillProgressSkeleton } from "@/components/backfill-progress";
+import { AsOfControl } from "@/components/as-of-control";
 import { ErrorBanner } from "@/components/error-banner";
 import { getMarketFlows, getMarketRankings } from "@/lib/api/endpoints";
 import { needsAttention } from "@/lib/backfill";
@@ -23,8 +23,7 @@ import { useMarketResource } from "./use-market-resource";
 const LIMIT = 20;
 
 export function MarketView() {
-  const { query, refresh } = useDashboard();
-  const router = useRouter();
+  const { query } = useDashboard();
   const { params, update } = useMarketParams();
   const asOf = useCommittedAsOf(query.asOf);
   const info = METRICS[params.metric];
@@ -44,14 +43,6 @@ export function MarketView() {
     getMarketFlows({ market: params.market, days: params.range, asOf }, { signal }),
   );
 
-  const pick = useCallback(
-    (symbol: string) => {
-      refresh({ symbol });
-      router.push("/");
-    },
-    [refresh, router],
-  );
-
   const lead = top.data && top.data.metric === params.metric ? top.data : null;
   const backfill = Boolean(
     lead?.backfill_pending || bottom.data?.backfill_pending || flows.data?.backfill_pending,
@@ -69,7 +60,10 @@ export function MarketView() {
   return (
     <>
       <div className="view-heading">
-        <h1>市場</h1>
+        <div className="view-heading-row">
+          <h1>市場</h1>
+          <AsOfControl />
+        </div>
         <p>看資金流向哪裡：法人買賣超、成交與信用排行，再對照整體資金趨勢。</p>
       </div>
 
@@ -115,7 +109,6 @@ export function MarketView() {
           loading={top.loading}
           stale={top.stale}
           failed={top.error !== null}
-          onPick={pick}
         />
         {info.bottom && (
           <RankingBoard
@@ -127,8 +120,7 @@ export function MarketView() {
             loading={bottom.loading}
             stale={bottom.stale}
             failed={bottom.error !== null}
-            onPick={pick}
-          />
+            />
         )}
       </div>
 
@@ -145,7 +137,7 @@ export function MarketView() {
 
       <DerivativesSection asOf={asOf} />
 
-      <SectorSection asOf={asOf} onPick={pick} />
+      <SectorSection asOf={asOf} />
 
       <MarketDataFooter refreshKey={flows.data} />
     </>

@@ -59,8 +59,12 @@ describe("account header", () => {
 
 describe("positions table", () => {
   const markup = html(
-    <PositionsTable positions={DETAIL_MAIN.positions} loading={false} stale={false} onTrade={noop} onOpenSignal={noop} />,
+    <PositionsTable positions={DETAIL_MAIN.positions} loading={false} stale={false} onTrade={noop} />,
   );
+
+  it("links each holding to its stock page", () => {
+    expect(markup).toMatch(/<a [^>]*href="\/stock\/[0-9A-Z.]+"[^>]*class="paper-link"|<a [^>]*class="paper-link"[^>]*href="\/stock\/[0-9A-Z.]+"/);
+  });
 
   it("is a real table with the contract's columns", () => {
     expect(markup).toContain("<table");
@@ -77,8 +81,8 @@ describe("positions table", () => {
   });
 
   it("has an empty state and a skeleton state", () => {
-    expect(html(<PositionsTable positions={[]} loading={false} stale={false} onTrade={noop} onOpenSignal={noop} />)).toContain("還沒有持股");
-    expect(html(<PositionsTable positions={null} loading stale={false} onTrade={noop} onOpenSignal={noop} />)).toContain("skeleton");
+    expect(html(<PositionsTable positions={[]} loading={false} stale={false} onTrade={noop} />)).toContain("還沒有持股");
+    expect(html(<PositionsTable positions={null} loading stale={false} onTrade={noop} />)).toContain("skeleton");
   });
 });
 

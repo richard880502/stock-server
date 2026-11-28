@@ -35,7 +35,6 @@ export function BacktestForm() {
     <Card
       as="div"
       title="策略控制台"
-      sub={`${query.symbol} · 截止 ${query.asOf}`}
       className="backtest-form-card"
     >
       <form className="form-stack" onSubmit={run}>
