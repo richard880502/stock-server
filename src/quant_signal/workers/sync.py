@@ -45,7 +45,9 @@ _screener_settled: dict[date, tuple[tuple, bool]] = {}
 # outside the trading session only: each is a whole-market compute.
 SCREENER_GAPS_PER_UPKEEP = 2
 # How often an idle worker looks for market days stored empty while the other exchange
-# traded (see ``enqueue_market_repairs``); outside the trading session only.
+# traded, or recent days still without ETF rows (see ``enqueue_market_repairs``); outside
+# the trading session only. A completed market sync makes the next idle tick check at once,
+# so a first ETF fill (``ETF_BACKFILL_DAYS`` per run) takes consecutive jobs, not 30 min each.
 MARKET_REPAIR_EVERY = timedelta(minutes=30)
 _market_repair_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 
@@ -71,6 +73,10 @@ async def _after_market_sync(repository: QuantRepository) -> None:
     # Flow and credit reports arrive after the quotes, so every market sync rebuilds the
     # newest date.
     await _refresh_screener(repository, recompute_latest=True)
+    # Re-check right away for what is still left (an ETF backfill bigger than one run).
+    # Terminates: every run records the days it asked for, ``ok`` or ``empty`` (which then
+    # waits ``EMPTY_RETRY_AFTER``), and a failed job never reaches this hook.
+    _market_repair_attempt["at"] = datetime.min.replace(tzinfo=UTC)
 
 
 _holders_attempts: dict[str, datetime] = {}
@@ -273,12 +279,16 @@ async def tick(
             raise job_error
         quiet = not trading_session_open(now)
         if outcome is None and quiet and now - _market_repair_attempt["at"] >= MARKET_REPAIR_EVERY:
-            # Idle: a day stored empty while the other exchange traded was a failed fetch;
-            # queue its market so the next tick refetches it (no exchange request here).
+            # Idle: a day stored empty while the other exchange traded was a failed fetch,
+            # and recent days may lack ETF rows; queue the market so the next tick fetches
+            # them (no exchange request here).
             _market_repair_attempt["at"] = now
             try:
                 await enqueue_market_repairs(
-                    repository, now=now, lookback_days=settings.sync_market_lookback_days
+                    repository,
+                    now=now,
+                    lookback_days=settings.sync_market_lookback_days,
+                    providers={"TW": twse, "TWO": tpex},
                 )
             except Exception:
                 logger.exception("market repair check failed")

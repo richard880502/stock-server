@@ -9,7 +9,7 @@ throttle is shared by every job.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 
 from quant_signal.application.data_sync import (
@@ -23,7 +23,9 @@ from quant_signal.application.market_observations import MarketObservationSyncSe
 from quant_signal.application.market_sync import (
     MarketCode,
     MarketSnapshotSyncService,
+    pending_etf_days,
     pending_snapshot_days,
+    supports_etfs,
 )
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import FetchCoverage, SyncJob, SyncJobKind
@@ -190,13 +192,23 @@ async def ensure_market_snapshots(repository: QuantRepository, *, lookback_days:
 
 
 async def enqueue_market_repairs(
-    repository: QuantRepository, *, now: datetime, lookback_days: int
+    repository: QuantRepository,
+    *,
+    now: datetime,
+    lookback_days: int,
+    providers: Mapping[MarketCode, object] | None = None,
 ) -> list[str]:
-    """Queue a MARKET job for each market with a suspicious ``empty`` day in its window.
+    """Queue a MARKET job for each market with something only that job can heal.
 
-    Such a day (the other exchange traded, this one stored nothing) is otherwise only
-    retried by the next daily refresh; this lets the worker heal it on its own. Returns
-    the markets queued. Cheap: two coverage reads per market, no exchange request.
+    - A suspicious ``empty`` day in its window (the other exchange traded, this one stored
+      nothing), otherwise only retried by the next daily refresh.
+    - Recent trading days still missing their ETF rows (``pending_etf_days``): the ETF
+      backfill runs only inside a MARKET job, so after a weekend deploy or a missed daily
+      refresh ``etf_daily`` would otherwise stay empty until the next weekday 15:30.
+      Checked only for markets whose ``providers`` entry supplies ETF rows, so a queued
+      job always has something to fetch.
+
+    Returns the markets queued. Cheap: coverage reads only, no exchange request.
     """
     today = now.astimezone(TAIPEI).date()
     start = today - timedelta(days=lookback_days)
@@ -207,27 +219,50 @@ async def enqueue_market_repairs(
     ]
     queued: list[str] = []
     for market in MARKET_CODES:
+        source = MARKET_SOURCES[market]
         repairs = await pending_snapshot_days(
             repository,  # type: ignore[arg-type]
-            source=MARKET_SOURCES[market],
+            source=source,
             market=market,
             sibling=market_sibling(market),
             weekdays=weekdays,
             now=now,
             repairs_only=True,
         )
-        if not repairs:
+        provider = (providers or {}).get(market)
+        etf_days = (
+            await pending_etf_days(
+                repository,  # type: ignore[arg-type]
+                source=source,
+                market=market,
+                end=today,  # what the queued job's backfill will use
+                now=now,
+            )
+            if provider is not None and supports_etfs(provider)
+            else []
+        )
+        if not repairs and not etf_days:
             continue
         _, created = await repository.enqueue_sync_job(
             SyncJobKind.MARKET, market, lookback_days=lookback_days
         )
-        logger.warning(
-            "%s market: %s day(s) stored empty while the other exchange traded (%s)%s",
-            market,
-            len(repairs),
-            ", ".join(day.isoformat() for day in repairs[:12]),
-            "; repair job queued" if created else "; a market job is already queued",
-        )
+        outcome = "; repair job queued" if created else "; a market job is already queued"
+        if repairs:
+            logger.warning(
+                "%s market: %s day(s) stored empty while the other exchange traded (%s)%s",
+                market,
+                len(repairs),
+                ", ".join(day.isoformat() for day in repairs[:12]),
+                outcome,
+            )
+        if etf_days:
+            logger.info(
+                "%s market: %s trading day(s) still without ETF rows (%s)%s",
+                market,
+                len(etf_days),
+                ", ".join(day.isoformat() for day in etf_days[:12]),
+                outcome,
+            )
         queued.append(market)
     return queued
 
