@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from quant_signal.adapters.rest.derivatives import install_derivatives
 from quant_signal.adapters.rest.fundamentals import install_fundamentals
+from quant_signal.adapters.rest.paper import install_paper
 from quant_signal.adapters.rest.quotes import install_quotes
 from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
 from quant_signal.adapters.rest.short_data import install_short_data
@@ -228,7 +229,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origin_list(),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
         # Lets the dashboard read the sync-pending retry delay cross-origin.
         expose_headers=["Retry-After"],
@@ -237,6 +238,7 @@ def create_app() -> FastAPI:
     install_quotes(application, settings)
     install_fundamentals(application)
     install_derivatives(application, get_repository)
+    install_paper(application, settings, get_repository)
 
     @application.exception_handler(DataSyncPending)
     async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:

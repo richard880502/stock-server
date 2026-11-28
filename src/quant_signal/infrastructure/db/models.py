@@ -782,4 +782,6 @@ class QuarterlyFinancialRow(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-from quant_signal.infrastructure.db import derivatives_models  # noqa: E402,F401
+# Paper-trading tables live in their own module; importing it registers them on ``Base``
+# (alembic and the schema-drift test only import this module).
+from quant_signal.infrastructure.db import derivatives_models, paper_models  # noqa: E402,F401,I001

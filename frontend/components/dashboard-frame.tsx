@@ -20,8 +20,9 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
   const onSignalRoute = path === "";
   // The watchlist page has its own "add a stock" search; the analysis query bar does not apply.
   const onWatchlistRoute = path === "/watchlist";
-  // The screener always reads the latest data (its results header names the date), so it has no bar either.
-  const hideQueryBar = onWatchlistRoute || path === "/screener";
+  // The screener always reads the latest data (its results header names the date), and the
+  // paper-trading page has its own stock picker in the order ticket, so neither has a bar.
+  const hideQueryBar = onWatchlistRoute || path === "/screener" || path === "/paper";
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   useCommandPaletteShortcut(openPalette);

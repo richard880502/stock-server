@@ -186,6 +186,14 @@ class Settings(BaseSettings):
     # fetch_coverage next tick) so a hanging exchange cannot delay the price sync.
     side_feed_budget_seconds: float = Field(default=90.0, gt=0, le=3600)
 
+    # Paper trading (模擬交易): simulation only, never places a real order.
+    paper_trading_enabled: bool = True
+    # Seconds between matcher passes over working orders during the session.
+    paper_match_seconds: float = Field(default=3.0, gt=0)
+    # Ticks of slippage on every simulated fill (no order book to walk).
+    paper_slippage_ticks: int = Field(default=1, ge=0, le=5)
+    paper_max_accounts: int = Field(default=3, ge=1, le=20)
+
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 

@@ -747,3 +747,445 @@ async def test_data_version_changes_only_when_the_newest_rows_change(sessions) -
         )
         await repo.upsert_market_stock_days([later])
         assert await repo.market_data_version() != added  # a late update to a row counts
+
+
+
+
+async def test_paper_fill_cannot_be_booked_twice(sessions) -> None:
+    """Row lock + status check + unique constraints: only one of two bookings wins."""
+    from decimal import Decimal
+
+    from quant_signal.application.paper_jobs import ledger_entries
+    from quant_signal.domain.paper import PaperAccountRecord, PaperFillRecord, PaperOrderRecord
+
+    now = datetime.now(UTC)
+    user_id = uuid4()
+    async with sessions() as session:
+        from quant_signal.infrastructure.db.models import UserRow
+
+        session.add(UserRow(id=user_id, google_sub=f"zz-{uuid4().hex}", email="zz@example.com"))
+        await session.commit()
+        repo = PostgresQuantRepository(session)
+        account = PaperAccountRecord(
+            user_id=user_id, name="t", initial_cash=1_000_000, created_at=now
+        )
+        assert await repo.create_paper_account(account, max_accounts=3) == "created"
+        order = PaperOrderRecord(
+            account_id=account.id, symbol="ZZ1.TW", name="x", side="buy", order_type="market",
+            lots=1, session_date=now.date(), created_at=now, updated_at=now, reserved_cash=100_000,
+        )
+        await repo.add_paper_order(order)
+
+    def fill() -> PaperFillRecord:
+        return PaperFillRecord(
+            order_id=order.id, account_id=account.id, symbol="ZZ1.TW", side="buy", shares=1000,
+            price=Decimal("100"), amount=100_000, commission=142, tax=0,
+            filled_at=now, price_source="tick", price_time=now,
+        )
+
+    async def attempt() -> bool:
+        record = fill()
+        async with sessions() as session:
+            return await PostgresQuantRepository(session).apply_paper_fill(
+                record, ledger_entries(record, now), now=now
+            )
+
+    results = await asyncio.gather(attempt(), attempt(), attempt())
+    assert sorted(results) == [False, False, True]
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert len(await repo.list_paper_fills(account.id, epoch=0)) == 1
+        assert await repo.paper_cash(account.id, 0) == 1_000_000 - 100_142
+        stored = await repo.get_paper_order(order.id)
+        assert stored.status == "filled" and stored.reserved_cash == 0
+        # a cancel arriving after the fill is turned away
+        assert await repo.finish_paper_order(order.id, status="cancelled", now=now) is False
+        await session.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        await session.commit()
+
+
+# --- paper trading: races, reserves, epochs (real row locks) -------------------------------
+
+
+async def _paper_account(sessions, *, initial_cash: int = 1_000_000, discount: str = "1.0"):
+    from decimal import Decimal
+
+    from quant_signal.domain.paper import PaperAccountRecord
+    from quant_signal.infrastructure.db.models import UserRow
+
+    now = datetime.now(UTC)
+    user_id = uuid4()
+    async with sessions() as session:
+        session.add(UserRow(id=user_id, google_sub=f"zz-{uuid4().hex}", email="zz@example.com"))
+        await session.commit()
+        account = PaperAccountRecord(
+            user_id=user_id,
+            name="t",
+            initial_cash=initial_cash,
+            commission_discount=Decimal(discount),
+            created_at=now,
+        )
+        assert (
+            await PostgresQuantRepository(session).create_paper_account(account, max_accounts=3)
+            == "created"
+        )
+    return user_id, account
+
+
+async def _working_buy(sessions, account, symbol: str, *, reserve: int = 100_142, amount=100_000):
+    from quant_signal.domain.paper import PaperOrderRecord
+
+    now = datetime.now(UTC)
+    order = PaperOrderRecord(
+        account_id=account.id,
+        epoch=account.epoch,
+        symbol=symbol,
+        name="x",
+        side="buy",
+        order_type="market",
+        lots=1,
+        session_date=now.date(),
+        created_at=now,
+        updated_at=now,
+        reserved_cash=reserve,
+        reserve_amount=amount,
+    )
+    async with sessions() as session:
+        await PostgresQuantRepository(session).add_paper_order(order)
+    return order
+
+
+def _paper_fill(order, account, *, price: str = "100", amount: int = 100_000, fee: int = 142):
+    from decimal import Decimal
+
+    from quant_signal.domain.paper import PaperFillRecord
+
+    now = datetime.now(UTC)
+    return PaperFillRecord(
+        order_id=order.id,
+        account_id=account.id,
+        epoch=order.epoch,
+        symbol=order.symbol,
+        side="buy",
+        shares=1000,
+        price=Decimal(price),
+        amount=amount,
+        commission=fee,
+        tax=0,
+        filled_at=now,
+        price_source="tick",
+        price_time=now,
+    )
+
+
+async def _drop_user(sessions, user_id) -> None:
+    async with sessions() as session:
+        await session.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+        await session.commit()
+
+
+async def test_paper_cancel_racing_a_fill_has_exactly_one_winner(sessions) -> None:
+    from quant_signal.application.paper_jobs import ledger_entries
+
+    user_id, account = await _paper_account(sessions)
+    try:
+        outcomes = set()
+        for _ in range(12):
+            order = await _working_buy(sessions, account, "ZZR1.TW")
+            record = _paper_fill(order, account)
+
+            async def fill(record=record):
+                async with sessions() as session:
+                    try:
+                        return await PostgresQuantRepository(session).apply_paper_fill(
+                            record, ledger_entries(record, record.filled_at), now=record.filled_at
+                        )
+                    except Exception as exc:  # pragma: no cover - would fail the assertions
+                        return exc
+
+            async def cancel(order=order):
+                async with sessions() as session:
+                    return await PostgresQuantRepository(session).finish_paper_order(
+                        order.id, status="cancelled", now=datetime.now(UTC)
+                    )
+
+            filled, cancelled = await asyncio.gather(fill(), cancel())
+            assert filled is not cancelled, (filled, cancelled)  # exactly one wins
+            outcomes.add("filled" if filled else "cancelled")
+            async with sessions() as session:
+                stored = await PostgresQuantRepository(session).get_paper_order(order.id)
+            assert stored.status == ("filled" if filled else "cancelled")
+            assert stored.reserved_cash == 0
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            fills = await repo.list_paper_fills(account.id, epoch=0)
+            ledger = await repo.list_paper_ledger(account.id, 0)
+            assert [e.kind for e in ledger].count("buy") == len(fills)
+            assert await repo.paper_cash(account.id, 0) == 1_000_000 - len(fills) * 100_142
+            assert not await repo.list_working_paper_orders(account.id)
+        assert outcomes  # both outcomes are legal; neither may double book
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_stale_order_reaching_the_matcher_after_a_cancel_books_nothing(
+    sessions,
+) -> None:
+    from decimal import Decimal
+
+    from quant_signal.application.paper_jobs import PaperJobs, TickStats
+    from quant_signal.quant.paper_matching import Match
+
+    user_id, account = await _paper_account(sessions)
+    try:
+        order = await _working_buy(sessions, account, "ZZR2.TW")
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            moment = datetime.now(UTC)
+            assert await repo.finish_paper_order(order.id, status="cancelled", now=moment)
+            stats = TickStats()
+            found = Match(price=Decimal("100"), time=datetime.now(UTC), source="tick")
+            booked = await PaperJobs().book(repo, account, order, found, moment, stats)
+            assert booked is False
+            assert stats.matched == 0
+            assert await repo.list_paper_fills(account.id, epoch=0) == []
+            assert await repo.paper_cash(account.id, 0) == 1_000_000
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_reset_while_orders_are_working(sessions) -> None:
+    from quant_signal.application.paper_jobs import ledger_entries
+
+    user_id, account = await _paper_account(sessions)
+    try:
+        orders = [await _working_buy(sessions, account, "ZZR3.TW") for _ in range(3)]
+        record = _paper_fill(orders[0], account)
+
+        async def fill():
+            async with sessions() as session:
+                return await PostgresQuantRepository(session).apply_paper_fill(
+                    record, ledger_entries(record, record.filled_at), now=record.filled_at
+                )
+
+        async def reset():
+            async with sessions() as session:
+                return await PostgresQuantRepository(session).reset_paper_account(
+                    account.id, now=datetime.now(UTC)
+                )
+
+        filled, fresh = await asyncio.gather(fill(), reset())
+        assert fresh is not None and fresh.epoch == 1
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            assert not await repo.list_working_paper_orders(account.id)
+            stored = [await repo.get_paper_order(o.id) for o in orders]
+            assert all(o.reserved_cash == 0 for o in stored)
+            assert [o.status for o in stored[1:]] == ["cancelled", "cancelled"]
+            assert stored[0].status == ("filled" if filled else "cancelled")
+            # the new epoch starts clean whichever side won
+            assert await repo.paper_cash(account.id, 1) == 1_000_000
+            assert await repo.list_paper_fills(account.id, epoch=1) == []
+            old = await repo.list_paper_fills(account.id, epoch=0)
+            assert len(old) == (1 if filled else 0)
+            assert "ZZR3.TW" not in await repo.list_open_position_symbols()
+        # a fill for an order of the old epoch can never land in the new one
+        late = _paper_fill(orders[1], account)
+        async with sessions() as session:
+            assert not await PostgresQuantRepository(session).apply_paper_fill(
+                late, ledger_entries(late, late.filled_at), now=late.filled_at
+            )
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_fill_cannot_eat_other_orders_reserves(sessions) -> None:
+    from quant_signal.application.paper_jobs import ledger_entries
+    from quant_signal.application.paper_ports import PaperInsufficientCash
+
+    user_id, account = await _paper_account(sessions, initial_cash=210_000)
+    try:
+        a = await _working_buy(sessions, account, "ZZR4.TW")
+        b = await _working_buy(sessions, account, "ZZR4.TW")
+        too_big = _paper_fill(a, account, price="110", amount=110_000, fee=156)
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            with pytest.raises(PaperInsufficientCash):
+                await repo.apply_paper_fill(
+                    too_big, ledger_entries(too_big, too_big.filled_at), now=too_big.filled_at
+                )
+            assert await repo.list_paper_fills(account.id, epoch=0) == []
+            assert (await repo.get_paper_order(a.id)).status == "working"
+            assert (await repo.get_paper_order(b.id)).reserved_cash == 100_142
+        # two fills racing for the same cash: only what fits is booked, never both
+        c = _paper_fill(a, account, price="104", amount=104_000, fee=148)
+        d = _paper_fill(b, account, price="104", amount=104_000, fee=148)
+
+        async def attempt(record):
+            async with sessions() as session:
+                try:
+                    return await PostgresQuantRepository(session).apply_paper_fill(
+                        record, ledger_entries(record, record.filled_at), now=record.filled_at
+                    )
+                except PaperInsufficientCash:
+                    return "insufficient"
+
+        results = await asyncio.gather(attempt(c), attempt(d))
+        assert sorted(map(str, results)) == ["True", "insufficient"] or results == [True, True]
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            cash = await repo.paper_cash(account.id, 0)
+            working = await repo.list_working_paper_orders(account.id)
+            reserved = sum(o.reserved_cash for o in working)
+            assert cash - reserved >= 0  # no booking left the account short of its reserves
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_cash_and_working_are_read_together_and_open_symbols_aggregate(
+    sessions,
+) -> None:
+    from quant_signal.application.paper_jobs import ledger_entries
+
+    user_id, account = await _paper_account(sessions)
+    try:
+        a = await _working_buy(sessions, account, "ZZR5.TW")
+        await _working_buy(sessions, account, "ZZR6.TW")
+        record = _paper_fill(a, account)
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            cash, working = await repo.paper_cash_and_working(account.id, 0)
+            assert cash == 1_000_000 and len(working) == 2
+            assert await repo.apply_paper_fill(
+                record, ledger_entries(record, record.filled_at), now=record.filled_at
+            )
+            cash, working = await repo.paper_cash_and_working(account.id, 0)
+            assert cash == 1_000_000 - 100_142 and [o.symbol for o in working] == ["ZZR6.TW"]
+            assert "ZZR5.TW" in await repo.list_open_position_symbols()
+            assert "ZZR6.TW" not in await repo.list_open_position_symbols()
+            assert await repo.paper_cash_and_working(account.id, 7) == (0, [])
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_snapshots_are_keyed_by_epoch(sessions) -> None:
+    from quant_signal.domain.paper import SnapshotRecord
+
+    user_id, account = await _paper_account(sessions)
+    try:
+        day = date(2026, 11, 27)
+
+        def row(epoch: int, equity: int) -> SnapshotRecord:
+            return SnapshotRecord(
+                account_id=account.id,
+                trading_date=day,
+                epoch=epoch,
+                cash=equity,
+                market_value=0,
+                equity=equity,
+                realized_pnl_cum=0,
+            )
+
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            await repo.upsert_paper_snapshot(row(0, 1_050_000))
+            await repo.upsert_paper_snapshot(row(1, 1_000_000))  # the new epoch, same date
+            await repo.upsert_paper_snapshot(row(0, 1_060_000))  # a restart rewrites its own
+            assert [s.equity for s in await repo.list_paper_snapshots(account.id, epoch=0)] == [
+                1_060_000
+            ]
+            assert [s.equity for s in await repo.list_paper_snapshots(account.id, epoch=1)] == [
+                1_000_000
+            ]
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_discount_change_resizes_reserves_under_the_lock(sessions) -> None:
+    from decimal import Decimal
+
+    user_id, account = await _paper_account(sessions, initial_cash=200_200, discount="0.6")
+    try:
+        await _working_buy(sessions, account, "ZZR7.TW", reserve=100_085)
+        await _working_buy(sessions, account, "ZZR7.TW", reserve=100_085)
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+            assert (
+                await repo.update_paper_account(account.id, commission_discount=Decimal("1.0"))
+                == "insufficient"
+            )
+            assert [o.reserved_cash for o in await repo.list_working_paper_orders(account.id)] == [
+                100_085,
+                100_085,
+            ]
+            assert (await repo.get_paper_account(account.id)).commission_discount == Decimal("0.6")
+            assert (
+                await repo.update_paper_account(account.id, commission_discount=Decimal("0.61"))
+                == "ok"
+            )
+            assert [o.reserved_cash for o in await repo.list_working_paper_orders(account.id)] == [
+                100_086,
+                100_086,
+            ]
+    finally:
+        await _drop_user(sessions, user_id)
+
+
+async def test_paper_service_places_in_the_epoch_current_after_the_lock(sessions) -> None:
+    from decimal import Decimal
+
+    from quant_signal.application.paper_trading import PaperService
+    from quant_signal.domain.paper import OrderRequest
+
+    user_id, account = await _paper_account(sessions)
+    symbol = "9998.TW"
+    now = datetime.now(UTC)
+    try:
+        async with sessions() as session:
+            await PostgresQuantRepository(session).upsert_market_stock_days(
+                [
+                    MarketStockDay(
+                        symbol=symbol,
+                        name="測試",
+                        market="TW",
+                        trading_date=now.date(),
+                        open=100.0,
+                        high=100.0,
+                        low=100.0,
+                        close=100.0,
+                        volume=1,
+                        turnover_value=1.0,
+                        change=0.0,
+                        available_at=now,
+                        source="twse_official",
+                    )
+                ]
+            )
+        async with sessions() as session:
+            repo = PostgresQuantRepository(session)
+
+            async def reset_while_waiting(account_id) -> None:
+                # what happens to a placement queued behind a reset: by the time it gets
+                # the lock, the account is already in the next epoch
+                await session.commit()
+                async with sessions() as other:
+                    await PostgresQuantRepository(other).reset_paper_account(account_id, now=now)
+                await real_lock(account_id)
+
+            real_lock = repo.lock_paper_account
+            repo.lock_paper_account = reset_while_waiting  # type: ignore[method-assign]
+            order = await PaperService(repo, clock=lambda: now).place_order(
+                user_id,
+                account.id,
+                OrderRequest(
+                    symbol=symbol, side="buy", order_type="limit", limit_price=Decimal("99"), lots=1
+                ),
+            )
+            assert (await repo.get_paper_order(order.id)).epoch == 1
+    finally:
+        await _drop_user(sessions, user_id)
+        async with sessions() as session:
+            await session.execute(
+                text("DELETE FROM market_stock_daily WHERE symbol = :s"), {"s": symbol}
+            )
+            await session.commit()
