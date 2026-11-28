@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { AccountDetail } from "@/lib/api/paper";
+import PARITY from "./live-parity.fixture.json";
 import {
   ACCOUNT_MAIN,
   DETAIL_AFTER_DEPOSIT,
@@ -209,6 +211,41 @@ describe("applyLivePrices with transfers", () => {
   });
 });
 
+describe("applyLivePrices matches the server in every phase of the day", () => {
+  // Written by tests/test_paper_transfer_windows.py from the real service: the server's detail at
+  // one price, and its figures at another. Re-pricing the first must land on the second.
+  type Case = { detail: AccountDetail; price: number; expected: Record<string, number> };
+  const cases = PARITY as unknown as Record<string, Case>;
+
+  it.each(["pre_open", "in_session", "after_close", "weekend"])("%s", (phase) => {
+    const { detail, price, expected } = cases[phase];
+    // the stream's quote is what triggers re-pricing; the fixture's position is not delayed
+    expect(detail.positions.every((p) => !p.price_delayed)).toBe(true);
+    const live = applyLivePrices(detail, new Map([[detail.positions[0].symbol, { price, change_pct: null }]]));
+    expect(live.equity).toBe(expected.equity);
+    expect(live.total_pnl).toBe(expected.total_pnl);
+    expect(live.day_pnl).toBe(expected.day_pnl);
+    // the server rounds to 0.01 both before and after; the client works from the rounded figure
+    expect(Math.abs(live.day_return_pct - expected.day_return_pct)).toBeLessThan(0.006);
+    expect(Math.abs(live.total_return_pct - expected.total_return_pct)).toBeLessThan(0.011);
+  });
+
+  it("covers a post-close flow in every phase but the session", () => {
+    expect(cases.pre_open.detail.post_close_transfer).not.toBe(0);
+    expect(cases.after_close.detail.post_close_transfer).not.toBe(0);
+    expect(cases.weekend.detail.post_close_transfer).not.toBe(0);
+    expect(cases.in_session.detail.post_close_transfer).toBe(0);
+    expect(cases.in_session.detail.day_net_transfer).not.toBe(0);
+  });
+
+  it("keeps a factor the server pinned to 1 at 1", () => {
+    const pinned = { ...cases.weekend.detail, equity: 300_000, day_pnl: 0, post_close_transfer: 400_000 };
+    const live = applyLivePrices(pinned, new Map([[pinned.positions[0].symbol, { price: 130, change_pct: null }]]));
+    expect(live.total_return_pct).toBe(pinned.total_return_pct);
+    expect(live.day_return_pct).toBe(pinned.day_return_pct);
+  });
+});
+
 describe("rebaseBenchmark with transfers", () => {
   const point = (date: string, equity: number, close: number | null, flow?: number) => ({
     date,
@@ -261,6 +298,23 @@ describe("rebaseBenchmark with transfers", () => {
     expect(series.benchmark[0]).toBeNull();
     expect(series.benchmark[1]).toBe(1_000_000);
     expect(series.benchmark[2]).toBe(0);
+  });
+
+  it("a post-close deposit on the live point earns none of that day's index move", () => {
+    // Friday index +10% on 1,000,000; Saturday +1,000,000 (post_close_transfer on Friday's live
+    // point, whose equity already includes it): B = 1,000,000 x 1.10 + 1,000,000 = 2,100,000
+    const series = rebaseBenchmark([
+      point("2026-11-26", 1_000_000, 100, 0),
+      { ...point("2026-11-27", 2_100_000, 110, 0), live: true, post_close_transfer: 1_000_000 },
+    ]);
+    expect(series.benchmark[1]).toBeCloseTo(2_100_000, 4);
+    // and the next window carries it at the start: (2,100,000 + 0) x 1.0
+    const next = rebaseBenchmark([
+      point("2026-11-26", 1_000_000, 100, 0),
+      { ...point("2026-11-27", 2_100_000, 110, 0), post_close_transfer: 1_000_000 },
+      point("2026-11-30", 2_100_000, 110, 0),
+    ]);
+    expect(next.benchmark[2]).toBeCloseTo(2_100_000, 4);
   });
 
   it("a deposit earns the day's index move, unlike an end-of-day rule", () => {

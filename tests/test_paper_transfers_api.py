@@ -142,7 +142,36 @@ def test_equity_points_carry_net_transfer_and_twr_index(client) -> None:
     points = client.get(f"/api/v1/paper/accounts/{account['id']}/equity").json()["points"]
     assert points[-1]["live"] is True
     assert points[-1]["net_transfer"] == 1_000_000 and points[-1]["twr_index"] == 100.0
-    assert points[-1]["equity"] == 2_000_000
+    assert points[-1]["equity"] == 2_000_000 and points[-1]["post_close_transfer"] == 0
+    summary = client.get(f"/api/v1/paper/accounts/{account['id']}").json()
+    assert (summary["day_net_transfer"], summary["post_close_transfer"]) == (1_000_000, 0)
+
+
+def test_a_reused_request_id_with_another_body_is_409_and_a_retry_replays(client) -> None:
+    account = _account(client)
+    rid = str(uuid4())
+    first = _post(client, account, direction="in", amount=100_000, request_id=rid)
+    assert first.status_code == 200 and first.json()["cash"] == 1_100_000
+    # the response was lost; the user edits the amount and resubmits under the same id
+    edited = _post(client, account, direction="in", amount=500_000, request_id=rid)
+    assert edited.status_code == 409
+    assert "入金 NT$100,000" in edited.json()["detail"]
+    assert (
+        _post(client, account, direction="out", amount=100_000, request_id=rid).status_code == 409
+    )
+    same = _post(client, account, direction="in", amount=100_000, request_id=rid)
+    assert same.status_code == 200 and same.json()["cash"] == 1_100_000
+    listed = client.get(f"/api/v1/paper/accounts/{account['id']}/transfers").json()
+    assert [t["amount"] for t in listed["transfers"]] == [100_000]
+
+
+def test_the_note_is_stripped_before_its_length_is_checked(client) -> None:
+    account = _account(client)
+    padded = "  " + "備" * 60 + "   "
+    assert _post(client, account, direction="in", amount=1_000, note=padded).status_code == 200
+    assert _post(client, account, direction="in", amount=1_000, note="x" * 61).status_code == 422
+    listed = client.get(f"/api/v1/paper/accounts/{account['id']}/transfers").json()
+    assert listed["transfers"][-1]["note"] == "備" * 60
 
 
 def test_rules_mention_transfers(client) -> None:

@@ -28,8 +28,17 @@ export type AccountSummary = {
    * Absent on an API older than 入金／出金.
    */
   contributed_capital?: number;
-  /** Net deposits - withdrawals counted in today's figures (after the previous close). */
+  /**
+   * Net deposits - withdrawals of the latest session day's window (previous close, that day's
+   * close]: they count as arriving at the start of the day.
+   */
   day_net_transfer?: number;
+  /**
+   * Net deposits - withdrawals after that day's close (evening, weekend): already in `equity`,
+   * in no return until the next session. day_pnl = equity - this - previous close -
+   * day_net_transfer; day_return_pct = day_pnl / (previous close + day_net_transfer).
+   */
+  post_close_transfer?: number;
   total_pnl: number;
   /** Time-weighted since the last reset: deposits are not profit, withdrawals are not loss. */
   total_return_pct: number;
@@ -144,6 +153,8 @@ export type EquityPoint = {
   live: boolean;
   /** Net deposits - withdrawals counted on this day; absent on an older API. */
   net_transfer?: number;
+  /** Live point only: transfers after this day's close, in `equity` but not in its move. */
+  post_close_transfer?: number;
   /** Time-weighted return index, 100 at the first point; absent on an older API. */
   twr_index?: number | null;
 };

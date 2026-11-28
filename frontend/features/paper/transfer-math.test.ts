@@ -6,6 +6,7 @@ import {
   flowMarks,
   newRequestId,
   parseAmount,
+  requestIdFor,
   parseInitialCash,
   resetInitialCash,
   transferAmountText,
@@ -54,7 +55,10 @@ describe("checkTransfer", () => {
     const over = checkTransfer({ ...base, direction: "out", amountText: "700,001" });
     expect(over.ok).toBe(false);
     expect(over.error).toContain("可用資金 NT$ 700,000");
-    expect(over.cashAfter).toBe(99_999);
+    expect(over.cashAfter).toBeNull(); // shown as 「—」, never NT$ -… or a misleading balance
+    const huge = checkTransfer({ ...base, direction: "out", amountText: "4,500,000" });
+    expect(huge.cashAfter).toBeNull();
+    expect(checkTransfer({ ...base, direction: "out", amountText: "999" }).cashAfter).toBeNull();
     const exact = checkTransfer({ ...base, direction: "out", amountText: "700000" });
     expect(exact.ok).toBe(true);
     expect(exact.cashAfter).toBe(100_000);
@@ -65,6 +69,7 @@ describe("checkTransfer", () => {
     const over = checkTransfer({ ...rich, amountText: "50,000,001" });
     expect(over.ok).toBe(false);
     expect(over.error).toContain("1,000,000,000");
+    expect(over.cashAfter).toBeNull();
     expect(checkTransfer({ ...rich, amountText: "50000000" })).toMatchObject({ ok: true, cashAfter: 1_000_000_000 });
   });
 
@@ -73,6 +78,7 @@ describe("checkTransfer", () => {
     const long = checkTransfer({ ...base, amountText: "5000", note: "x".repeat(61) });
     expect(long.ok).toBe(false);
     expect(long.error).toContain("60");
+    expect(long.cashAfter).toBe(805_000); // a note problem does not hide the preview
   });
 });
 
@@ -114,5 +120,34 @@ describe("reset amount", () => {
     expect(resetInitialCash("1000000", 1_000_000)).toBeUndefined();
     expect(resetInitialCash("2,000,000", 1_000_000)).toBe(2_000_000);
     expect(resetInitialCash("junk", 1_000_000)).toBeUndefined();
+  });
+});
+
+describe("requestIdFor", () => {
+  const counter = () => {
+    let n = 0;
+    return () => `id-${++n}`;
+  };
+
+  it("reuses the id for an unchanged retry and mints a new one when direction or amount change", () => {
+    const make = counter();
+    const first = requestIdFor({}, "in", 100_000, make);
+    expect(first.id).toBe("id-1");
+    // the response was lost; the same body is retried: same id, the server replays it
+    const retry = requestIdFor(first.ids, "in", 100_000, make);
+    expect(retry.id).toBe("id-1");
+    // edited to 500,000: a new id, so it is booked instead of answered with the 100,000
+    const edited = requestIdFor(retry.ids, "in", 500_000, make);
+    expect(edited.id).toBe("id-2");
+    const flipped = requestIdFor(edited.ids, "out", 500_000, make);
+    expect(flipped.id).toBe("id-3");
+    // back to the first body: its own id again, never a second booking of the 100,000
+    expect(requestIdFor(flipped.ids, "in", 100_000, make).id).toBe("id-1");
+  });
+
+  it("does not mutate the ids it was given", () => {
+    const ids = {};
+    requestIdFor(ids, "in", 1_000, counter());
+    expect(ids).toEqual({});
   });
 });

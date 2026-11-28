@@ -10,13 +10,18 @@ import os
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from quant_signal.application.paper_transfers import taipei_day_bounds
+from quant_signal.application.paper_transfers import (
+    chain_flows,
+    taipei_day_bounds,
+    twr_return_pct,
+)
 from quant_signal.domain.paper import (
     LedgerEntry,
     PaperAccountRecord,
@@ -221,22 +226,81 @@ async def test_the_database_itself_refuses_bad_transfer_rows(sessions) -> None:
         await raw(insert, kind="transfer_out", amount=5_000, rid=uuid4())
 
 
-async def test_snapshot_net_transfer_round_trips_and_upserts(sessions) -> None:
+async def test_a_reused_request_id_with_another_body_is_a_mismatch(sessions) -> None:
     account = await make_account(sessions)
-    day = date(2026, 11, 27)
-    snap = SnapshotRecord(
-        account_id=account.id,
-        trading_date=day,
-        epoch=0,
-        cash=1,
-        market_value=0,
-        equity=1,
-        realized_pnl_cum=0,
-        net_transfer=-1_234,
+    rid = uuid4()
+    assert (await post(sessions, entry(account, 100_000, request_id=rid))).status == "ok"
+    # the response was lost and the user edited the amount: refused, nothing booked
+    edited = await post(sessions, entry(account, 500_000, request_id=rid))
+    assert edited.status == "mismatch" and edited.entry.amount == 100_000
+    flipped = await post(sessions, entry(account, -100_000, request_id=rid))
+    assert flipped.status == "mismatch"
+    # the unchanged retry replays
+    assert (await post(sessions, entry(account, 100_000, request_id=rid))).status == "replayed"
+    assert await cash_of(sessions, account) == 1_100_000
+
+
+async def test_racing_different_bodies_under_one_request_id_book_one_row(sessions) -> None:
+    account = await make_account(sessions)
+    rid = uuid4()
+    amounts = [100_000, 500_000, 100_000, 500_000]
+    results = await asyncio.gather(
+        *(post(sessions, entry(account, a, request_id=rid)) for a in amounts)
     )
+    winner = next(r for r in results if r.status == "ok")
+    for result, amount in zip(results, amounts, strict=True):
+        if result is winner:
+            continue
+        expected = "replayed" if amount == winner.entry.amount else "mismatch"
+        assert result.status == expected and result.entry.id == winner.entry.id
+    assert await cash_of(sessions, account) == 1_000_000 + winner.entry.amount
+
+
+async def test_snapshots_store_no_flow_and_the_chain_reads_it_from_the_ledger(sessions) -> None:
+    account = await make_account(sessions)
+    async with sessions() as session:
+        columns = await session.scalars(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'paper_daily_snapshots'"
+            )
+        )
+        assert "net_transfer" not in set(columns)
+    fri, mon, tue = date(2026, 11, 27), date(2026, 11, 30), date(2026, 12, 1)
+    taipei = ZoneInfo("Asia/Taipei")
+    # Monday's row is missing (the job was down); Monday's deposit belongs to Tuesday's step
+    deposit = entry(account, 1_000_000, at=datetime(2026, 11, 30, 10, tzinfo=taipei))
+    evening = entry(account, 5_000, at=datetime(2026, 12, 1, 14, tzinfo=taipei))
+    for e in (deposit, evening):
+        async with sessions() as session:
+            outcome = await PostgresQuantRepository(session).apply_paper_transfer(
+                e,
+                day_start=e.at - timedelta(hours=1),
+                day_end=e.at + timedelta(hours=1),
+                max_per_day=20,
+                max_cash=1_000_000_000,
+            )
+            assert outcome.status == "ok"
     async with sessions() as session:
         repo = PostgresQuantRepository(session)
-        await repo.upsert_paper_snapshot(snap)
-        assert (await repo.list_paper_snapshots(account.id, epoch=0))[0].net_transfer == -1_234
-        await repo.upsert_paper_snapshot(snap.model_copy(update={"net_transfer": 77}))
-        assert (await repo.list_paper_snapshots(account.id, epoch=0))[0].net_transfer == 77
+        for day, equity in ((fri, 1_000_000), (tue, 2_000_000)):
+            snap = SnapshotRecord(
+                account_id=account.id,
+                trading_date=day,
+                epoch=0,
+                cash=equity,
+                market_value=0,
+                equity=equity,
+                realized_pnl_cum=0,
+            )
+            await repo.upsert_paper_snapshot(snap)
+        await repo.upsert_paper_snapshot(snap.model_copy(update={"equity": 2_000_000}))
+        snaps = await repo.list_paper_snapshots(account.id, epoch=0)
+        entries = await repo.list_paper_transfer_entries(account.id, epoch=0)
+    assert [s.trading_date for s in snaps] == [fri, tue] and mon not in {
+        s.trading_date for s in snaps
+    }
+    flows = chain_flows([s.trading_date for s in snaps], entries)
+    assert flows == [0, 1_000_000]  # Tuesday's 14:00 deposit is after its close
+    steps = [(s.equity, f) for s, f in zip(snaps, flows, strict=True)]
+    assert twr_return_pct(1_000_000, steps) == 0.0

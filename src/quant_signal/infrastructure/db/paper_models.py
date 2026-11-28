@@ -193,8 +193,6 @@ class PaperSnapshotRow(Base):
     equity: Mapped[int] = mapped_column(BigInteger, nullable=False)
     realized_pnl_cum: Mapped[int] = mapped_column(BigInteger, nullable=False)
     benchmark_close: Mapped[float | None] = mapped_column(Float)
-    # Net transfers dated in (previous trading day, trading_date] (migration 0027).
-    net_transfer: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
 class PaperCorporateActionRow(Base):

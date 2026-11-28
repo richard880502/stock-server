@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from quant_signal.application.paper_transfers import TransferOutcome
+from quant_signal.application.paper_transfers import TransferOutcome, same_transfer
 from quant_signal.domain.paper import TRANSFER_KINDS, LedgerEntry
 
 
@@ -29,7 +29,8 @@ class MemoryPaperTransferMixin:
             return TransferOutcome("missing")
         for existing in state.ledger:
             if existing.account_id == entry.account_id and existing.request_id == entry.request_id:
-                return TransferOutcome("replayed", existing.model_copy())
+                status = "replayed" if same_transfer(existing, entry) else "mismatch"
+                return TransferOutcome(status, existing.model_copy())
         if account.epoch != entry.epoch:
             return TransferOutcome("stale")
         today = sum(

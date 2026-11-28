@@ -311,6 +311,10 @@ describe("入金／出金", () => {
     expect(markup).toContain('role="alert"');
     expect(markup).toContain("出金不能超過可用資金 NT$ 700,000");
     expect(markup).toMatch(/type="submit"[^>]*disabled/);
+    // the preview shows 「—」, never a negative balance
+    const huge = form({ direction: "out", amountText: "4,500,000" });
+    expect(huge).toMatch(/出金後現金<\/dt><dd class="num">—<\/dd>/);
+    expect(huge).not.toContain("-3,700,000");
   });
 
   it("explains a deposit that is out of range and carries a server error", () => {

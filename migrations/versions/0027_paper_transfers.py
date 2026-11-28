@@ -1,4 +1,8 @@
-"""Deposits and withdrawals on paper accounts (入金／出金)."""
+"""Deposits and withdrawals on paper accounts (入金／出金).
+
+Transfers are ledger postings (``transfer_in`` / ``transfer_out``) keyed by the client's
+``request_id``. Snapshots store no flow: readers derive it from the ledger. Downgrading
+deletes every transfer posting (see ``downgrade``)."""
 
 from collections.abc import Sequence
 
@@ -27,14 +31,13 @@ def upgrade() -> None:
         "paper_cash_ledger",
         "(kind <> 'transfer_in' OR amount > 0) AND (kind <> 'transfer_out' OR amount < 0)",
     )
-    op.add_column(
-        "paper_daily_snapshots",
-        sa.Column("net_transfer", sa.BigInteger, nullable=False, server_default=sa.text("0")),
-    )
 
 
 def downgrade() -> None:
-    op.drop_column("paper_daily_snapshots", "net_transfer")
+    # Older code can neither parse these postings (``LedgerEntry.kind``) nor tell them from
+    # trading cash, so they go with the column that marks them: downgrading DELETES every
+    # deposit / withdrawal, and the affected accounts' cash drops (or rises) by their sum.
+    op.execute("DELETE FROM paper_cash_ledger WHERE kind IN ('transfer_in', 'transfer_out')")
     op.drop_constraint("ck_paper_ledger_transfer_sign", "paper_cash_ledger", type_="check")
     op.drop_constraint("ck_paper_ledger_request", "paper_cash_ledger", type_="check")
     op.drop_constraint("uq_paper_ledger_request", "paper_cash_ledger", type_="unique")

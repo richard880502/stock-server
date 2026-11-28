@@ -112,7 +112,6 @@ def _snapshot(row: PaperSnapshotRow) -> SnapshotRecord:
         equity=row.equity,
         realized_pnl_cum=row.realized_pnl_cum,
         benchmark_close=row.benchmark_close,
-        net_transfer=row.net_transfer,
     )
 
 

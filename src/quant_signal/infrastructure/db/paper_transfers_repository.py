@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from quant_signal.application.paper_transfers import TransferOutcome
+from quant_signal.application.paper_transfers import TransferOutcome, same_transfer
 from quant_signal.domain.paper import TRANSFER_KINDS, LedgerEntry
 from quant_signal.infrastructure.db.paper_models import (
     PaperAccountRow,
@@ -27,6 +27,10 @@ def _ptx_entry(row: PaperLedgerRow) -> LedgerEntry:
         request_id=row.request_id,
         note=row.note,
     )
+
+
+def _replay(original: LedgerEntry, entry: LedgerEntry) -> TransferOutcome:
+    return TransferOutcome("replayed" if same_transfer(original, entry) else "mismatch", original)
 
 
 class PaperTransferRepositoryMixin:
@@ -63,7 +67,7 @@ class PaperTransferRepositoryMixin:
         original = await self._ptx_original(entry)
         if original is not None:
             await self.session.commit()
-            return TransferOutcome("replayed", original)
+            return _replay(original, entry)
         if account.epoch != entry.epoch:
             await self.session.commit()
             return TransferOutcome("stale")
@@ -102,7 +106,7 @@ class PaperTransferRepositoryMixin:
             original = await self._ptx_original(entry)
             if original is None:
                 raise
-            return TransferOutcome("replayed", original)
+            return _replay(original, entry)
         return TransferOutcome("ok", entry, cash=cash + entry.amount, available=available)
 
     async def list_paper_transfer_entries(

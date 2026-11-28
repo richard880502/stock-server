@@ -185,15 +185,18 @@ export function applyLivePrices(detail: AccountDetail, quotes: ReadonlyMap<strin
     ...position,
     weight_pct: equity > 0 ? (position.market_value / equity) * 100 : 0,
   }));
-  // Returns are time-weighted over close-to-close windows with flows at the start of the
-  // window: the open window's factor is equity / (previous close + its transfers), so the
-  // live move scales only that last factor, and equity - day_pnl is its denominator. A
-  // server older than 入金／出金 sends no contributed_capital and keeps the plain ratios.
-  const dayBase = equity - dayPnl;
+  // Same formula as the server (application/paper_transfers.py): the latest session day's
+  // factor is (equity - post_close) / (previous close + day_net_transfer), and the live move
+  // scales only that factor. day_pnl already excludes both flows, so the denominator is
+  // equity - day_pnl - post_close; a factor the server pinned to 1 (denominator <= 0) stays 1.
+  // A server older than 入金／出金 sends no contributed_capital and keeps the plain ratios.
+  const post = detail.post_close_transfer ?? 0;
+  const dayBase = equity - dayPnl - post;
+  const closeBefore = detail.equity - post;
   const totalReturn =
     detail.contributed_capital != null
-      ? detail.equity > 0
-        ? ((1 + detail.total_return_pct / 100) * (equity / detail.equity) - 1) * 100
+      ? dayBase > 0 && closeBefore > 0
+        ? ((1 + detail.total_return_pct / 100) * ((equity - post) / closeBefore) - 1) * 100
         : detail.total_return_pct
       : detail.initial_cash > 0
         ? (totalPnl / detail.initial_cash) * 100
@@ -223,20 +226,26 @@ export type EquitySeries = {
   flows: number[];
 };
 
+const postClose = (point: EquityPoint) => point.post_close_transfer ?? 0;
+
 /**
  * The account's equity against 加權指數, as if the account's transfers had been made in the
  * index: from the first day both exist the benchmark starts at the account's equity and then
  * follows `B_t = (B_{t-1} + F_t) x idx_t / idx_{t-1}` (a transfer buys or sells the index at
  * the start of its close-to-close window, so it earns that day's move; floored at 0). A day without an index close carries its transfer to
- * the next day that has one. Without any transfer this is exactly the plain rebase
- * `equity_0 x idx_t / idx_0`.
+ * the next day that has one. A post-close transfer on the live point (`post_close_transfer`, an
+ * evening or weekend deposit) is in that point's equity but earns none of the day's move: it is
+ * added to the benchmark after the move, `B_t = ... x idx_t / idx_{t-1} + P_t`, and carried into
+ * the next step. Without any transfer this is exactly the plain rebase `equity_0 x idx_t / idx_0`.
  */
 export function rebaseBenchmark(points: EquityPoint[]): EquitySeries {
   const baseIndex = points.findIndex((p) => p.benchmark_close != null && p.benchmark_close > 0 && p.equity > 0);
   const base = baseIndex >= 0 ? points[baseIndex] : null;
   const flows = points.map((p) => p.net_transfer ?? 0);
-  const withFlows = flows.some((flow) => flow !== 0);
-  let value = base ? base.equity : 0;
+  const withFlows = flows.some((flow) => flow !== 0) || points.some((p) => postClose(p) !== 0);
+  // the base point's own post-close flow is in its equity but not yet at work in the index
+  let value = base ? base.equity - postClose(base) : 0;
+  let pendingPost = base ? postClose(base) : 0;
   let lastClose = base ? (base.benchmark_close as number) : 0;
   let pending = 0;
   const benchmark = points.map((point, index) => {
@@ -248,13 +257,14 @@ export function rebaseBenchmark(points: EquityPoint[]): EquitySeries {
       return (close / (base.benchmark_close as number)) * base.equity;
     }
     if (close == null || close <= 0) {
-      pending += flows[index];
+      pending += flows[index] + postClose(point);
       return null;
     }
-    value = Math.max(0, (value + pending + flows[index]) * (close / lastClose));
+    value = Math.max(0, (value + pendingPost + pending + flows[index]) * (close / lastClose));
     lastClose = close;
     pending = 0;
-    return value;
+    pendingPost = postClose(point);
+    return value + pendingPost;
   });
   return {
     dates: points.map((p) => p.date),

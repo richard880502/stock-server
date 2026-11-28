@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useId, useRef, useState } from "react";
 import { SegmentedControl } from "@/components/segmented-control";
 import type { AccountSummary, TransferBody, TransferDirection } from "@/lib/api/paper";
 import { CASH_PICKS } from "./account-forms";
@@ -11,8 +11,9 @@ import {
   MAX_INITIAL_CASH,
   MAX_NOTE,
   MIN_INITIAL_CASH,
-  newRequestId,
   parseInitialCash,
+  type RequestIds,
+  requestIdFor,
   TRANSFER_NOTE,
   TRANSFER_PICKS,
 } from "./transfer-math";
@@ -25,9 +26,10 @@ const DIRECTIONS = (Object.keys(DIRECTION_LABEL) as TransferDirection[]).map((va
 }));
 
 /**
- * 入金／出金 dialog body. The idempotency `request_id` is generated once when the form mounts
- * (the dialog mounts its children only while open), so a double click or a retry after a
- * dropped connection cannot book the transfer twice.
+ * 入金／出金 dialog body. The idempotency `request_id` belongs to the (direction, amount) being
+ * sent during this open of the dialog (it mounts its children only while open): a double click
+ * or a retry after a dropped connection reuses it and cannot book twice, while an edited amount
+ * or direction is sent under a new id (see `requestIdFor`).
  */
 export function TransferForm({
   account,
@@ -48,7 +50,7 @@ export function TransferForm({
   const [direction, setDirection] = useState<TransferDirection>(initial?.direction ?? "in");
   const [amountText, setAmountText] = useState(initial?.amountText ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
-  const [requestId] = useState(newRequestId);
+  const requestIds = useRef<RequestIds>({});
   const amountId = useId();
   const noteId = useId();
   const check = checkTransfer({
@@ -64,6 +66,8 @@ export function TransferForm({
     event.preventDefault();
     if (!check.ok || check.amount === null || busy) return;
     const trimmed = note.trim();
+    const { id: requestId, ids } = requestIdFor(requestIds.current, direction, check.amount);
+    requestIds.current = ids;
     onSubmit({
       direction,
       amount: check.amount,

@@ -24,11 +24,25 @@ denominator is not positive. (Deposit 1,000,000 at 08:00 on a 1,000,000 account 
 gains 10% on everything: E = 2,200,000, factor 2.2/2.0 = 1.10 -> 10%, not the 120% an
 end-of-day rule would book; a deposit on a flat day gives exactly 0%.)
 
-The live point is the open window (last snapshotted close, now]: ``E_now / (E_last +
-F_open)`` with everything included. Before the day's snapshot exists this treats a
-post-close transfer of today as start-of-window too; it corrects itself when the snapshot
-lands and that transfer moves into the next window. ``day_pnl = E_now - E_last - F_open``.
-Arithmetic is ``Decimal`` until the final rounding to two places.
+The ledger is the only record of flows. Each step's ``F`` is derived at read time from the
+epoch's transfer postings, bucketed between the closes of CONSECUTIVE EXISTING snapshots
+(``chain_flows``): a day without a snapshot (the job was down) merges its window into the
+next row's, so its deposit is still a deposit and never a gain.
+
+The live step is the latest session day ``t`` (``latest_session_day``: today from 09:00,
+else the previous trading day; never today's snapshot row, which may or may not exist
+yet). With ``E_prev`` the newest snapshot before ``t`` (or the opening cash)::
+
+    F_in   = flows in (close of E_prev's day, close_t]
+    F_post = flows after close_t            # zero before and during the session
+    E_close_t = E_now - F_post              # after the close no fill moves equity
+    factor_t  = E_close_t / (E_prev + F_in)
+    day_pnl   = E_close_t - E_prev - F_in
+
+The window after ``close_t`` is open and has factor 1 until ``t + 1`` starts at 09:00; so a
+Saturday deposit neither earns nor dilutes Friday's move (``live_step``). A fill booked
+after 13:30 carries its in-session ``filled_at`` and belongs to ``t``; it is part of
+``E_close_t`` either way. Arithmetic is ``Decimal`` until the final rounding.
 """
 
 from __future__ import annotations
@@ -58,7 +72,7 @@ if TYPE_CHECKING:
 D = Decimal
 
 TransferStatus = Literal[
-    "ok", "replayed", "missing", "stale", "daily_cap", "over_available", "ceiling"
+    "ok", "replayed", "mismatch", "missing", "stale", "daily_cap", "over_available", "ceiling"
 ]
 
 
@@ -83,7 +97,8 @@ class TransferRepository(Protocol):
         """Post ``entry`` (signed amount) under the account lock, in one transaction.
 
         Order of checks: account gone/archived (``missing``) -> the same ``request_id``
-        already posted (``replayed`` with the original entry, whatever epoch it was in) ->
+        already posted: ``replayed`` with the original entry (whatever epoch it was in) when
+        its kind and amount equal ``entry``'s, else ``mismatch`` with the original ->
         epoch changed since the caller read it (``stale``) -> more than ``max_per_day``
         transfers dated in ``[day_start, day_end)`` (``daily_cap``) -> a withdrawal above
         the available cash, i.e. cash minus the reserves of working buys (``over_available``)
@@ -163,6 +178,58 @@ def twr_index(points: Sequence[tuple[int, int]]) -> list[float]:
     return out
 
 
+def chain_flows(days: Sequence[date], entries: Sequence[LedgerEntry]) -> list[int]:
+    """The flow of each chain step: ``days`` are the trading dates of consecutive EXISTING
+    snapshots (ascending); step ``i`` takes the transfers stamped in (close of ``days[i-1]``,
+    close of ``days[i]``], the first one everything of the epoch through its close."""
+    flows: list[int] = []
+    previous: date | None = None
+    for day in days:
+        after = session_close(previous) if previous is not None else None
+        flows.append(transfer_flow(entries, after=after, through=session_close(day)))
+        previous = day
+    return flows
+
+
+@dataclass(frozen=True)
+class LiveStep:
+    """The step of the latest session day ``day`` (see the module docstring)."""
+
+    day: date
+    base: int  # E_prev: the newest snapshot before ``day``, or the epoch's opening cash
+    flow_in: int  # F_in: flows in (close of E_prev's day, close of ``day``]
+    flow_post: int  # F_post: flows after the close of ``day``
+    close_equity: int  # E_now - F_post
+
+    @property
+    def day_pnl(self) -> int:
+        return self.close_equity - self.base - self.flow_in
+
+    @property
+    def start(self) -> int:
+        return self.base + self.flow_in
+
+
+def live_step(
+    entries: Sequence[LedgerEntry],
+    *,
+    day: date,
+    previous: date | None,
+    base: int,
+    equity: int,
+) -> LiveStep:
+    close = session_close(day)
+    after = session_close(previous) if previous is not None else None
+    flow_post = transfer_flow(entries, after=close)
+    return LiveStep(
+        day=day,
+        base=base,
+        flow_in=transfer_flow(entries, after=after, through=close),
+        flow_post=flow_post,
+        close_equity=equity - flow_post,
+    )
+
+
 def taipei_day_bounds(now: datetime) -> tuple[datetime, datetime]:
     start = datetime.combine(local(now).date(), time.min, TAIPEI)
     return start, start + timedelta(days=1)
@@ -171,7 +238,18 @@ def taipei_day_bounds(now: datetime) -> tuple[datetime, datetime]:
 # --- the service operations --------------------------------------------------------------
 
 
+def same_transfer(original: LedgerEntry, entry: LedgerEntry) -> bool:
+    """A repeat of ``request_id`` is a replay only with the same direction and amount."""
+    return original.kind == entry.kind and original.amount == entry.amount
+
+
 def _problem(outcome: TransferOutcome, direction: str, amount: int) -> str:
+    if outcome.status == "mismatch" and outcome.entry is not None:
+        verb = "入金" if outcome.entry.kind == "transfer_in" else "出金"
+        return (
+            f"這筆申請已經以{verb} NT${abs(outcome.entry.amount):,} 入帳，"
+            "與這次送出的內容不同；請重新整理確認後再送出新的申請"
+        )
     if outcome.status == "daily_cap":
         return f"每個帳戶每天最多 {MAX_TRANSFERS_PER_DAY} 筆入金／出金，今天已達上限，請明天再試"
     if outcome.status == "over_available":

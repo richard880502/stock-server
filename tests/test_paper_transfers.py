@@ -19,6 +19,7 @@ from quant_signal.application.paper_trading import (
     paper_rules,
 )
 from quant_signal.application.paper_transfers import (
+    chain_flows,
     contributed_capital,
     session_close,
     transfer_flow,
@@ -73,6 +74,7 @@ def test_amount_bounds_are_inclusive_and_the_note_is_capped() -> None:
     assert xfer(amount=1_000).amount == 1_000 and xfer(amount=100_000_000).amount == 100_000_000
     assert xfer(note="x" * 60).note == "x" * 60
     assert xfer(note="  ").note is None
+    assert xfer(note="  " + "x" * 60 + "  ").note == "x" * 60  # stripped before the length check
     with pytest.raises(ValidationError):
         xfer(note="x" * 61)
     with pytest.raises(ValidationError):
@@ -177,10 +179,15 @@ async def test_the_same_request_id_returns_the_original_result_and_books_once() 
     first = await service.transfer(user, acct, body)
     again = await service.transfer(user, acct, body)
     assert first.cash == again.cash == 1_300_000
-    # even a different payload under the same id is answered with the original posting
+    # a different payload under the same id is refused, not silently replayed
     clock.now = at(FRI, 11, 0)
-    third = await service.transfer(user, acct, xfer("out", 900_000, request_id=body.request_id))
-    assert third.cash == 1_300_000
+    with pytest.raises(PaperConflict, match="入金 NT\\$300,000"):
+        await service.transfer(user, acct, xfer("out", 900_000, request_id=body.request_id))
+    with pytest.raises(PaperConflict, match="不同"):
+        await service.transfer(user, acct, xfer("in", 500_000, request_id=body.request_id))
+    # an unchanged retry (the note does not count) still replays
+    again = await service.transfer(user, acct, xfer("in", 300_000, "x", body.request_id))
+    assert again.cash == 1_300_000
     assert len([e for e in await repo.list_paper_ledger(acct, 0) if e.kind == "transfer_in"]) == 1
     listing = await service.list_transfers(user, acct)
     assert [(t.direction, t.amount) for t in listing.transfers] == [("in", 300_000)]
@@ -308,7 +315,7 @@ async def test_a_reset_starts_the_flow_over() -> None:
     assert await repo.list_paper_transfer_entries(acct, epoch=1) == []
     await jobs.tick(repo, at(FRI, 15, 20))
     new = await repo.list_paper_snapshots(acct, epoch=1)
-    assert [(s.net_transfer, s.equity) for s in new] == [(0, 2_000_000)]
+    assert [(s.trading_date, s.equity) for s in new] == [(FRI, 2_000_000)]
 
 
 def test_rules_text_mentions_transfers_and_time_weighting() -> None:
@@ -397,7 +404,7 @@ async def test_an_evening_deposit_leaves_the_row_alone_and_is_flat_the_next_day(
     repo, clock, service, jobs, user, acct = await setup(at(FRI, 9, 30))
     await jobs.tick(repo, at(FRI, 14, 50))
     friday = (await repo.list_paper_snapshots(acct, epoch=0))[0]
-    assert (friday.net_transfer, friday.cash, friday.equity) == (0, 1_000_000, 1_000_000)
+    assert (friday.cash, friday.equity) == (1_000_000, 1_000_000)
 
     clock.now = at(FRI, 20, 0)
     await service.transfer(user, acct, xfer("in", 1_000_000))
@@ -413,12 +420,10 @@ async def test_an_evening_deposit_leaves_the_row_alone_and_is_flat_the_next_day(
     await jobs.tick(repo, at(MON, 14, 50))
     snaps = {x.trading_date: x for x in await repo.list_paper_snapshots(acct, epoch=0)}
     assert snaps[FRI] == friday
-    assert (snaps[MON].net_transfer, snaps[MON].equity, snaps[MON].cash) == (
-        1_000_000,
-        2_000_000,
-        2_000_000,
-    )
-    steps = [(x.equity, x.net_transfer) for x in snaps.values()]
+    assert (snaps[MON].equity, snaps[MON].cash) == (2_000_000, 2_000_000)
+    flows = chain_flows(list(snaps), await repo.list_paper_transfer_entries(acct, epoch=0))
+    assert flows == [0, 1_000_000]
+    steps = [(x.equity, f) for x, f in zip(snaps.values(), flows, strict=True)]
     assert twr_return_pct(1_000_000, steps) == 0.0
 
 
@@ -430,10 +435,12 @@ async def test_a_deposit_after_the_close_but_before_the_snapshot_belongs_to_the_
     await service.transfer(user, acct, xfer("in", 100_000))
     await jobs.tick(repo, at(FRI, 14, 50))  # the ledger already holds the 14:10 deposit
     friday = (await repo.list_paper_snapshots(acct, epoch=0))[0]
-    assert (friday.net_transfer, friday.cash, friday.equity) == (0, 1_000_000, 1_000_000)
+    assert (friday.cash, friday.equity) == (1_000_000, 1_000_000)
     await jobs.tick(repo, at(MON, 14, 50))
     monday = (await repo.list_paper_snapshots(acct, epoch=0))[-1]
-    assert (monday.trading_date, monday.net_transfer, monday.equity) == (MON, 100_000, 1_100_000)
+    assert (monday.trading_date, monday.equity) == (MON, 1_100_000)
+    entries = await repo.list_paper_transfer_entries(acct, epoch=0)
+    assert chain_flows([FRI, MON], entries) == [0, 100_000]
 
 
 async def test_weekend_and_mid_session_flows_land_in_the_right_window() -> None:
@@ -442,9 +449,10 @@ async def test_weekend_and_mid_session_flows_land_in_the_right_window() -> None:
     await service.transfer(user, acct, xfer("out", 200_000))  # mid-session withdrawal
     await jobs.tick(repo, at(FRI, 14, 50))
     friday = (await repo.list_paper_snapshots(acct, epoch=0))[0]
-    assert (friday.net_transfer, friday.equity) == (-200_000, 800_000)
+    entries = await repo.list_paper_transfer_entries(acct, epoch=0)
+    assert (chain_flows([FRI], entries), friday.equity) == ([-200_000], 800_000)
     # flat: 800,000 / (1,000,000 - 200,000) = 1 -> a withdrawal is not a loss
-    assert twr_return_pct(1_000_000, [(friday.equity, friday.net_transfer)]) == 0.0
+    assert twr_return_pct(1_000_000, [(friday.equity, -200_000)]) == 0.0
     clock.now = at(FRI, 20, 0)
     await service.transfer(user, acct, xfer("in", 7_000))
     clock.now = at(SAT, 12, 0)
@@ -455,7 +463,9 @@ async def test_weekend_and_mid_session_flows_land_in_the_right_window() -> None:
     await service.transfer(user, acct, xfer("in", 1_000))  # after Monday's close: Tuesday's
     await jobs.tick(repo, at(MON, 14, 50))
     snaps = {x.trading_date: x for x in await repo.list_paper_snapshots(acct, epoch=0)}
-    assert (snaps[MON].net_transfer, snaps[MON].cash) == (42_000, 842_000)
+    entries = await repo.list_paper_transfer_entries(acct, epoch=0)
+    assert chain_flows([FRI, MON], entries) == [-200_000, 42_000]
+    assert snaps[MON].cash == 842_000
     # re-valuing a past day (a dividend or a fill) rebuilds both rows from the ledger
     await jobs._rewrite_snapshots(repo, {FRI: {acct}}, at(MON, 15, 0), TickStats())
     again = {x.trading_date: x for x in await repo.list_paper_snapshots(acct, epoch=0)}

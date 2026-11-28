@@ -31,7 +31,8 @@ export const cashAfterTransfer = (cash: number, direction: TransferDirection, am
 export type TransferCheck = {
   /** The amount when the text parsed to a whole number, else null. */
   amount: number | null;
-  /** Cash after the transfer; null until the amount is a valid number. */
+  /** Cash after the transfer; null unless the amount is valid for the direction (a preview of
+   * an impossible withdrawal would show a negative balance). */
   cashAfter: number | null;
   /** First broken rule in words, or null (also null while the amount is still empty). */
   error: string | null;
@@ -70,7 +71,7 @@ export function checkTransfer(input: {
   } else {
     error = noteError;
   }
-  return { amount, cashAfter, error, ok: error === null };
+  return { amount, cashAfter: error === null || error === noteError ? cashAfter : null, error, ok: error === null };
 }
 
 /** 「當日入金 NT$1,000,000」 for a day's net transfer; null when there was none. */
@@ -101,6 +102,28 @@ export function newRequestId(): string {
   if (c && typeof c.randomUUID === "function") return c.randomUUID();
   const hex = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
   return `${hex(8)}-${hex(4)}-4${hex(3)}-${"89ab"[Math.floor(Math.random() * 4)]}${hex(3)}-${hex(12)}`;
+}
+
+/** The ids handed out during one dialog open, keyed by direction and amount. */
+export type RequestIds = Readonly<Record<string, string>>;
+
+/**
+ * The `request_id` for submitting `direction` + `amount` (the note does not count): an unchanged
+ * retry reuses its id, so a lost response cannot book twice, while a changed direction or amount
+ * gets its own id (the server refuses a reused id with a different body with 409). Going back to
+ * an amount already sent reuses that amount's id, so it is answered with the original booking.
+ */
+export function requestIdFor(
+  ids: RequestIds,
+  direction: TransferDirection,
+  amount: number,
+  make: () => string = newRequestId,
+): { id: string; ids: RequestIds } {
+  const key = `${direction}:${amount}`;
+  const known = ids[key];
+  if (known) return { id: known, ids };
+  const id = make();
+  return { id, ids: { ...ids, [key]: id } };
 }
 
 /** Same range as account creation (NewAccountForm / the API's initial_cash). */

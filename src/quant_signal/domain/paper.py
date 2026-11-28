@@ -139,9 +139,6 @@ class SnapshotRecord(BaseModel):
     equity: int
     realized_pnl_cum: int
     benchmark_close: float | None = None
-    # Net deposits minus withdrawals dated in (previous trading day, trading_date]: the
-    # flow that has to be removed from this day's equity change (time-weighted return).
-    net_transfer: int = 0
 
 
 # --- requests ----------------------------------------------------------------------
@@ -225,7 +222,7 @@ class TransferRequest(BaseModel):
 
     direction: TransferDirection
     amount: int
-    note: str | None = Field(default=None, max_length=MAX_TRANSFER_NOTE)
+    note: str | None = None  # stripped; at most MAX_TRANSFER_NOTE characters after that
     request_id: UUID
 
     @field_validator("amount")
@@ -241,6 +238,8 @@ class TransferRequest(BaseModel):
         if value is None:
             return None
         value = value.strip()
+        if len(value) > MAX_TRANSFER_NOTE:
+            raise ValueError(f"備註最多 {MAX_TRANSFER_NOTE} 個字")
         return value or None
 
 
@@ -355,9 +354,14 @@ class AccountSummary(BaseModel):
     # Initial cash + deposits - withdrawals of the current epoch; total_pnl = equity - this.
     # Returns are time-weighted (transfers are neither profit nor loss).
     contributed_capital: int
-    # Net transfers counted in today's figures (those after the previous snapshot day);
-    # day_pnl = equity - previous close - day_net_transfer.
+    # Net transfers of the latest session day's window, (previous close, that day's close]:
+    # they count as arriving at the start of the day.
     day_net_transfer: int = 0
+    # Net transfers stamped after that day's close (an evening or weekend deposit): already
+    # in ``equity`` but in no return until the next session starts. With them,
+    # day_pnl = equity - post_close_transfer - previous close - day_net_transfer and
+    # day_return_pct = day_pnl / (previous close + day_net_transfer).
+    post_close_transfer: int = 0
     total_pnl: int
     total_return_pct: float
     day_pnl: int
@@ -417,8 +421,12 @@ class EquityPoint(BaseModel):
     market_value: int
     benchmark_close: float | None
     live: bool = False
-    # Net deposits - withdrawals counted on this point (see SnapshotRecord.net_transfer).
+    # Net deposits - withdrawals of this point's window: (close of the previous point that
+    # exists, close of this one], derived from the ledger.
     net_transfer: int = 0
+    # Live point only: net transfers after this day's close, included in ``equity`` but not
+    # in this day's step (``twr_index`` uses equity - post_close_transfer).
+    post_close_transfer: int = 0
     # Time-weighted return index, 100 at the first point of the series.
     twr_index: float | None = None
 
