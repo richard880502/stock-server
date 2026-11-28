@@ -13,6 +13,8 @@ import "./styles/sectors.css";
 import "./styles/stock.css";
 import "./styles/screener.css";
 import "./styles/paper.css";
+import "./styles/today.css";
+import "./styles/stock-page.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(

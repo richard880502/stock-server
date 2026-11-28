@@ -51,7 +51,7 @@ export function SignalView() {
   );
 }
 
-function SignalDetail() {
+export function SignalDetail() {
   const { query, signalData, error, refresh, instrumentName } = useDashboard();
   const { signal, marketEnvironment, chipFlow, loading, syncWait, cancelSync } = signalData;
 

@@ -18,6 +18,7 @@ import { getDataStatus, getLlmStatus, searchInstruments } from "./api/endpoints"
 import type { DataStatus, LlmStatus } from "./api/types";
 import { today } from "./format";
 import { routeUsesSignalData } from "./signal-routes";
+import { symbolFromPath } from "./stock-routes";
 import { getRecentSymbols, type RecentSymbol, rememberSymbol } from "./recent-symbols";
 import {
   benchmarkForSymbol,
@@ -27,8 +28,12 @@ import {
 } from "./symbols";
 
 function useDashboardState() {
-  const [symbol, setSymbolState] = useState(DEFAULT_SYMBOL);
-  const [benchmark, setBenchmark] = useState(DEFAULT_BENCHMARK);
+  // On a stock page (`/stock/<symbol>`) the path names the stock; see the route-sync effect below.
+  const pathname = usePathname();
+  const routeSymbol = symbolFromPath(pathname);
+  const [startSymbol] = useState(() => routeSymbol ?? DEFAULT_SYMBOL);
+  const [symbol, setSymbolState] = useState(startSymbol);
+  const [benchmark, setBenchmark] = useState(() => benchmarkForSymbol(startSymbol, DEFAULT_BENCHMARK));
   const [asOf, setAsOf] = useState(today);
   const [error, setError] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
@@ -44,13 +49,13 @@ function useDashboardState() {
   // The signal, chip flow and market environment are fetched only on routes that show them
   // (see lib/signal-routes.ts). On other routes a requested load is parked in `pendingSignal`
   // and runs when the user reaches such a route.
-  const needsSignal = routeUsesSignalData(usePathname());
+  const needsSignal = routeUsesSignalData(pathname);
   const needsSignalRef = useRef(needsSignal);
   const [initialQuery] = useState<SignalQuery>(() => ({
-    symbol: DEFAULT_SYMBOL,
-    benchmark: DEFAULT_BENCHMARK,
+    symbol: startSymbol,
+    benchmark: benchmarkForSymbol(startSymbol, DEFAULT_BENCHMARK),
     asOf: today(),
-    market: marketOf(DEFAULT_SYMBOL),
+    market: marketOf(startSymbol),
   }));
   const [pendingSignal, setPendingSignal] = useState<SignalQuery | null>(initialQuery);
   const signalData = {
@@ -114,11 +119,28 @@ function useDashboardState() {
   useEffect(() => {
     needsSignalRef.current = needsSignal;
     if (!needsSignal || pendingSignal === null) return;
+    // A stock page for another symbol was just opened: the route-sync effect below loads it.
+    if (routeSymbol && pendingSignal.symbol !== routeSymbol) return;
     const parked = pendingSignal;
     void load(parked);
     // Cleared from a callback, not synchronously: `loading` stays true until the load has begun.
     queueMicrotask(() => setPendingSignal((current) => (current === parked ? null : current)));
-  }, [needsSignal, pendingSignal, load]);
+  }, [needsSignal, pendingSignal, load, routeSymbol]);
+
+  // The stock page's path is the source of truth for the symbol: opening `/stock/<symbol>`
+  // (link, palette, back/forward) switches the shared query to it. Keyed on the path only, so
+  // it never fights a symbol chosen through `refresh` on other routes.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+  const symbolRef = useRef(symbol);
+  useEffect(() => {
+    symbolRef.current = symbol;
+  }, [symbol]);
+  useEffect(() => {
+    if (routeSymbol && routeSymbol !== symbolRef.current) refreshRef.current({ symbol: routeSymbol });
+  }, [routeSymbol]);
 
   // Recent symbols live in localStorage, so they can only be read after mount.
   useEffect(() => {

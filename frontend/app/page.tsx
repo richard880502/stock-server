@@ -1,5 +1,5 @@
-import { SignalView } from "@/features/signal/signal-view";
+import { TodayView } from "@/features/today/today-view";
 
-export default function OverviewPage() {
-  return <SignalView />;
+export default function TodayPage() {
+  return <TodayView />;
 }
