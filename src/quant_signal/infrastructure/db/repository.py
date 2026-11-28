@@ -75,6 +75,7 @@ from quant_signal.infrastructure.db.models import (
     WatchlistItemRow,
 )
 from quant_signal.infrastructure.db.official_repository import OfficialDataRepositoryMixin
+from quant_signal.infrastructure.db.paper_proposal_repository import PaperProposalRepositoryMixin
 from quant_signal.infrastructure.db.paper_repository import PaperRepositoryMixin
 from quant_signal.infrastructure.db.prices import (
     LatestQuote,
@@ -100,6 +101,7 @@ class PostgresQuantRepository(
     FundamentalsRepositoryMixin,
     DerivativesRepositoryMixin,
     PaperRepositoryMixin,
+    PaperProposalRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

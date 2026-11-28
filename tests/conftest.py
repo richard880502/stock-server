@@ -106,6 +106,7 @@ def make_market_observations(
 # pass by being skipped (a missing service or env var would otherwise stay green).
 _INTEGRATION_FILES = (
     "test_postgres_integration.py",
+    "test_paper_proposals_postgres.py",
     "test_quote_storage_integration.py",
     "test_schema_drift.py",
 )

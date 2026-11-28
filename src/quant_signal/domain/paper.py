@@ -187,6 +187,9 @@ class OrderRequest(BaseModel):
     limit_price: Decimal | None = None
     lots: int
     note: str | None = Field(default=None, max_length=200)
+    # Accepting an AI proposal (see application/paper_proposals.py): the order is placed
+    # with source="ai" and the proposal is marked accepted in the same transaction.
+    proposal_id: UUID | None = None
 
     @field_validator("lots")
     @classmethod

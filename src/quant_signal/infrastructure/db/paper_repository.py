@@ -266,6 +266,7 @@ class PaperRepositoryMixin:
             await self.session.commit()
             return None
         await self._cancel_working(account_id, now)
+        await self._pprop_expire_pending(account_id, now)
         row.epoch += 1
         row.reset_at = now
         self.session.add(

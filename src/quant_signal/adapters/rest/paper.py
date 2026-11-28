@@ -80,7 +80,13 @@ def install_paper(app: FastAPI, settings: Settings, get_repository: Callable) ->
     async def rules(principal: User) -> dict:
         _user_id(principal)
         live = get_settings()
-        return paper_rules(live.paper_slippage_ticks, live.paper_max_accounts)
+        rules_ = paper_rules(live.paper_slippage_ticks, live.paper_max_accounts)
+        rules_["proposals"] = {
+            "enabled": live.paper_proposals_enabled,
+            "max_position_pct": live.paper_proposal_max_position_pct,
+            "max_risk_pct": live.paper_proposal_max_risk_pct,
+        }
+        return rules_
 
     @router.get("/accounts", response_model=AccountList)
     async def list_accounts(principal: User, svc: Service) -> AccountList:
