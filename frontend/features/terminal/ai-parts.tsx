@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { RegimeChip } from "@/components/status-chip";
-import type { ChipFlow, MarketEnvironment, Signal } from "@/lib/api/types";
+import { EvidenceColumns, ScenarioRow } from "@/features/llm/judgement-detail";
+import type { ChipFlow, DebateCase, DebateReport, MarketEnvironment, Signal } from "@/lib/api/types";
 import { actionCopy, actionTone, severityCopy } from "@/lib/copy";
 import { directionOf, formatNumber, formatPct, formatPrice, formatSignedPct } from "@/lib/format";
 import { changeSinceGeneration } from "./ai-price";
@@ -149,5 +150,75 @@ export function SignalSection({
         <p className="ai-empty">未偵測到重大異常。</p>
       )}
     </section>
+  );
+}
+
+function CaseDetail({ title, side, debateCase }: { title: string; side: "bull" | "bear"; debateCase: DebateCase }) {
+  return (
+    <div className={`ai-case ai-case-${side}`}>
+      <h4 className="ai-sub">{title}</h4>
+      <p>{debateCase.thesis}</p>
+      {debateCase.key_evidence.length > 0 && (
+        <ul className="ai-list">
+          {debateCase.key_evidence.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      )}
+      {debateCase.counterpoints_to_address.length > 0 && (
+        <>
+          <p className="ai-note">需要回應的反方論點</p>
+          <ul className="ai-list">
+            {debateCase.counterpoints_to_address.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Everything the full debate has: both cases with their evidence, the judge's columns and scenarios, the risk review and the raw evidence. */
+export function DebateDetail({ report }: { report: DebateReport }) {
+  const refs = report.judgement.evidence_refs ?? [];
+  return (
+    <div className="ai-debate-full">
+      <CaseDetail title="多方論點" side="bull" debateCase={report.bull_case} />
+      <CaseDetail title="空方論點" side="bear" debateCase={report.bear_case} />
+      <EvidenceColumns evidenceLabel="裁決證據" judgement={report.judgement} />
+      {refs.length > 0 && <p className="ai-note">證據來源：{refs.join("、")}</p>}
+      <ScenarioRow scenarios={report.judgement.scenarios} />
+      {report.risk_review && (
+        <>
+          <h4 className="ai-sub">風險審查</h4>
+          <p>{report.risk_review.summary}</p>
+          {report.risk_review.invalidation_conditions.length > 0 && (
+            <ul className="ai-list">
+              {report.risk_review.invalidation_conditions.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+      {Boolean(report.evidence?.length) && (
+        <details className="ai-raw">
+          <summary>查看原始證據與日期</summary>
+          {report.evidence?.map((item) => (
+            <details key={item.id}>
+              <summary>
+                {item.id} · {item.as_of}
+              </summary>
+              <pre>{JSON.stringify(item.details, null, 2)}</pre>
+            </details>
+          ))}
+        </details>
+      )}
+      <p className="ai-note">
+        證據截止日：{report.as_of ?? "未提供"} · 模型 {report.model}
+        {report.judge_model !== report.model ? `／裁決 ${report.judge_model}` : ""}
+      </p>
+    </div>
   );
 }

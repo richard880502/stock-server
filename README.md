@@ -970,7 +970,7 @@ execution system.
 
 ## Forecast lab and backtest comparison
 
-The dashboard now has three views: signals, strategy backtests, and forecasts.
+The dashboard's stock page (`/stock/<symbol>`) shows the signal; strategy backtests and forecasts have their own views.
 Backtests accept initial capital, per-side fees/slippage, and an additional
 sell-side tax in basis points. New reports include transaction costs, a
 same-instrument buy-and-hold curve, and excess return. Both portfolios remain

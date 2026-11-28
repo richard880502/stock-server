@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Card } from "@/components/card";
 import { Sparkline } from "@/components/charts/sparkline";
@@ -14,7 +13,7 @@ import { useSession } from "@/lib/api/session";
 import { StrategyCell } from "./strategy-cell";
 import { DEFAULT_SORT, nextSort, SORT_OPTIONS, sortItems, sortToValue, valueToSort } from "./sort";
 import type { Sort, SortKey } from "./sort";
-import { useDashboard } from "@/lib/dashboard-context";
+import { stockHref } from "@/lib/stock-routes";
 import { formatPrice, formatSignedPct, shortDate } from "@/lib/format";
 import { useWatchlist, WATCHLIST_COVERAGE_NOTE } from "@/lib/use-watchlist";
 import { quoteFromLatest, useLiveQuotes, type LiveQuote, type LiveQuoteStatus } from "@/lib/live-quotes";
@@ -67,7 +66,6 @@ function Row({
   item,
   userId,
   removing,
-  onOpen,
   onRemove,
   quote, liveStatus, now, onChart, showLive,
 }: {
@@ -77,23 +75,21 @@ function Row({
   showLive: boolean;
   userId: string;
   removing: boolean;
-  onOpen: (symbol: string) => void;
   onRemove: (item: WatchlistItem) => void;
 }) {
   const code = item.symbol.replace(/\.TWO?$/, "");
   return (
-    <tr className="watch-row" onClick={() => onOpen(item.symbol)}>
+    <tr className="watch-row">
       <th scope="row" className="col-stock">
-        {/* The click bubbles to the row, so Enter / Space on the button works too. */}
-        <button
-          type="button"
+        <Link
+          href={stockHref(item.symbol)}
           className="stock-link"
-          aria-label={`${item.name || code}（${code}），查看今日訊號`}
+          aria-label={`${item.name || code}（${code}），開啟個股頁`}
         >
           <span className="stock-code num">{code}</span>
           <span className="stock-name" title={item.name}>{item.name}</span>
           <span className="market-tag">{marketLabel[item.market]}</span>
-        </button>
+        </Link>
       </th>
       <td className="col-close num" data-label="收盤">
         {item.close === null ? "—" : formatPrice(item.close)}
@@ -183,8 +179,6 @@ function SortHeader({
 export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNode; onOpenTerminal?: (symbol: string) => void } = {}) {
   const { user, config } = useSession();
   const liveEnabled = config?.quotes === true;
-  const { refresh: openSymbol } = useDashboard();
-  const router = useRouter();
   const watchlist = useWatchlist();
   const { refresh: refreshList, setMember } = watchlist;
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -195,14 +189,6 @@ export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNo
   useEffect(() => {
     refreshList(STALE_AFTER_MS);
   }, [refreshList]);
-
-  const open = useCallback(
-    (symbol: string) => {
-      openSymbol({ symbol });
-      router.push("/");
-    },
-    [openSymbol, router],
-  );
 
   const remove = useCallback(
     async (item: WatchlistItem) => {
@@ -237,7 +223,7 @@ export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNo
         title="自選股需要 Google 帳號登入"
         action={
           <Link className="button" href="/">
-            回到今日訊號
+            回到總覽
           </Link>
         }
       >
@@ -332,7 +318,6 @@ export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNo
                   userId={user.id}
                   item={item}
                   removing={watchlist.pending.has(item.symbol.toUpperCase())}
-                  onOpen={open}
                   onRemove={remove}
                   quote={live.quotes.get(item.symbol.toUpperCase()) ?? quoteFromLatest(item)}
                   liveStatus={live.status}
@@ -360,7 +345,7 @@ export function WatchlistView({ switcher, onOpenTerminal }: { switcher?: ReactNo
       <div className="view-heading watch-heading">
         <div>
           <h1>自選股</h1>
-          <p>點股票名稱查看訊號，或開啟策略研究查看條件與風險。研究紀錄儲存在此瀏覽器。</p>
+          <p>點股票名稱開啟個股頁，或開啟策略研究查看條件與風險。研究紀錄儲存在此瀏覽器。</p>
         </div>
         {switcher}
         {watchlist.watchlist && phase !== "unavailable" && (

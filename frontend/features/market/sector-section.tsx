@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
@@ -19,6 +20,7 @@ import {
   formatTwdCompact,
   today,
 } from "@/lib/format";
+import { stockHref } from "@/lib/stock-routes";
 import {
   dataTimeLabel,
   isTradingSession,
@@ -159,33 +161,27 @@ function SectorTableRow({
   );
 }
 
-function StockRows({
-  entries,
-  onPick,
-}: {
-  entries: SectorStockEntry[];
-  onPick: (symbol: string) => void;
-}) {
+function StockRows({ entries }: { entries: SectorStockEntry[] }) {
   return (
     <>
       {entries.map((entry) => {
         const code = entry.symbol.replace(/\.TWO?$/, "");
         return (
-          <tr key={entry.symbol} className="sector-stock-row" onClick={() => onPick(entry.symbol)}>
+          <tr key={entry.symbol} className="sector-stock-row">
             <th scope="row" className="name-col">
               <div className="stock-cell">
-                <button
-                  type="button"
+                <Link
+                  href={stockHref(entry.symbol)}
                   className="stock-link"
-                  aria-label={`${entry.name || code}（${code}），查看今日訊號`}
+                  aria-label={`${entry.name || code}（${code}），開啟個股頁`}
                 >
                   <span className="stock-code num">{code}</span>
                   <span className="stock-name" title={entry.name}>
                     {entry.name}
                   </span>
                   <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
-                </button>
-                <WatchlistStar symbol={entry.symbol} variant="icon" stopPropagation />
+                </Link>
+                <WatchlistStar symbol={entry.symbol} variant="icon" />
               </div>
             </th>
             <td className="num-col num" data-label="收盤">
@@ -228,7 +224,7 @@ function StockRows({
   );
 }
 
-export function SectorSection({ asOf, onPick }: { asOf: string; onPick: (symbol: string) => void }) {
+export function SectorSection({ asOf }: { asOf: string }) {
   const [window, setWindow] = useState<number>(5);
   const [sortKey, setSortKey] = useState<SectorSortKey>("share");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
@@ -433,7 +429,7 @@ export function SectorSection({ asOf, onPick }: { asOf: string; onPick: (symbol:
                   </tr>
                 </thead>
                 <tbody>
-                  <StockRows entries={stocks.data.entries} onPick={onPick} />
+                  <StockRows entries={stocks.data.entries} />
                 </tbody>
               </table>
             </div>

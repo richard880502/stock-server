@@ -1,0 +1,243 @@
+/* 個股頁 /stock/<symbol>. Layers from the top: topbar (sticky from 641px) → section nav → right rail. */
+
+.stock-page {
+  --stock-top: 0px; /* the topbar scrolls away on phones */
+  --stock-nav-h: 2.5rem;
+  --stock-rail-w: 380px;
+  --stock-anchor: calc(var(--stock-top) + var(--stock-nav-h) + var(--space-3));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+@media (min-width: 641px) {
+  .stock-page {
+    --stock-top: var(--header-h);
+  }
+}
+
+/* ---- Header ---------------------------------------------------------- */
+.stock-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.stock-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-6);
+}
+.stock-id {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.stock-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.stock-code {
+  font-weight: var(--weight-strong);
+}
+.stock-name {
+  color: var(--text-2);
+  font-weight: var(--weight-medium);
+}
+.stock-price {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+.stock-price[data-stale] .stock-price-main {
+  opacity: 0.7;
+}
+.stock-price-main {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-strong);
+  line-height: 1.1;
+}
+.stock-price-change {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.stock-price-note {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.stock-asof {
+  margin-left: auto;
+}
+.stock-actions {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.stock-actions::-webkit-scrollbar {
+  display: none;
+}
+.stock-actions .button {
+  flex: none;
+  white-space: nowrap;
+}
+.stock-daystats .quote-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  margin: 0;
+  padding: 0;
+}
+.stock-daystats .quote-stat {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.stock-daystats dt {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.stock-daystats dd {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.quote-stock-link {
+  color: var(--accent);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .stock-asof {
+    margin-left: 0;
+  }
+  .stock-price-main {
+    font-size: var(--text-xl);
+  }
+  .stock-actions {
+    margin-inline: calc(var(--gutter) * -1);
+    padding-inline: var(--gutter);
+  }
+}
+
+/* ---- Section nav ----------------------------------------------------- */
+.stock-nav {
+  position: sticky;
+  top: var(--stock-top);
+  z-index: calc(var(--z-header) - 1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--stock-nav-h);
+  margin-inline: calc(var(--gutter) * -1);
+  padding-inline: var(--gutter);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stock-nav::-webkit-scrollbar {
+  display: none;
+}
+.stock-nav a {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.stock-nav a:hover {
+  color: var(--text);
+}
+.stock-nav a[aria-current="location"] {
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+/* ---- Grid: one column on small screens, main + rail from 1100px --------- */
+.stock-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0; /* spacing is margin-bottom, so the rail's empty spanned rows add no height */
+  align-items: start;
+}
+.stock-sec {
+  grid-column: 1;
+  min-width: 0;
+  margin-bottom: var(--space-4);
+  scroll-margin-top: var(--stock-anchor);
+}
+.stock-rail {
+  grid-column: 1;
+  min-width: 0;
+  margin-bottom: var(--space-4);
+}
+
+@media (min-width: 1100px) {
+  .stock-grid {
+    grid-template-columns: minmax(0, 1fr) var(--stock-rail-w);
+    column-gap: var(--space-6);
+  }
+  .stock-rail {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    margin-bottom: 0;
+    position: sticky;
+    top: var(--stock-anchor);
+    max-height: calc(100dvh - var(--stock-anchor) - var(--space-3));
+    overflow-y: auto;
+  }
+}
+
+/* ---- AI rail on this page --------------------------------------------- */
+.ai-rail-page {
+  font-size: var(--text-sm);
+}
+.ai-raw pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs);
+}
+.ai-case {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ai-case p {
+  margin: 0;
+}
+
+/* ---- Closing row ------------------------------------------------------- */
+.stock-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.stock-next h2 {
+  margin: 0;
+  font-size: var(--text-base);
+}
+.stock-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}

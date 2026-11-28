@@ -1,6 +1,5 @@
 import { ArrowDownIcon, ArrowUpIcon, MinusIcon, PauseIcon } from "@/components/icons";
 import { RegimeChip } from "@/components/status-chip";
-import { WatchlistStar } from "@/components/watchlist-star";
 import type { Signal, SignalAction } from "@/lib/api/types";
 import { actionCopy, actionTone, factorLabels } from "@/lib/copy";
 import { formatNumber, formatPct } from "@/lib/format";
@@ -25,11 +24,14 @@ export function VerdictHero({
   name,
   alertCount,
   refreshing,
+  showIdentity = true,
 }: {
   signal: Signal;
   name: string | null;
   alertCount: number;
   refreshing?: boolean;
+  /** False where the page header already shows the code and name; only the as-of date stays. */
+  showIdentity?: boolean;
 }) {
   const copy = actionCopy[signal.action];
   const tone = actionTone[signal.action];
@@ -44,12 +46,9 @@ export function VerdictHero({
     >
       <div className="hero-main">
         <div className="hero-id">
-          <span className="hero-symbol mono">{signal.symbol}</span>
-          {name && <span className="hero-name">{name}</span>}
+          {showIdentity && <span className="hero-symbol mono">{signal.symbol}</span>}
+          {showIdentity && name && <span className="hero-name">{name}</span>}
           <span className="hero-asof num">資料截止 {signal.as_of}</span>
-          <span className="hero-star">
-            <WatchlistStar symbol={signal.symbol} />
-          </span>
         </div>
         <p className="hero-kicker">量化訊號</p>
         <h2 id="hero-title" className="hero-action">

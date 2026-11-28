@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { Fragment, useSyncExternalStore } from "react";
 import { Direction } from "@/components/direction";
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon } from "@/components/icons";
 import { WatchlistStar } from "@/components/watchlist-star";
 import type { ScreenerEntry, ScreenerMeta, ScreenerOrder } from "@/lib/api/types";
 import { formatPrice, formatSigned } from "@/lib/format";
+import { stockHref } from "@/lib/stock-routes";
 import { RowDetail } from "./row-detail";
 import { codeOf, type ColumnDef, resolveColumn } from "./screener-model";
 import { ColumnValue, FlagBadges, HighlightChips, PriceCell, ScoreBar } from "./screener-parts";
@@ -31,23 +33,20 @@ export type ResultsProps = {
   refreshing: boolean;
   onToggle: (symbol: string) => void;
   onSort: (key: string, higherIsBetter: boolean | null) => void;
-  onSignal: (symbol: string) => void;
-  onBacktest: (symbol: string) => void;
 };
 
-function StockLabel({ entry, onSignal }: { entry: ScreenerEntry; onSignal: (symbol: string) => void }) {
+function StockLabel({ entry }: { entry: ScreenerEntry }) {
   const code = codeOf(entry.symbol);
   return (
     <div className="sc-stock">
-      <button
-        type="button"
+      <Link
+        href={stockHref(entry.symbol)}
         className="stock-link sc-stock-link"
-        aria-label={`${entry.name || code}（${code}），查看今日訊號`}
-        onClick={() => onSignal(entry.symbol)}
+        aria-label={`${entry.name || code}（${code}），開啟個股頁`}
       >
         <span className="stock-code num">{code}</span>
         <span className="stock-name" title={entry.name}>{entry.name}</span>
-      </button>
+      </Link>
       <span className="sc-stock-meta">
         <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
         <FlagBadges flags={entry.flags} />
@@ -111,7 +110,7 @@ function ExpandButton({ entry, open, onToggle }: { entry: ScreenerEntry; open: b
 }
 
 export function ResultsTable(props: ResultsProps) {
-  const { entries, meta, columns, sort, order, expanded, refreshing, onToggle, onSort, onSignal, onBacktest } = props;
+  const { entries, meta, columns, sort, order, expanded, refreshing, onToggle, onSort } = props;
   const changeColumn = meta.metrics.some((m) => m.key === "change_pct") ? resolveColumn(meta, "change_pct") : null;
   const composite = resolveColumn(meta, "composite");
   const span = 7 + columns.length;
@@ -145,7 +144,7 @@ export function ResultsTable(props: ResultsProps) {
                 <tr className={`sc-row${open ? " is-open" : ""}${entry.highlights.length > 0 ? " has-highlights" : ""}`}>
                   <td className="sc-col-expand"><ExpandButton entry={entry} open={open} onToggle={onToggle} /></td>
                   <td className="sc-col-rank num">{entry.rank}</td>
-                  <th scope="row" className="sc-col-stock"><StockLabel entry={entry} onSignal={onSignal} /></th>
+                  <th scope="row" className="sc-col-stock"><StockLabel entry={entry} /></th>
                   <td className="num">{formatPrice(entry.close)}</td>
                   <td>
                     {entry.change_pct === null ? (
@@ -168,7 +167,7 @@ export function ResultsTable(props: ResultsProps) {
                 {open && (
                   <tr className="sc-detail-row" id={`sc-detail-${entry.symbol}`}>
                     <td colSpan={span}>
-                      <RowDetail entry={entry} meta={meta} onSignal={() => onSignal(entry.symbol)} onBacktest={() => onBacktest(entry.symbol)} />
+                      <RowDetail entry={entry} meta={meta} />
                     </td>
                   </tr>
                 )}
@@ -183,7 +182,7 @@ export function ResultsTable(props: ResultsProps) {
 
 /** Phone layout: one card per stock, the composite and the preset's first three columns. */
 export function ResultCards(props: ResultsProps) {
-  const { entries, meta, columns, expanded, refreshing, onToggle, onSignal, onBacktest } = props;
+  const { entries, meta, columns, expanded, refreshing, onToggle } = props;
   const lead = columns.slice(0, 3);
   return (
     <ol className={`sc-cards${refreshing ? " is-refreshing" : ""}`} aria-busy={refreshing} aria-label="選股結果">
@@ -193,7 +192,7 @@ export function ResultCards(props: ResultsProps) {
           <li key={entry.symbol} className="sc-card">
             <div className="sc-card-top">
               <span className="sc-card-rank num">{entry.rank}</span>
-              <StockLabel entry={entry} onSignal={onSignal} />
+              <StockLabel entry={entry} />
               <span className="sc-card-price"><PriceCell entry={entry} /></span>
             </div>
             <dl className="sc-card-metrics">
@@ -224,7 +223,7 @@ export function ResultCards(props: ResultsProps) {
             </div>
             {open && (
               <div id={`sc-detail-${entry.symbol}`}>
-                <RowDetail entry={entry} meta={meta} onSignal={() => onSignal(entry.symbol)} onBacktest={() => onBacktest(entry.symbol)} />
+                <RowDetail entry={entry} meta={meta} />
               </div>
             )}
           </li>

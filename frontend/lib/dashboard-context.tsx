@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import {
   createContext,
   type ReactNode,
-  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -18,6 +17,7 @@ import { getDataStatus, getLlmStatus, searchInstruments } from "./api/endpoints"
 import type { DataStatus, LlmStatus } from "./api/types";
 import { today } from "./format";
 import { routeUsesSignalData } from "./signal-routes";
+import { symbolFromPath } from "./stock-routes";
 import { getRecentSymbols, type RecentSymbol, rememberSymbol } from "./recent-symbols";
 import {
   benchmarkForSymbol,
@@ -27,8 +27,15 @@ import {
 } from "./symbols";
 
 function useDashboardState() {
-  const [symbol, setSymbolState] = useState(DEFAULT_SYMBOL);
-  const [benchmark, setBenchmark] = useState(DEFAULT_BENCHMARK);
+  // On a stock page (`/stock/<symbol>`) the path names the stock; see the route-sync effect below.
+  const pathname = usePathname();
+  const routeSymbol = symbolFromPath(pathname);
+  const [startSymbol] = useState(() => routeSymbol ?? DEFAULT_SYMBOL);
+  const [symbol, setSymbolState] = useState(startSymbol);
+  const [benchmark, setBenchmark] = useState(() => benchmarkForSymbol(startSymbol, DEFAULT_BENCHMARK));
+  // False while the symbol is only the built-in default nobody chose (a fresh load of 今日總覽,
+  // 市場…): such a symbol is not added to 最近看過.
+  const [picked, setPicked] = useState(routeSymbol !== null);
   const [asOf, setAsOf] = useState(today);
   const [error, setError] = useState<string | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
@@ -44,13 +51,13 @@ function useDashboardState() {
   // The signal, chip flow and market environment are fetched only on routes that show them
   // (see lib/signal-routes.ts). On other routes a requested load is parked in `pendingSignal`
   // and runs when the user reaches such a route.
-  const needsSignal = routeUsesSignalData(usePathname());
+  const needsSignal = routeUsesSignalData(pathname);
   const needsSignalRef = useRef(needsSignal);
   const [initialQuery] = useState<SignalQuery>(() => ({
-    symbol: DEFAULT_SYMBOL,
-    benchmark: DEFAULT_BENCHMARK,
+    symbol: startSymbol,
+    benchmark: benchmarkForSymbol(startSymbol, DEFAULT_BENCHMARK),
     asOf: today(),
-    market: marketOf(DEFAULT_SYMBOL),
+    market: marketOf(startSymbol),
   }));
   const [pendingSignal, setPendingSignal] = useState<SignalQuery | null>(initialQuery);
   const signalData = {
@@ -68,12 +75,6 @@ function useDashboardState() {
     null,
   );
 
-  const setSymbol = useCallback((next: string) => {
-    const upper = next.toUpperCase();
-    setSymbolState(upper);
-    setBenchmark((current) => benchmarkForSymbol(upper, current));
-  }, []);
-
   const { load } = signalLoader;
   const { reset: resetBacktest } = backtest;
   const { resetStream } = llm;
@@ -87,6 +88,7 @@ function useDashboardState() {
     overrides: Partial<{ symbol: string; benchmark: string; asOf: string }> = {},
   ) => {
     const nextSymbol = (overrides.symbol ?? symbol).trim().toUpperCase();
+    if (overrides.symbol) setPicked(true);
     const nextBenchmark =
       overrides.benchmark ?? benchmarkForSymbol(nextSymbol, benchmark);
     const nextAsOf = overrides.asOf ?? asOf;
@@ -114,11 +116,28 @@ function useDashboardState() {
   useEffect(() => {
     needsSignalRef.current = needsSignal;
     if (!needsSignal || pendingSignal === null) return;
+    // A stock page for another symbol was just opened: the route-sync effect below loads it.
+    if (routeSymbol && pendingSignal.symbol !== routeSymbol) return;
     const parked = pendingSignal;
     void load(parked);
     // Cleared from a callback, not synchronously: `loading` stays true until the load has begun.
     queueMicrotask(() => setPendingSignal((current) => (current === parked ? null : current)));
-  }, [needsSignal, pendingSignal, load]);
+  }, [needsSignal, pendingSignal, load, routeSymbol]);
+
+  // The stock page's path is the source of truth for the symbol: opening `/stock/<symbol>`
+  // (link, palette, back/forward) switches the shared query to it. Keyed on the path only, so
+  // it never fights a symbol chosen through `refresh` on other routes.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+  const symbolRef = useRef(symbol);
+  useEffect(() => {
+    symbolRef.current = symbol;
+  }, [symbol]);
+  useEffect(() => {
+    if (routeSymbol && routeSymbol !== symbolRef.current) refreshRef.current({ symbol: routeSymbol });
+  }, [routeSymbol]);
 
   // Recent symbols live in localStorage, so they can only be read after mount.
   useEffect(() => {
@@ -126,9 +145,12 @@ function useDashboardState() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // Once a symbol's signal has loaded, resolve its name and remember it as recent.
-  // Routes that skip the signal still resolve the name of the symbol their query bar shows.
-  const loadedSymbol = signalData.signal?.symbol ?? (needsSignal ? null : symbol);
+  // Once a symbol's signal has loaded, resolve its name and remember it as recent. Routes that
+  // skip the signal (回測, 預測) resolve the name of the query's symbol instead — a signal left
+  // over from an earlier stock page must not stand in for it. A symbol is remembered only when
+  // it is shown on a signal route or was chosen, never the untouched default.
+  const loadedSymbol = needsSignal ? (signalData.signal?.symbol ?? null) : symbol;
+  const remember = needsSignal || picked;
   useEffect(() => {
     if (!loadedSymbol) return;
     const controller = new AbortController();
@@ -136,15 +158,15 @@ function useDashboardState() {
       .then((rows) => {
         const name = rows.find((row) => row.symbol === loadedSymbol)?.name;
         setInstrumentName({ symbol: loadedSymbol, name: name ?? "" });
-        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol, name }));
+        if (remember) setRecentSymbols(rememberSymbol({ symbol: loadedSymbol, name }));
       })
       .catch(() => {
         if (controller.signal.aborted) return;
         setInstrumentName({ symbol: loadedSymbol, name: "" });
-        setRecentSymbols(rememberSymbol({ symbol: loadedSymbol }));
+        if (remember) setRecentSymbols(rememberSymbol({ symbol: loadedSymbol }));
       });
     return () => controller.abort();
-  }, [loadedSymbol]);
+  }, [loadedSymbol, remember]);
 
   useEffect(() => {
     getLlmStatus().then(setLlmStatus).catch(() => setLlmStatus(null));
@@ -152,7 +174,7 @@ function useDashboardState() {
   }, []);
 
   return {
-    query: { ...query, setSymbol, setBenchmark, setAsOf },
+    query,
     error,
     setError,
     llmStatus,

@@ -454,10 +454,6 @@
    LLM
    ====================================================================== */
 
-.llm-card .segmented {
-  margin-bottom: var(--space-4);
-}
-
 .llm-body {
   display: flex;
   flex-direction: column;
@@ -536,36 +532,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-}
-
-.debate-columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-
-.debate-case {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-5);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--flat);
-}
-
-.debate-case.bull {
-  border-top-color: var(--up);
-}
-
-.debate-case.bear {
-  border-top-color: var(--down);
-}
-
-.debate-thesis {
-  font-weight: var(--weight-medium);
 }
 
 .column-label {
@@ -663,7 +629,6 @@
 }
 
 @media (max-width: 719px) {
-  .debate-columns,
   .evidence-columns {
     grid-template-columns: 1fr;
   }
@@ -680,7 +645,7 @@
   justify-content: space-between;
   gap: var(--space-8);
   padding: var(--space-8);
-  overflow: hidden;
+  /* No overflow clipping: the as-of popover opens below the heading controls. */
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background:
@@ -692,10 +657,10 @@
 .lab-heading::after {
   content: "";
   position: absolute;
-  right: -3rem;
-  bottom: -4.5rem;
-  width: 18rem;
-  height: 9rem;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  width: 14rem;
+  height: 7rem;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
   border-radius: 50%;
   transform: rotate(-12deg);
@@ -720,7 +685,7 @@
   letter-spacing: -0.035em;
 }
 
-.lab-heading > div > p:last-child {
+.lab-heading > div > p:not(.lab-eyebrow) {
   max-width: 42rem;
   margin-top: var(--space-3);
   color: var(--text-2);
@@ -931,7 +896,7 @@
 
 .workbench > :first-child {
   position: sticky;
-  top: calc(var(--header-h) + 6.5rem);
+  top: calc(var(--header-h) + var(--space-4));
 }
 
 @media (max-width: 899px) {
@@ -1061,20 +1026,3 @@ fieldset.field-row,
   min-width: 0;
   scroll-margin-top: var(--space-4);
 }
-
-/* Jump link to the stock signal; only needed where the sections stack on a phone. */
-a.home-jump { display: none; min-height: 2.75rem; justify-content: center; }
-@media (max-width: 719px) { a.home-jump { display: inline-flex; } }
-
-/* Market discovery on the overview */
-.home-market { display: grid; gap: var(--space-4); }
-#stock-signal { display: grid; gap: var(--space-6); }
-@media (min-width: 900px) {
-  #stock-signal { scroll-margin-top: calc(var(--header-h) + 7rem); }
-}
-.home-candidates { list-style: none; padding: 0; margin: 0; }
-.home-candidates li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border); }
-.home-candidates li > span:first-child { display: grid; gap: var(--space-1); }
-.home-candidates small { color: var(--text-3); }
-.home-candidate-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-@media (max-width: 480px) { .home-candidates li { align-items: flex-start; flex-direction: column; } }

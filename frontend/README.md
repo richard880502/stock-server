@@ -13,8 +13,8 @@ The default API URL is `http://127.0.0.1:8000`. Configure
 
 ## Layout
 
-- `app/` – routes only: `/` (今日訊號), `/market` (市場), `/backtest`, `/forecast`, plus the root layout, `globals.css` (Tailwind entry) and `styles/` (the design system, below).
-- `components/` – app shell (login gate, sticky header, query bar with the symbol combobox, view tabs, theme toggle) and shared UI (card, stat, chips, direction values, empty states, notices, tables) plus `charts/` (SVG charts).
+- `app/` – routes only: `/` (今日總覽), `/stock/<symbol>` (個股頁, e.g. `/stock/2330.TW`), `/market` (市場), `/screener` (選股), `/watchlist` (自選股), `/backtest` (回測), `/paper` (模擬交易), `/forecast` (預測; not in the nav, reached from the stock page and ⌘K), plus the root layout, `globals.css` (Tailwind entry) and `styles/` (the design system, below).
+- `components/` – app shell (login gate, sticky header with the ⌘K symbol search, nav in the order 總覽 · 市場 · 選股 · 自選股 · 回測 · 模擬交易, theme toggle; pages that use an as-of date show an as-of chip) and shared UI (card, stat, chips, direction values, empty states, notices, tables) plus `charts/` (SVG charts).
 - `features/{signal,market,llm,backtest,forecast}/` – one view per feature with its state hook.
 - `lib/api/` – typed API client: `client.ts` (`fetchJson`, base URL), `auth.ts` (API key storage, `withAuthHeaders`), `session.ts` (sign-in state), `rate-limit.ts`, `endpoints.ts`, `types.ts`, `errors.ts`, `sse.ts`.
 - `lib/dashboard-context.tsx` – symbol / benchmark / as-of date and results shared across routes.
@@ -106,8 +106,8 @@ preflight and utilities; the system itself is plain CSS custom properties.
 - **Filters in the URL** – `?market=TW&window=5&metric=foreign_net&range=60&cum=1`
   (`use-market-params.ts`); defaults are omitted and bad values fall back.
 - **Boards** – `ranking-board.tsx` renders a real table; inside a container query
-  narrower than 33rem each row becomes a card. Clicking a row calls
-  `refresh({ symbol })` on the dashboard context and navigates to `/`.
+  narrower than 33rem each row becomes a card. The code / name cell
+  links to the stock page, `/stock/<symbol>`.
 - **Honest data** – a session whose report is not out yet comes back from the API
   as zeros with `institutional_reported` / `credit_reported` false; charts hatch
   those days and break lines instead of drawing 0. NT$ flow amounts are labelled

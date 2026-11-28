@@ -4,14 +4,13 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { SparkIcon } from "@/components/icons";
 import { StanceChip } from "@/components/status-chip";
 import { SyncPendingNotice } from "@/components/sync-pending-notice";
-import { EvidenceColumns, ScenarioRow } from "@/features/llm/judgement-detail";
 import { LlmErrorNotice } from "@/features/llm/llm-error";
 import type { DebateReport } from "@/lib/api/types";
 import { useDashboard } from "@/lib/dashboard-context";
 import type { LiveQuote } from "@/lib/live-quotes";
 import { aiCache, aiCacheKey, generatedLabel } from "./ai-cache";
 import { AiFollowUp } from "./ai-followup";
-import { AI_DISCLAIMER, BacktestLink, PriceDrift, SignalSection } from "./ai-parts";
+import { AI_DISCLAIMER, BacktestLink, DebateDetail, PriceDrift, SignalSection } from "./ai-parts";
 import "./ai-rail.css";
 
 const MAX_RISKS = 3;
@@ -30,9 +29,26 @@ function topRisks(report: DebateReport): string[] {
  * viewer asks (Claude calls cost money), then follow-up questions. No order entry: the app
  * never trades, and every AI suggestion points to the backtest for verification.
  */
-export function AiRail({ symbol, quote }: { symbol: string; name: string | null; quote?: LiveQuote }) {
+export function AiRail({
+  symbol,
+  quote,
+  showSignal = true,
+  variant = "terminal",
+}: {
+  symbol: string;
+  name: string | null;
+  quote?: LiveQuote;
+  /** The stock page shows the verdict right beside the rail, so it hides this copy. */
+  showSignal?: boolean;
+  /** "page" drops the 看盤 grid wrapper class and keeps the follow-up box out of the way until there is a result. */
+  variant?: "terminal" | "page";
+}) {
   const { query, signalData, llm, llmStatus } = useDashboard();
   const key = aiCacheKey(symbol, query.asOf);
+  // The dashboard's LLM state belongs to `query.symbol`. On a stock page the rail mounts for the
+  // path's symbol one effect before the provider switches the query (and clears that state), so
+  // a result for the previous stock must be neither shown nor cached under this one.
+  const ownsLlm = query.symbol.trim().toUpperCase() === symbol.trim().toUpperCase();
   const entry = useSyncExternalStore(
     aiCache.subscribe,
     () => aiCache.get(key),
@@ -47,7 +63,7 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
 
   const { streaming, streamedGuide, streamModel, streamError } = llm;
   useEffect(() => {
-    if (streaming || streamError || !streamedGuide) return;
+    if (!ownsLlm || streaming || streamError || !streamedGuide) return;
     if (aiCache.get(key)?.guide?.text === streamedGuide) return;
     aiCache.saveGuide(key, {
       text: streamedGuide,
@@ -55,18 +71,18 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
       generatedAt: Date.now(),
       price: latestPrice.current,
     });
-  }, [key, streaming, streamError, streamedGuide, streamModel]);
+  }, [key, ownsLlm, streaming, streamError, streamedGuide, streamModel]);
 
   const { debating, debateReport, debateError } = llm;
   useEffect(() => {
-    if (debating || debateError || !debateReport) return;
+    if (!ownsLlm || debating || debateError || !debateReport) return;
     if (aiCache.get(key)?.debate?.report === debateReport) return;
     aiCache.saveDebate(key, {
       report: debateReport,
       generatedAt: Date.now(),
       price: latestPrice.current,
     });
-  }, [key, debating, debateError, debateReport]);
+  }, [key, ownsLlm, debating, debateError, debateReport]);
 
   const signal =
     signalData.signal && signalData.signal.symbol.toUpperCase() === symbol.toUpperCase()
@@ -75,11 +91,13 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
   const dataAsOf = signal?.as_of;
 
   // LLM output is held by the dashboard only for the current query; otherwise fall back to the cache.
-  const guideLive = streaming || Boolean(streamedGuide) || Boolean(llm.streamSyncWait) || Boolean(streamError);
+  const guideLive =
+    ownsLlm && (streaming || Boolean(streamedGuide) || Boolean(llm.streamSyncWait) || Boolean(streamError));
   const guideText = guideLive ? streamedGuide : (entry?.guide?.text ?? "");
   const guideModel = guideLive ? streamModel : (entry?.guide?.model ?? null);
   const guideMeta = !streaming ? entry?.guide : undefined;
-  const debateLive = debating || Boolean(debateReport) || Boolean(llm.debateSyncWait) || Boolean(debateError);
+  const debateLive =
+    ownsLlm && (debating || Boolean(debateReport) || Boolean(llm.debateSyncWait) || Boolean(debateError));
   const report = debateLive ? debateReport : (entry?.debate?.report ?? null);
   const debateMeta = !debating ? entry?.debate : undefined;
 
@@ -87,19 +105,21 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
   const unconfigured = llmStatus !== null && !configured;
 
   return (
-    <aside className="terminal-ai ai-rail" aria-label="AI 交易建議">
+    <aside className={variant === "terminal" ? "terminal-ai ai-rail" : "ai-rail ai-rail-page"} aria-label="AI 交易建議">
       <header className="ai-head">
         <h2>AI 交易建議</h2>
         <span className="ai-model mono" title={configured ? (llmStatus?.model ?? undefined) : undefined}>{configured ? (llmStatus?.model ?? "LLM") : "量化訊號"}</span>
       </header>
 
-      <SignalSection
-        signal={signal}
-        loading={signalData.loading}
-        syncing={Boolean(signalData.syncWait)}
-        marketEnvironment={signalData.marketEnvironment}
-        chipFlow={signalData.chipFlow}
-      />
+      {showSignal && (
+        <SignalSection
+          signal={signal}
+          loading={signalData.loading}
+          syncing={Boolean(signalData.syncWait)}
+          marketEnvironment={signalData.marketEnvironment}
+          chipFlow={signalData.chipFlow}
+        />
+      )}
 
       <section className="ai-section" aria-labelledby="ai-llm-title">
         <h3 id="ai-llm-title" className="ai-section-title">
@@ -195,24 +215,7 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
                 )}
                 <details className="ai-more">
                   <summary>展開完整辯論</summary>
-                  <div className="ai-debate-full">
-                    <h4 className="ai-sub">多方論點</h4>
-                    <p>{report.bull_case.thesis}</p>
-                    <h4 className="ai-sub">空方論點</h4>
-                    <p>{report.bear_case.thesis}</p>
-                    <EvidenceColumns evidenceLabel="裁決證據" judgement={report.judgement} />
-                    <ScenarioRow scenarios={report.judgement.scenarios} />
-                    {report.risk_review && (
-                      <>
-                        <h4 className="ai-sub">風險審查</h4>
-                        <p>{report.risk_review.summary}</p>
-                      </>
-                    )}
-                    <p className="ai-note">
-                      證據截止日：{report.as_of ?? "未提供"} · 模型 {report.model}
-                      {report.judge_model !== report.model ? `／裁決 ${report.judge_model}` : ""}
-                    </p>
-                  </div>
+                  <DebateDetail report={report} />
                 </details>
                 {debateMeta && (
                   <>
@@ -225,14 +228,18 @@ export function AiRail({ symbol, quote }: { symbol: string; name: string | null;
             ) : null}
 
             {!guideText && !streaming && !report && !debating && !streamError && !debateError && (
-              <p className="ai-empty">量化證據已備妥。需要時再產生 AI 判讀或多空辯論。</p>
+              <p className="ai-empty">
+                {variant === "page"
+                  ? "AI 會根據左側的量化證據整理操作思路，按下才會呼叫模型。"
+                  : "量化證據已備妥。需要時再產生 AI 判讀或多空辯論。"}
+              </p>
             )}
           </>
         )}
         <p className="ai-note ai-disclaimer">{AI_DISCLAIMER}</p>
       </section>
 
-      {!unconfigured && (
+      {!unconfigured && (variant === "terminal" || Boolean(report) || (entry?.messages.length ?? 0) > 0) && (
         <AiFollowUp key={key} cacheKey={key} report={report} messages={entry?.messages ?? []} />
       )}
     </aside>

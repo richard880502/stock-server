@@ -4,12 +4,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { searchInstruments } from "@/lib/api/endpoints";
 import type { Instrument } from "@/lib/api/types";
+import { paperLink } from "@/features/paper/paper-math";
 import { useDashboard } from "@/lib/dashboard-context";
 import { looksLikeSymbol, matchesQuery } from "@/lib/palette-match";
+import { backtestHref, forecastHref, stockHref, symbolFromPath } from "@/lib/stock-routes";
 import { applyThemePreference, getThemePreference, THEME_ORDER } from "@/lib/theme";
 import { useWatchlist } from "@/lib/use-watchlist";
 import { ChartIcon, SearchIcon, StarIcon } from "./icons";
-import { VIEWS } from "./view-tabs";
+import { SECONDARY_VIEWS, VIEWS } from "./view-tabs";
 
 type Command = {
   id: string;
@@ -21,11 +23,28 @@ type Command = {
 
 const isMac = () => typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
-/** Opens the palette from anywhere: ⌘K on macOS, Ctrl+K elsewhere. */
+/** True when a key event came from a place where "/" is a character, not a shortcut. */
+export function isTypingTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  return Boolean(element && (element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName)));
+}
+
+/** Opens the palette from anywhere: ⌘K on macOS, Ctrl+K elsewhere, or "/" outside text fields. */
 export function useCommandPaletteShortcut(open: () => void) {
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey) && !event.altKey) {
+        event.preventDefault();
+        open();
+      } else if (
+        event.key === "/" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !isTypingTarget(event.target) &&
+        // Not over another open dialog, drawer or popover.
+        !document.querySelector('dialog[open], [role="dialog"]')
+      ) {
         event.preventDefault();
         open();
       }
@@ -39,7 +58,7 @@ export function CommandPaletteButton({ onOpen }: { onOpen: () => void }) {
   return (
     <button type="button" className="palette-trigger" onClick={onOpen} aria-label="搜尋股票、頁面與動作（⌘K）">
       <SearchIcon size={16} />
-      <span className="palette-trigger-label">搜尋</span>
+      <span className="palette-trigger-label">搜尋股票代號或名稱</span>
       <kbd className="palette-kbd" suppressHydrationWarning>{isMac() ? "⌘K" : "Ctrl K"}</kbd>
     </button>
   );
@@ -55,7 +74,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const listId = useId();
   const router = useRouter();
   const pathname = usePathname() ?? "/";
-  const { refresh, recentSymbols, query } = useDashboard();
+  const { recentSymbols, query } = useDashboard();
   const watchlist = useWatchlist();
   const [text, setText] = useState("");
   const [results, setResults] = useState<{ q: string; rows: Instrument[] }>({ q: "", rows: [] });
@@ -94,15 +113,6 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   };
 
   const commands = useMemo<Command[]>(() => {
-    const openStock = (symbol: string) => {
-      refresh({ symbol });
-      if (pathname.replace(/\/+$/, "") !== "") router.push("/#stock-signal");
-      else window.setTimeout(() => document.getElementById("stock-signal")?.scrollIntoView({ behavior: "smooth" }), 50);
-    };
-    const backtest = (symbol: string) => {
-      refresh({ symbol });
-      router.push("/backtest");
-    };
     const matches = (label: string) => matchesQuery(label, q);
 
     const stocks: Command[] = [];
@@ -111,7 +121,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       const key = symbol.toUpperCase();
       if (seen.has(key)) return;
       seen.add(key);
-      stocks.push({ id: `stock:${key}`, group: "股票", label: `${key}${name ? ` ${name}` : ""}`, hint, run: () => openStock(key) });
+      stocks.push({ id: `stock:${key}`, group: "股票", label: `${key}${name ? ` ${name}` : ""}`, hint, run: () => router.push(stockHref(key)) });
     };
     if (q && results.q === q) results.rows.forEach((row) => addStock(row.symbol, row.name, row.market === "TW" ? "上市" : "上櫃"));
     if (!q) {
@@ -121,16 +131,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     // A well-formed code typed directly can be opened even before search answers.
     if (looksLikeSymbol(q) && !seen.has(q.toUpperCase())) addStock(q, undefined, "直接開啟");
 
-    const pages: Command[] = VIEWS.filter((v) => matches(v.label)).map((v) => ({
+    const pages: Command[] = [...VIEWS, ...SECONDARY_VIEWS].filter((v) => matches(v.label)).map((v) => ({
       id: `page:${v.href}`,
       group: "前往",
       label: v.label,
       run: () => router.push(v.href),
     }));
 
-    const current = query.symbol;
+    // On a stock page the stock in the URL is what the user is looking at; elsewhere, the shared one.
+    const current = symbolFromPath(pathname) ?? query.symbol;
     const actions: Command[] = [
-      { id: "act:backtest", group: "動作" as const, label: `回測 ${current}`, run: () => backtest(current) },
+      { id: "act:backtest", group: "動作" as const, label: `回測 ${current}`, run: () => router.push(backtestHref(current)) },
+      { id: "act:forecast", group: "動作" as const, label: `情境預測 ${current}`, run: () => router.push(forecastHref(current)) },
+      { id: "act:paper", group: "動作" as const, label: `模擬買進 ${current}`, run: () => router.push(paperLink(current, "buy")) },
       {
         id: "act:watch",
         group: "動作" as const,
@@ -149,7 +162,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     ].filter((a) => matches(a.label));
 
     return [...stocks, ...pages, ...actions];
-  }, [q, results, recentSymbols, watchlist, query.symbol, refresh, router, pathname]);
+  }, [q, results, recentSymbols, watchlist, query.symbol, router, pathname]);
 
   const activeIndex = Math.min(active, Math.max(0, commands.length - 1));
   const choose = (command: Command | undefined) => {

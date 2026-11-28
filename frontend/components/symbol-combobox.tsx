@@ -36,8 +36,8 @@ const marketLabel = { TW: "上市", TWO: "上櫃" } as const;
  * Symbol search combobox (ARIA 1.2 pattern). Typing queries
  * GET /api/v1/instruments/search; an empty / untouched field lists recent
  * symbols; a well-formed code that the search does not know can still be
- * submitted (the backend syncs unknown symbols on demand). Press "/" anywhere
- * to focus it.
+ * submitted (the backend syncs unknown symbols on demand). "/" belongs to the
+ * command palette, so the field has no shortcut of its own.
  */
 export function SymbolCombobox({
   value,
@@ -99,25 +99,6 @@ export function SymbolCombobox({
       controller.abort();
     };
   }, [open, pristine, query]);
-
-  // "/" focuses the field from anywhere outside a text input.
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
-      ) {
-        return;
-      }
-      event.preventDefault();
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
 
   const typedSymbol = pristine ? null : normalizeSymbolInput(query);
 
@@ -259,9 +240,6 @@ export function SymbolCombobox({
           onClick={() => setOpen(true)}
           onKeyDown={onKeyDown}
         />
-        <kbd className="combobox-kbd" aria-hidden="true">
-          /
-        </kbd>
       </div>
       {hint && (
         <p className="field-hint" id={`${listId}-hint`} role="alert">

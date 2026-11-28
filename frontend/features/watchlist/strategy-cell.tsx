@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WatchlistItem } from "@/lib/api/types";
 import { useDashboard } from "@/lib/dashboard-context";
+import { backtestHref } from "@/lib/stock-routes";
 import { benchmarkForSymbol, DEFAULT_BENCHMARK } from "@/lib/symbols";
 import { readJson } from "@/lib/safe-storage";
 import { emptyEntry, type StrategyEntry } from "./strategy-entry";
@@ -48,7 +49,7 @@ export function StrategyCell({ item, userId }: { item: WatchlistItem; userId: st
         onBacktest={(asOf) => {
           refresh({ symbol: item.symbol, benchmark: benchmarkForSymbol(item.symbol, DEFAULT_BENCHMARK), asOf });
           setOpen(false);
-          router.push("/backtest");
+          router.push(backtestHref(item.symbol));
         }} />}
     </td>
   );
