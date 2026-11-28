@@ -5,15 +5,18 @@ import { usePathname } from "next/navigation";
 import { ChartIcon, FlaskIcon, MarketIcon, PulseIcon, ScreenerIcon, StarIcon } from "./icons";
 import { PaperIcon } from "./paper-icon";
 
+/** Primary navigation, in the order of the research journey. */
 export const VIEWS = [
-  { href: "/", label: "總覽", short: "訊號", Icon: PulseIcon },
+  { href: "/", label: "總覽", short: "總覽", Icon: PulseIcon },
   { href: "/market", label: "市場", short: "市場", Icon: MarketIcon },
   { href: "/screener", label: "選股", short: "選股", Icon: ScreenerIcon },
   { href: "/watchlist", label: "自選股", short: "自選", Icon: StarIcon },
-  { href: "/paper", label: "模擬交易", short: "模擬", Icon: PaperIcon },
   { href: "/backtest", label: "回測", short: "回測", Icon: ChartIcon },
-  { href: "/forecast", label: "預測", short: "預測", Icon: FlaskIcon },
+  { href: "/paper", label: "模擬交易", short: "模擬", Icon: PaperIcon },
 ] as const;
+
+/** Pages reached from a stock page or the command palette only; not in the nav. */
+export const SECONDARY_VIEWS = [{ href: "/forecast", label: "預測", Icon: FlaskIcon }] as const;
 
 /** Inline tabs in the top bar on wide screens; a fixed bottom bar on phones (see layout.css). */
 export function ViewTabs() {

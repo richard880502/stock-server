@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { WatchlistStar } from "@/components/watchlist-star";
 import type { ScreenerEntry, ScreenerMeta } from "@/lib/api/types";
+import { backtestHref, stockHref } from "@/lib/stock-routes";
 import { cellValue, formatScreenerValue, resolveColumn, toneOf } from "./screener-model";
 import { HighlightChips, ScoreBar } from "./screener-parts";
 
@@ -35,13 +37,9 @@ function Composition({ meta, factorKey }: { meta: ScreenerMeta; factorKey: strin
 export function RowDetail({
   entry,
   meta,
-  onSignal,
-  onBacktest,
 }: {
   entry: ScreenerEntry;
   meta: ScreenerMeta;
-  onSignal: () => void;
-  onBacktest: () => void;
 }) {
   const scoreKeys = [
     ...meta.factors.map((f) => f.key),
@@ -51,12 +49,12 @@ export function RowDetail({
   return (
     <div className="sc-detail">
       <div className="sc-detail-actions">
-        <button type="button" className="button small primary" onClick={onSignal}>
-          查看訊號
-        </button>
-        <button type="button" className="button small" onClick={onBacktest}>
+        <Link className="button small primary" href={stockHref(entry.symbol)}>
+          開啟個股頁
+        </Link>
+        <Link className="button small" href={backtestHref(entry.symbol)}>
           策略回測
-        </button>
+        </Link>
         <WatchlistStar symbol={entry.symbol} variant="labeled" />
       </div>
 

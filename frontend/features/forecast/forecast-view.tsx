@@ -1,15 +1,22 @@
 "use client";
 
+import { AsOfControl } from "@/components/as-of-control";
+import { TargetLine } from "@/components/target-line";
 import { useDashboard } from "@/lib/dashboard-context";
+import { useSymbolParam } from "@/lib/use-symbol-param";
 import { ForecastPanel } from "./forecast-panel";
 
 export function ForecastView() {
   const { query } = useDashboard();
+  useSymbolParam();
   return (
     <>
       <div className="view-heading">
         <h1>預測實驗室</h1>
         <p>看見可能的路徑，而不是單一答案：情境區間加上逐期驗證。</p>
+        <TargetLine>
+          <AsOfControl />
+        </TargetLine>
       </div>
       {/* Remount (and clear the report) whenever the shared symbol or date changes. */}
       <ForecastPanel

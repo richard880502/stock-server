@@ -351,23 +351,6 @@ kbd {
   color: var(--text-3);
 }
 
-.combobox-kbd {
-  position: absolute;
-  right: var(--space-3);
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.combobox-control:focus-within .combobox-kbd {
-  display: none;
-}
-
-@media (hover: none) {
-  .combobox-kbd {
-    display: none;
-  }
-}
-
 .combobox-panel {
   position: absolute;
   top: calc(100% + var(--space-1));
@@ -1128,16 +1111,24 @@ kbd {
 /* Command palette (⌘K) */
 .palette-trigger {
   display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px;
+  width: clamp(9.5rem, 16vw, 17.5rem); min-width: 0; flex: 0 1 auto;
   border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2);
   color: var(--text-3); font: inherit; font-size: var(--text-sm); cursor: pointer;
-  white-space: nowrap; flex-shrink: 0;
+  white-space: nowrap; text-align: left;
 }
+.palette-trigger svg { flex: none; }
+.palette-trigger-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .palette-trigger:hover { color: var(--text); border-color: var(--border-strong); }
 .palette-kbd {
-  font-family: inherit; font-size: var(--text-xs); color: var(--text-3);
+  flex: none; font-family: inherit; font-size: var(--text-xs); color: var(--text-3);
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--surface);
 }
-@media (max-width: 900px) { .palette-trigger-label, .palette-trigger .palette-kbd { display: none; } }
+/* Narrow desktops: the field shrinks, then loses its hint; phones get an icon button. */
+@media (max-width: 1099px) { .palette-trigger .palette-kbd { display: none; } }
+@media (max-width: 899px) {
+  .palette-trigger { width: auto; padding: 0 9px; }
+  .palette-trigger-label { display: none; }
+}
 .palette {
   width: min(640px, calc(100vw - 32px)); max-height: min(560px, calc(100vh - 96px));
   margin: 12vh auto auto; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
@@ -1219,4 +1210,135 @@ select.input:disabled,
   .strategy-presets button {
     min-height: var(--touch);
   }
+}
+
+/* ---- As-of control (data cut-off chip in page headings) ------------------ */
+
+.asof-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.asof-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.asof-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.asof-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.asof-chip-value {
+  color: var(--text);
+  font-weight: var(--weight-strong);
+}
+
+.asof-control[data-historical] .asof-chip {
+  border-color: var(--warn-border);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.asof-control[data-historical] .asof-chip-value {
+  color: inherit;
+}
+
+.asof-panel {
+  right: auto;
+  left: 0;
+  width: min(16rem, calc(100vw - var(--gutter) * 2));
+}
+
+@media (min-width: 720px) {
+  .asof-panel {
+    left: auto;
+    right: 0;
+  }
+}
+
+/* Phones: a sheet above the bottom tab bar, so it can never run off screen. */
+@media (max-width: 719px) {
+  .asof-panel {
+    position: fixed;
+    inset: auto var(--gutter) calc(4.5rem + env(safe-area-inset-bottom)) var(--gutter);
+    width: auto;
+  }
+
+  .asof-chip {
+    min-height: var(--touch);
+  }
+}
+
+@media (pointer: coarse) {
+  .asof-chip {
+    min-height: var(--touch);
+  }
+}
+
+/* ---- Page heading helpers shared by the views ------------------------------ */
+
+.view-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+
+/* "標的" line on the pages that act on one stock (回測, 預測). */
+.target-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.target-line .combobox {
+  width: min(22rem, 100%);
+}
+
+.target-line-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 2.5rem;
+  justify-content: center;
+}
+
+.target-line-name strong {
+  font-size: var(--text-md);
+  line-height: 1.2;
+}
+
+.target-line-name span {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.target-line .button {
+  align-self: flex-end;
 }

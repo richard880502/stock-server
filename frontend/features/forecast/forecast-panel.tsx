@@ -91,7 +91,7 @@ export function ForecastPanel({ symbol, asOf }: { symbol: string; asOf: string }
 
   return (
     <div className="workbench">
-      <Card as="div" title="預測設定" sub={`${symbol.toUpperCase()} · 截止 ${asOf}`}>
+      <Card as="div" title="預測設定">
         <form className="form-stack" onSubmit={run}>
           <label className="field">
             <span className="field-label">預測模型</span>

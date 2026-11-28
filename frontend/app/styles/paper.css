@@ -568,6 +568,7 @@
   background: none;
   color: var(--text);
   text-align: left;
+  text-decoration: none;
 }
 
 .paper-link:hover .paper-stock-name {

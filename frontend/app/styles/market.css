@@ -227,7 +227,6 @@
 }
 
 .rank-row {
-  cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
 
@@ -254,6 +253,13 @@
   text-align: left;
   font: inherit;
   line-height: 1.35;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.stock-link:hover .stock-name {
+  color: var(--text);
+  text-decoration: underline;
 }
 
 .stock-code {

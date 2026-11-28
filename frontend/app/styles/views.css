@@ -680,7 +680,7 @@
   justify-content: space-between;
   gap: var(--space-8);
   padding: var(--space-8);
-  overflow: hidden;
+  /* No overflow clipping: the as-of popover opens below the heading controls. */
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   background:
@@ -692,10 +692,10 @@
 .lab-heading::after {
   content: "";
   position: absolute;
-  right: -3rem;
-  bottom: -4.5rem;
-  width: 18rem;
-  height: 9rem;
+  right: var(--space-4);
+  bottom: var(--space-3);
+  width: 14rem;
+  height: 7rem;
   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
   border-radius: 50%;
   transform: rotate(-12deg);
@@ -720,7 +720,7 @@
   letter-spacing: -0.035em;
 }
 
-.lab-heading > div > p:last-child {
+.lab-heading > div > p:not(.lab-eyebrow) {
   max-width: 42rem;
   margin-top: var(--space-3);
   color: var(--text-2);
@@ -931,7 +931,7 @@
 
 .workbench > :first-child {
   position: sticky;
-  top: calc(var(--header-h) + 6.5rem);
+  top: calc(var(--header-h) + var(--space-4));
 }
 
 @media (max-width: 899px) {
@@ -1070,7 +1070,7 @@ a.home-jump { display: none; min-height: 2.75rem; justify-content: center; }
 .home-market { display: grid; gap: var(--space-4); }
 #stock-signal { display: grid; gap: var(--space-6); }
 @media (min-width: 900px) {
-  #stock-signal { scroll-margin-top: calc(var(--header-h) + 7rem); }
+  #stock-signal { scroll-margin-top: calc(var(--header-h) + var(--space-4)); }
 }
 .home-candidates { list-style: none; padding: 0; margin: 0; }
 .home-candidates li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border); }

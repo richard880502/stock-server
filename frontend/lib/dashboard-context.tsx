@@ -4,7 +4,6 @@ import { usePathname } from "next/navigation";
 import {
   createContext,
   type ReactNode,
-  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -72,12 +71,6 @@ function useDashboardState() {
   const [instrumentName, setInstrumentName] = useState<{ symbol: string; name: string } | null>(
     null,
   );
-
-  const setSymbol = useCallback((next: string) => {
-    const upper = next.toUpperCase();
-    setSymbolState(upper);
-    setBenchmark((current) => benchmarkForSymbol(upper, current));
-  }, []);
 
   const { load } = signalLoader;
   const { reset: resetBacktest } = backtest;
@@ -174,7 +167,7 @@ function useDashboardState() {
   }, []);
 
   return {
-    query: { ...query, setSymbol, setBenchmark, setAsOf },
+    query,
     error,
     setError,
     llmStatus,

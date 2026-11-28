@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/card";
 import { ErrorBanner } from "@/components/error-banner";
@@ -43,9 +43,8 @@ type Dialog =
 
 /** 模擬交易: header strip, equity curve, positions, orders, and the order ticket. */
 export function PaperPage() {
-  const router = useRouter();
   const search = useSearchParams();
-  const { refresh, recentSymbols } = useDashboard();
+  const { recentSymbols } = useDashboard();
 
   const accounts = usePolled("accounts", (signal) => listAccounts({ signal }));
   const rules = usePolled("rules", (signal) => getRules({ signal }));
@@ -174,10 +173,6 @@ export function PaperPage() {
     }));
     setSheetOpen(true);
   };
-  const openSignal = (symbol: string) => {
-    refresh({ symbol });
-    router.push("/");
-  };
 
   /* ---- Page-level states ------------------------------------------------------------------ */
 
@@ -264,7 +259,6 @@ export function PaperPage() {
             loading={detail.loading}
             stale={detail.stale}
             onTrade={trade}
-            onOpenSignal={openSignal}
           />
           <OrdersPanel
             accountId={account.id}

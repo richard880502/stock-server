@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Card } from "@/components/card";
 import { Direction } from "@/components/direction";
@@ -16,6 +17,7 @@ import {
   formatTwdCompact,
   shortDate,
 } from "@/lib/format";
+import { stockHref } from "@/lib/stock-routes";
 import { METRICS, windowLabel } from "./metrics";
 
 const COLLAPSED_ROWS = 10;
@@ -52,7 +54,6 @@ function Row({
   signed,
   scope,
   showTurnover,
-  onPick,
 }: {
   entry: RankingEntry;
   scale: number;
@@ -60,29 +61,27 @@ function Row({
   signed: boolean;
   scope: MarketScope;
   showTurnover: boolean;
-  onPick: (symbol: string) => void;
 }) {
   const code = entry.symbol.replace(/\.TWO?$/, "");
   const direction = signed ? directionOf(entry.value) : "neutral";
   const width = scale > 0 ? Math.max(2, (Math.abs(entry.value) / scale) * 100) : 0;
   return (
-    <tr className="rank-row" onClick={() => onPick(entry.symbol)}>
+    <tr className="rank-row">
       <td className="col-rank num">{entry.rank}</td>
       <th scope="row" className="col-stock">
         <div className="stock-cell">
-          {/* The click bubbles to the row, so Enter / Space on the button works too. */}
-          <button
-            type="button"
+          <Link
+            href={stockHref(entry.symbol)}
             className="stock-link"
-            aria-label={`${entry.name || code}（${code}），查看今日訊號`}
+            aria-label={`${entry.name || code}（${code}），開啟個股頁`}
           >
             <span className="stock-code num">{code}</span>
             <span className="stock-name" title={entry.name}>{entry.name}</span>
             {scope === "ALL" && (
               <span className="market-tag">{entry.market === "TWO" ? "上櫃" : "上市"}</span>
             )}
-          </button>
-          <WatchlistStar symbol={entry.symbol} variant="icon" stopPropagation />
+          </Link>
+          <WatchlistStar symbol={entry.symbol} variant="icon" />
         </div>
       </th>
       <td className="col-close num" data-label="收盤">
@@ -122,7 +121,6 @@ export function RankingBoard({
   loading,
   stale,
   failed,
-  onPick,
 }: {
   title: string;
   metric: MarketMetric;
@@ -134,7 +132,6 @@ export function RankingBoard({
   stale: boolean;
   /** The request failed and there is nothing to show; the error banner explains why. */
   failed: boolean;
-  onPick: (symbol: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const info = METRICS[metric];
@@ -225,7 +222,6 @@ export function RankingBoard({
                   signed={signed}
                   scope={scope}
                   showTurnover={showTurnover}
-                  onPick={onPick}
                 />
               ))}
             </tbody>

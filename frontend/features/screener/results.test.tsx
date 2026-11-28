@@ -23,8 +23,6 @@ const props = (preset: string, overrides: Partial<ResultsProps> = {}): ResultsPr
     refreshing: false,
     onToggle: () => {},
     onSort: () => {},
-    onSignal: () => {},
-    onBacktest: () => {},
     ...overrides,
   };
 };
@@ -67,10 +65,17 @@ describe("ResultsTable", () => {
     expect(cheapRow).toContain("—");
     expect(cheapRow).not.toMatch(/>0 張</);
   });
+  it("makes each stock a real link to its page", () => {
+    const out = html(createElement(ResultsTable, props("money_flow")));
+    expect(out).toContain('href="/stock/6488.TWO"');
+    expect(out).toContain('href="/stock/3008.TW"');
+  });
   it("renders the detail row for expanded symbols", () => {
     const out = html(createElement(ResultsTable, props("balanced", { expanded: new Set(["2330.TW"]) })));
     expect(out).toContain('id="sc-detail-2330.TW"');
-    expect(out).toContain("查看訊號");
+    expect(out).toContain('href="/stock/2330.TW"');
+    expect(out).toContain('href="/backtest?symbol=2330.TW"');
+    expect(out).toContain("開啟個股頁");
     expect(out).toContain("策略回測");
     expect(out).toContain('aria-expanded="true"');
   });
@@ -90,7 +95,7 @@ describe("ResultCards", () => {
 
 describe("RowDetail", () => {
   const detail = (index: number) =>
-    html(createElement(RowDetail, { entry: ENTRIES[index], meta: META, onSignal: () => {}, onBacktest: () => {} }));
+    html(createElement(RowDetail, { entry: ENTRIES[index], meta: META }));
   it("shows scores with their recipes and metrics grouped by the meta groups", () => {
     const out = detail(0);
     expect(out).toContain("因子分數");

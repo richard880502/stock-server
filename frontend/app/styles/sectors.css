@@ -119,8 +119,7 @@
   font-size: 0.7em;
 }
 
-.sector-row,
-.sector-stock-row {
+.sector-row {
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out);
 }
