@@ -7,6 +7,7 @@ import { actionCopy, actionTone } from "@/lib/copy";
 import { paperLink } from "@/features/paper/paper-math";
 import { directionOf, formatLots, formatPrice, formatSigned, formatSignedPct } from "@/lib/format";
 import type { LiveQuote } from "@/lib/live-quotes";
+import { stockHref } from "@/lib/stock-routes";
 import { useNow } from "./rail-now";
 import { taipeiClock } from "./rail-session";
 import { isStaleQuote, referencePrice } from "./rail-stale";
@@ -34,7 +35,6 @@ export function QuoteHeader({
   const change = quote && reference !== null ? quote.price - reference : null;
   const tone = quote?.change_pct == null ? "flat" : directionOf(quote.change_pct);
   const stale = !!quote && now !== null && isStaleQuote(quote, live.status, now.getTime());
-  const tradeTime = quote ? new Date(quote.trade_time) : null;
   return (
     <section className="rail-panel quote-header" aria-label="即時報價">
       <header className="quote-title">
@@ -44,6 +44,9 @@ export function QuoteHeader({
         </h2>
         <Link href={paperLink(symbol, "buy")} className="button small quote-paper-link" title="到模擬交易下單，不會送出真實委託">
           模擬買進
+        </Link>
+        <Link href={stockHref(symbol)} className="quote-stock-link" title="開啟個股頁：結論、證據與 AI 交易建議">
+          個股頁 →
         </Link>
         {signal && (
           <span className={`rail-badge tone-${actionTone[signal.action]}`} title={`確定性訊號（${signal.as_of}）`}>
@@ -62,18 +65,7 @@ export function QuoteHeader({
               </Direction>
             )}
           </div>
-          <dl className="quote-stats">
-            <Stat label="參考價" value={reference === null ? "—" : formatPrice(reference)} />
-            <Stat label="開" value={dayStat(quote.day_open)} />
-            <Stat label="高" value={dayStat(quote.day_high)} tone="up" />
-            <Stat label="低" value={dayStat(quote.day_low)} tone="down" />
-            <Stat label="總量(張)" value={quote.total_volume === null ? "—" : formatLots(quote.total_volume)} />
-            <Stat
-              label="最後成交"
-              value={tradeTime && Number.isFinite(tradeTime.getTime()) ? taipeiClock(tradeTime) : "—"}
-              note={stale ? "已過時" : undefined}
-            />
-          </dl>
+          <QuoteDayStats quote={quote} reference={reference} stale={stale} />
         </div>
       ) : (
         <p className="quote-empty">
@@ -83,6 +75,25 @@ export function QuoteHeader({
         </p>
       )}
     </section>
+  );
+}
+
+/** 參考價 / 開 / 高 / 低 / 總量 / 最後成交: shared by the 看盤 header and the stock page header. */
+export function QuoteDayStats({ quote, reference, stale }: { quote: LiveQuote; reference: number | null; stale: boolean }) {
+  const tradeTime = new Date(quote.trade_time);
+  return (
+    <dl className="quote-stats">
+      <Stat label="參考價" value={reference === null ? "—" : formatPrice(reference)} />
+      <Stat label="開" value={dayStat(quote.day_open)} />
+      <Stat label="高" value={dayStat(quote.day_high)} tone="up" />
+      <Stat label="低" value={dayStat(quote.day_low)} tone="down" />
+      <Stat label="總量(張)" value={quote.total_volume === null ? "—" : formatLots(quote.total_volume)} />
+      <Stat
+        label="最後成交"
+        value={Number.isFinite(tradeTime.getTime()) ? taipeiClock(tradeTime) : "—"}
+        note={stale ? "已過時" : undefined}
+      />
+    </dl>
   );
 }
 
