@@ -9,6 +9,10 @@ Known limitations, deliberately not guessed around:
 
 * An event that was already applied and is later withdrawn or revised is NOT unwound; the
   job logs a warning once per process (``audit``).
+* An event evaluated with nothing due (no shares held, or a payout that rounds to zero) is
+  remembered in ``paper_dividend_checks`` with its revision and not evaluated again. A
+  different revision of it IS evaluated again: nothing was booked, so there is nothing to
+  unwind, and if it now pays it is applied like a new event.
 * An older event that only becomes visible (``available_at``) after a later event of the
   same symbol was applied is still applied correctly for itself, but cannot re-size the
   later one.
@@ -34,11 +38,12 @@ from quant_signal.domain.paper_actions import (
     CorporateAction,
     CorporateActionList,
     CorporateActionRecord,
+    DividendCheckRecord,
 )
 from quant_signal.domain.short_data import DividendEvent
-from quant_signal.quant.paper_book import Book, replay
+from quant_signal.quant.paper_book import Book, BookCursor, replay
 from quant_signal.quant.paper_calendar import local, local_date
-from quant_signal.quant.paper_dividends import entitled_shares, ex_at, payout
+from quant_signal.quant.paper_dividends import entitled_at, ex_at, payout
 
 log = logging.getLogger(__name__)
 
@@ -191,35 +196,65 @@ async def apply_due_corporate_actions(
     if not chosen:
         return report
 
+    # What each account has already settled: booked actions and "nothing due" checks of
+    # the current epoch, two queries for all accounts. An account whose every due event is
+    # settled costs nothing more this run.
+    applied: dict[UUID, dict[tuple[str, date], CorporateActionRecord]] = {}
+    for action in await repo.list_active_paper_corporate_actions():
+        applied.setdefault(action.account_id, {})[(action.symbol, action.ex_date)] = action
+    checked: dict[UUID, dict[tuple[str, date], int]] = {}
+    for check in await repo.list_paper_dividend_checks():
+        if check.account_id in accounts and check.epoch == accounts[check.account_id].epoch:
+            checked.setdefault(check.account_id, {})[(check.symbol, check.ex_date)] = (
+                check.source_revision
+            )
+    for done in applied.values():
+        _audit_applied(audit, chosen, done)
+
+    writes = 0
     for index, account in enumerate(sorted(accounts.values(), key=lambda a: str(a.id))):
         if index % YIELD_EVERY == 0:
             await asyncio.sleep(0)
-        mine = [
+        done = applied.get(account.id, {})
+        seen = checked.get(account.id, {})
+        pending = [
             e
             for e in chosen
-            if e.symbol in traded[account.id] and e.ex_date > account_start_date(account)
+            if e.symbol in traded[account.id]
+            and e.ex_date > account_start_date(account)
+            and _event_key(e) not in done
+            # A check counts for the revision it evaluated; a revised event is evaluated
+            # again (nothing was booked for it, so there is nothing to unwind).
+            and seen.get(_event_key(e)) != e.revision
         ]
-        done = await repo.list_paper_corporate_actions(account.id, epoch=account.epoch)
-        applied_keys = {(a.symbol, a.ex_date): a for a in done}
-        _audit_applied(audit, chosen, applied_keys)
-        if not mine:
-            continue
-        pending = [e for e in mine if _event_key(e) not in applied_keys]
         if not pending:
             continue
         # An order of an earlier session that is still working could be reconciled later
         # into a back-dated fill; wait until it is settled so the entitlement cannot move.
+        # Pending events are in ex-date order, so once one waits, every later one does too.
         working = await repo.list_working_paper_orders(account.id)
         fills = await repo.list_paper_fills(account.id, epoch=account.epoch)
+        cursor = BookCursor(fills, done.values())  # one walk through the history per run
         for event in pending:
             if any(o.session_date < event.ex_date and o.epoch == account.epoch for o in working):
-                continue
-            if len(report.applied) >= budget:
+                break
+            if writes >= budget:
                 report.complete = False
                 return report
-            held = entitled_shares(fills, done, event.symbol, event.ex_date)
+            writes += 1
+            held = entitled_at(cursor, event.symbol, event.ex_date)
             paid = payout(held, event.cash_dividend_per_share, event.stock_dividend_per_share)
             if paid is None:
+                await repo.record_paper_dividend_check(
+                    DividendCheckRecord(
+                        account_id=account.id,
+                        epoch=account.epoch,
+                        symbol=event.symbol,
+                        ex_date=event.ex_date,
+                        source_revision=event.revision,
+                        evaluated_at=now,
+                    )
+                )
                 continue
             record = CorporateActionRecord(
                 account_id=account.id,
@@ -238,9 +273,13 @@ async def apply_due_corporate_actions(
                 source_revision=event.revision,
                 source_available_at=event.available_at,
             )
-            if await repo.apply_paper_corporate_action(record):
-                report.applied.append((account.id, event.ex_date))
-            done = await repo.list_paper_corporate_actions(account.id, epoch=account.epoch)
+            if not await repo.apply_paper_corporate_action(record):
+                # Booked by another worker meanwhile, or the account was reset: this
+                # account's book is no longer known here; the next run starts afresh.
+                report.complete = False
+                break
+            report.applied.append((account.id, event.ex_date))
+            cursor.add_action(record)
     return report
 
 

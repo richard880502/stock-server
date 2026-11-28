@@ -44,6 +44,21 @@ class CorporateActionRecord(BaseModel):
     source: str
     source_revision: int = 1
     source_available_at: datetime
+    # Set once the equity snapshots from the ex-date on were re-valued with this action.
+    revalued_at: datetime | None = None
+
+
+class DividendCheckRecord(BaseModel):
+    """A dividend event evaluated for an account epoch with nothing due (no shares held on
+    the ex-date, or a payout that rounds to zero). Never shown to users; it only stops the
+    job from evaluating the same event revision again."""
+
+    account_id: UUID
+    epoch: int = 0
+    symbol: str
+    ex_date: date
+    source_revision: int = 1
+    evaluated_at: datetime
 
 
 def dividend_ledger_entry(action: CorporateActionRecord) -> LedgerEntry | None:

@@ -23,6 +23,7 @@ Every caller must replay fills AND actions together (see ``application/paper_act
 
 from __future__ import annotations
 
+from bisect import bisect_left, insort
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -97,17 +98,62 @@ def replay(fills: Iterable[FillLike], actions: Iterable[ActionLike] = ()) -> Boo
 
     Ties: an action sorts before a fill at the same instant, then by id.
     """
+    events = _ordered(fills, actions)
+    book = Book()
+    for _, order, _, item in events:
+        _apply(book, order, item)
+    return book
+
+
+def _ordered(fills: Iterable[FillLike], actions: Iterable[ActionLike]) -> list[tuple]:
     events: list[tuple[object, int, str, object]] = [
         (f.filled_at, 1, str(f.id), f) for f in fills
     ] + [(a.ex_at, 0, str(a.id), a) for a in actions]
     events.sort(key=lambda e: (e[0], e[1], e[2]))  # type: ignore[type-var]
-    book = Book()
-    for _, order, _, item in events:
-        if order == 0:
-            _apply_action(book, item)  # type: ignore[arg-type]
-        else:
-            _apply_fill(book, item)  # type: ignore[arg-type]
-    return book
+    return events
+
+
+def _apply(book: Book, order: int, item: object) -> None:
+    if order == 0:
+        _apply_action(book, item)  # type: ignore[arg-type]
+    else:
+        _apply_fill(book, item)  # type: ignore[arg-type]
+
+
+class BookCursor:
+    """``replay`` walked forward in steps, for evaluating many dates against one history.
+
+    ``advance`` applies, in ``replay``'s order, the leading items that fall before the
+    bounds (fills before ``fills_before``, actions before ``actions_before``) and stops at
+    the first that does not, so the book equals ``replay`` of exactly those items as long
+    as no fill lies between an unapplied action and the fill bound (callers' bounds are
+    the ex-date 08:30 and 09:00, and no fill is ever stamped before a session's 09:00).
+    Bounds must not move backwards. ``add_action`` inserts a newly booked action; one
+    that sorts before what was already applied rewinds the cursor (exact, just slower).
+    """
+
+    def __init__(self, fills: Iterable[FillLike], actions: Iterable[ActionLike] = ()) -> None:
+        self._items = _ordered(fills, actions)
+        self._next = 0
+        self.book = Book()
+
+    def add_action(self, action: ActionLike) -> None:
+        item = (action.ex_at, 0, str(action.id), action)
+        key = item[:3]
+        index = bisect_left([e[:3] for e in self._items], key)  # type: ignore[type-var]
+        insort(self._items, item, key=lambda e: e[:3])  # type: ignore[type-var]
+        if index < self._next:  # behind the cursor: start over
+            self._next = 0
+            self.book = Book()
+
+    def advance(self, *, fills_before: datetime, actions_before: datetime) -> Book:
+        while self._next < len(self._items):
+            when, order, _, item = self._items[self._next]
+            if not when < (actions_before if order == 0 else fills_before):  # type: ignore[operator]
+                break
+            _apply(self.book, order, item)
+            self._next += 1
+        return self.book
 
 
 def _apply_action(book: Book, action: ActionLike) -> None:

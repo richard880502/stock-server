@@ -505,3 +505,115 @@ async def test_memory_twin_rejects_duplicates_and_overlong_values() -> None:
     await repo.reset_paper_account(account.id, now=at(TUE, 8))
     stale = make_action(WED, cash=1, account=account.id, epoch=0)
     assert await repo.apply_paper_corporate_action(stale) is False
+
+
+# --- review fixes: settled no-payout events, re-valuation that survives a failure ----
+
+
+def _count_fill_loads(repo) -> list[int]:
+    calls = [0]
+    original = repo.list_paper_fills
+
+    async def counted(*args, **kwargs):
+        calls[0] += 1
+        return await original(*args, **kwargs)
+
+    repo.list_paper_fills = counted
+    return calls
+
+
+async def test_a_no_payout_event_is_evaluated_once_per_revision() -> None:
+    repo, _, _, account = await seeded(ex_cash=None, ex_stock=None, sell_on_ex=True)
+    await repo.upsert_dividend_events([event(TUE, cash=1.0)])  # sold out on Monday: 0 held
+    loads = _count_fill_loads(repo)
+    assert (await apply_due_corporate_actions(repo, at(TUE, 8, 5))).applied == []
+    assert loads[0] == 1
+    # settled: later runs (and a restart: the function keeps no state) do not replay again
+    assert (await apply_due_corporate_actions(repo, at(TUE, 8, 40))).applied == []
+    assert (await apply_due_corporate_actions(repo, at(TUE, 16, 5))).applied == []
+    assert loads[0] == 1
+    # the marker is not a corporate action: nothing for the REST list / UI
+    assert await repo.list_paper_corporate_actions(account.id, epoch=None) == []
+    [check] = await repo.list_paper_dividend_checks()
+    assert (check.symbol, check.ex_date, check.source_revision) == (SYMBOL, TUE, 1)
+    # a revision is evaluated again once, then settled at the new revision
+    await repo.upsert_dividend_events([event(TUE, cash=1.2, revision=2, available=at(TUE, 9))])
+    assert (await apply_due_corporate_actions(repo, at(TUE, 16, 10))).applied == []
+    assert loads[0] == 2
+    assert (await apply_due_corporate_actions(repo, at(TUE, 16, 40))).applied == []
+    assert loads[0] == 2
+    assert [c.source_revision for c in await repo.list_paper_dividend_checks()] == [2]
+
+
+async def test_a_revised_event_that_now_pays_is_applied_after_a_no_payout_check() -> None:
+    repo, _, _, account = await seeded(ex_cash=None, ex_stock=None)
+    await repo.upsert_dividend_events([event(MON, cash=0.0)])  # announced without an amount
+    assert (await apply_due_corporate_actions(repo, at(MON, 8, 5))).applied == []
+    assert len(await repo.list_paper_dividend_checks()) == 1
+    await repo.upsert_dividend_events([event(MON, cash=2.5, revision=2, available=at(MON, 14))])
+    report = await apply_due_corporate_actions(repo, at(MON, 14, 5))
+    assert report.applied == [(account.id, MON)]
+    [stored] = await repo.list_paper_corporate_actions(account.id, epoch=0)
+    assert (stored.entitled_shares, stored.cash_amount, stored.source_revision) == (2000, 5000, 2)
+
+
+async def test_one_run_settles_several_events_in_one_walk_and_sees_its_own_bonus() -> None:
+    repo, _, _, account = await seeded()  # Monday: 2.5 cash + 0.05 stock on 2,000 shares
+    await repo.upsert_dividend_events([event(TUE, cash=1.0)])
+    loads = _count_fill_loads(repo)
+    report = await apply_due_corporate_actions(repo, at(TUE, 8, 5))
+    assert sorted(d for _, d in report.applied) == [MON, TUE] and loads[0] == 1
+    tue = [a for a in await repo.list_paper_corporate_actions(account.id, epoch=0)]
+    assert [(a.ex_date, a.entitled_shares) for a in tue] == [(MON, 2000), (TUE, 2100)]
+
+
+def test_book_cursor_matches_replay_at_every_bound() -> None:
+    from quant_signal.quant.paper_book import BookCursor
+    from quant_signal.quant.paper_dividends import entitled_at
+
+    fills = [
+        make_fill("buy", 2000, "100", at(THU, 10)),
+        make_fill("sell", 1000, "100", at(MON, 10)),
+        make_fill("buy", 3000, "100", at(TUE, 9)),
+    ]
+    actions = [make_action(MON, added=100), make_action(WED, added=50)]
+    cursor = BookCursor(fills, actions)
+    for day in (FRI, MON, TUE, WED, date(2026, 12, 3)):
+        assert entitled_at(cursor, SYMBOL, day) == entitled_shares(fills, actions, SYMBOL, day)
+    late = make_action(TUE, added=7)  # behind the cursor: it rewinds and stays exact
+    cursor.add_action(late)
+    assert entitled_at(cursor, SYMBOL, date(2026, 12, 3)) == entitled_shares(
+        fills, [*actions, late], SYMBOL, date(2026, 12, 3)
+    )
+
+
+async def test_a_failed_snapshot_rewrite_is_retried_after_a_restart() -> None:
+    repo, _, _, account = await seeded(ex_cash=None, ex_stock=None)
+    await repo.upsert_market_stock_days(
+        [stock_row(SYMBOL, d, close=100.0, name="台泥") for d in (FRI, MON, TUE)]
+    )
+    jobs = PaperJobs()
+    for day in (FRI, MON, TUE):
+        snap, _ = await jobs.snapshot_account(repo, account, day, at(day, 15))
+        await repo.upsert_paper_snapshot(snap)
+    await repo.upsert_dividend_events([event(MON, cash=2.5, available=at(WED, 7))])
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("database went away")
+
+    jobs._rewrite_snapshots = broken  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        await jobs.apply_corporate_actions(repo, at(WED, 16, 5))
+    assert len(await repo.list_paper_corporate_actions(account.id, epoch=0)) == 1  # booked
+    assert jobs._actions_done_day is None  # a failed pass is not "done for the day"
+    stale = {s.trading_date: s for s in await repo.list_paper_snapshots(account.id, epoch=0)}
+    assert stale[MON].cash == 799_715
+
+    restarted = PaperJobs()  # nothing in memory: the days come from the database
+    stats = await restarted.apply_corporate_actions(repo, at(WED, 16, 35))
+    assert stats.dividends == 0
+    after = {s.trading_date: s for s in await repo.list_paper_snapshots(account.id, epoch=0)}
+    assert after[MON].cash == after[TUE].cash == 799_715 + 5000
+    assert after[FRI].cash == 799_715
+    assert restarted._actions_done_day == WED
+    assert await repo.list_paper_actions_to_revalue() == []  # settled: not rewritten again

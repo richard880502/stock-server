@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import ROUND_FLOOR, Decimal
 
-from quant_signal.quant.paper_book import ActionLike, FillLike, replay
+from quant_signal.quant.paper_book import ActionLike, BookCursor, FillLike, replay
 from quant_signal.quant.paper_calendar import SESSION_OPEN, TAIPEI
 
 # Corporate actions are booked at 08:30 Taipei on the ex-date: after the pre-open job window
@@ -54,6 +54,13 @@ def entitled_shares(
         [f for f in fills if f.filled_at < cutoff],  # type: ignore[operator]
         [a for a in actions if a.ex_at < booked_at],
     )
+    return book.held(symbol)
+
+
+def entitled_at(cursor: BookCursor, symbol: str, ex_date: date) -> int:
+    """``entitled_shares`` from a cursor over the same fills and actions; call it with
+    non-decreasing ex-dates so one walk through the history serves every event."""
+    book = cursor.advance(fills_before=entitlement_cutoff(ex_date), actions_before=ex_at(ex_date))
     return book.held(symbol)
 
 

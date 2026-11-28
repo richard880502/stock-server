@@ -254,3 +254,15 @@ async def test_database_enforces_the_status_set_and_single_order_link(sessions) 
                 text("UPDATE paper_proposals SET order_id = :o WHERE id = :i"),
                 {"o": order.id, "i": two.id},
             )
+
+
+async def test_release_read_transaction_ends_the_open_transaction(sessions) -> None:
+    account = await make_account(sessions)
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        assert await repo.get_paper_account(account.id) is not None
+        assert session.in_transaction()  # the read autobegan one
+        await repo.release_read_transaction()
+        assert not session.in_transaction()
+        await repo.release_read_transaction()  # nothing open: a no-op
+        assert await repo.get_paper_account(account.id) is not None  # still usable

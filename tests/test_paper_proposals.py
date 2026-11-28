@@ -461,3 +461,86 @@ def test_prompt_is_in_traditional_chinese_with_the_shared_guards() -> None:
     assert "新聞處理規則" in TRADE_PROPOSAL_PROMPT and "官方資料區塊規則" in TRADE_PROPOSAL_PROMPT
     assert "不會送出任何真實委託" in TRADE_PROPOSAL_PROMPT
     assert isinstance(datetime.now(UTC), datetime)
+
+
+# --- the model call runs outside any database transaction ------------------------------
+
+
+class _TxRepo:
+    """Wraps the in-memory repository and tracks a Postgres-like "transaction open" flag:
+    any repository call opens one (autobegin), ``release_read_transaction`` ends it."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.in_transaction = False
+
+    def __getattr__(self, name):
+        import inspect
+
+        attr = getattr(self._inner, name)
+        if name == "release_read_transaction":
+
+            async def release():
+                await attr()
+                self.in_transaction = False
+
+            return release
+        if inspect.iscoroutinefunction(attr):
+
+            async def call(*args, **kwargs):
+                self.in_transaction = True
+                return await attr(*args, **kwargs)
+
+            return call
+        return attr
+
+
+async def _wrapped(llm_factory):
+    from paper_proposal_support import FixedContext
+
+    from quant_signal.application.paper_trading import PaperService
+
+    h = await harness()
+    repo = _TxRepo(h.repo)
+    paper = PaperService(repo, clock=h.clock)  # type: ignore[arg-type]
+    llm = llm_factory(repo, paper, h)
+    service = PaperProposalService(paper, repo, llm, context_service=FixedContext(h.context, repo))  # type: ignore[arg-type]
+    return h, repo, service
+
+
+async def test_no_transaction_is_open_while_the_model_thinks() -> None:
+    from paper_proposal_support import FakeLLM
+
+    class Thinking(FakeLLM):
+        def __init__(self, repo) -> None:
+            super().__init__(answer())
+            self.repo = repo
+            self.seen: list[bool] = []
+
+        async def complete_json(self, system_prompt, payload):
+            self.seen.append(self.repo.in_transaction)
+            return await super().complete_json(system_prompt, payload)
+
+    h, repo, service = await _wrapped(lambda repo, paper, h: Thinking(repo))
+    proposal = await service.create(h.user, h.account_id, SYMBOL)
+    assert proposal.status == "pending"
+    assert service.client.seen == [False]  # type: ignore[union-attr]
+
+
+async def test_a_reset_during_the_model_call_refuses_the_proposal() -> None:
+    from paper_proposal_support import FakeLLM
+
+    class ResetMeanwhile(FakeLLM):
+        def __init__(self, paper, h) -> None:
+            super().__init__(answer())
+            self.paper, self.h = paper, h
+
+        async def complete_json(self, system_prompt, payload):
+            await self.paper.reset_account(self.h.user, self.h.account_id)
+            return await super().complete_json(system_prompt, payload)
+
+    h, repo, service = await _wrapped(lambda repo, paper, h: ResetMeanwhile(paper, h))
+    with pytest.raises(PaperConflict):
+        await service.create(h.user, h.account_id, SYMBOL)
+    listed = await service.list_proposals(h.user, h.account_id)
+    assert listed.proposals == []

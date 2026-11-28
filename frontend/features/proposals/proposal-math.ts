@@ -1,6 +1,7 @@
 // Pure helpers for AI proposals (AI 提案): no React, no network.
 import type { AccountSummary, OrderSide } from "@/lib/api/paper";
 import type { CheckLevel, Proposal, ProposalCheck, ProposalStatus } from "@/lib/api/proposals";
+import { ApiError } from "@/lib/api/errors";
 import { formatSigned } from "@/lib/format";
 import { normalizeSymbolInput } from "@/lib/symbols";
 
@@ -88,19 +89,52 @@ export function parseProposalParam(params: { get(name: string): string | null } 
   return raw ? raw : null;
 }
 
-/** The ticket remembers which proposal it was filled from, to send `proposal_id` with the order. */
-export type ProposalLink = { id: string; symbol: string; side: OrderSide };
+/**
+ * The ticket remembers which proposal it was filled from, to send `proposal_id` with the order.
+ * `accountId` is the proposal's own account (absent when an older API does not send it).
+ */
+export type ProposalLink = { id: string; symbol: string; side: OrderSide; accountId?: string | null };
 
 /**
- * Keep the link only while the ticket still matches the proposal's symbol and side; the moment
- * either changes the order is no longer that proposal's order.
+ * Keep the link only while the ticket still matches the proposal's symbol and side (and, when
+ * both are known, its account); the moment either changes the order is no longer that
+ * proposal's order.
  */
 export function keepProposalLink(
   link: ProposalLink | null,
-  ticket: { symbol: string | null; side: OrderSide },
+  ticket: { symbol: string | null; side: OrderSide; accountId?: string | null },
 ): ProposalLink | null {
   if (!link || !ticket.symbol) return null;
+  if (link.accountId != null && ticket.accountId != null && link.accountId !== ticket.accountId) return null;
   return norm(ticket.symbol) === norm(link.symbol) && ticket.side === link.side ? link : null;
+}
+
+/**
+ * The link after the ticket's account changed: a proposal belongs to one account, so it is
+ * dropped unless the new account is known to be the proposal's own (a `?proposal=` deep link
+ * switches to that account and fills the ticket at the same time).
+ */
+export function linkAfterAccountChange(link: ProposalLink | null, accountId: string): ProposalLink | null {
+  return link && link.accountId != null && link.accountId === accountId ? link : null;
+}
+
+/** Shown when the proposal died between filling the ticket and sending the order. */
+export const PROPOSAL_STALE_MESSAGE = "委託未送出：提案已失效，請確認後以一般委託送出";
+
+/**
+ * What a failed submit means for the proposal link. A 409 on an order that carried
+ * `proposal_id` means the proposal is no longer pending (expired, superseded, rejected or
+ * accepted elsewhere) or not this account's: the order was NOT placed, the link is dropped so
+ * a retry goes out as an ordinary order — only when the user sends it again, never by itself.
+ */
+export function submitFailure(
+  error: unknown,
+  sentProposalId: string | null,
+): { dropLink: boolean; message: string } {
+  if (sentProposalId && error instanceof ApiError && error.status === 409) {
+    return { dropLink: true, message: PROPOSAL_STALE_MESSAGE };
+  }
+  return { dropLink: false, message: error instanceof Error ? error.message : "送出失敗" };
 }
 
 /** The ticket prefill for a proposal, or null when it has no order to bring in. */
@@ -111,6 +145,7 @@ export function prefillFromProposal(proposal: Proposal): {
   lots?: number;
   limitPrice?: number;
   proposalId: string;
+  proposalAccountId?: string;
 } | null {
   const order = proposal.order;
   if (!order) return null;
@@ -123,6 +158,7 @@ export function prefillFromProposal(proposal: Proposal): {
     lots: order.lots != null && order.lots > 0 ? order.lots : undefined,
     limitPrice: order.limit_price != null && order.limit_price > 0 ? order.limit_price : undefined,
     proposalId: proposal.id,
+    ...(proposal.account_id ? { proposalAccountId: proposal.account_id } : {}),
   };
 }
 

@@ -219,3 +219,34 @@ async def test_job_end_to_end_idempotent_and_bonus_shares_stay_open(sessions) ->
     async with sessions() as session:
         report = await apply_due_corporate_actions(PostgresQuantRepository(session), at(MON, 20))
         assert report.applied == []
+
+
+async def test_no_payout_checks_upsert_and_revaluation_marks(sessions) -> None:
+    from quant_signal.domain.paper_actions import DividendCheckRecord
+
+    sym = symbol()
+    account = await account_with_shares(sessions, sym)
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        for revision in (1, 2):  # the second write updates the same key, never a duplicate
+            await repo.record_paper_dividend_check(
+                DividendCheckRecord(
+                    account_id=account.id,
+                    symbol=sym,
+                    ex_date=MON,
+                    source_revision=revision,
+                    evaluated_at=at(MON, 8, revision),
+                )
+            )
+        mine = [c for c in await repo.list_paper_dividend_checks() if c.account_id == account.id]
+        assert [(c.symbol, c.ex_date, c.source_revision) for c in mine] == [(sym, MON, 2)]
+        assert await repo.list_paper_corporate_actions(account.id, epoch=None) == []
+
+        action = action_for(account, sym)
+        assert await repo.apply_paper_corporate_action(action)
+        assert action.id in {a.id for a in await repo.list_paper_actions_to_revalue()}
+        assert action.id in {a.id for a in await repo.list_active_paper_corporate_actions()}
+        await repo.mark_paper_actions_revalued([action.id], now=at(MON, 8, 6))
+        assert action.id not in {a.id for a in await repo.list_paper_actions_to_revalue()}
+        (stored,) = await repo.list_paper_corporate_actions(account.id, epoch=0)
+        assert stored.revalued_at == at(MON, 8, 6)

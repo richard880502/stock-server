@@ -23,6 +23,9 @@ class MemoryPaperProposalMixin:
             store = self.__dict__["_paper_proposals"] = {}
         return store
 
+    async def release_read_transaction(self) -> None:
+        """No transactions in memory: nothing to end."""
+
     async def add_paper_proposal(self, record: ProposalRecord) -> int:
         enforce_column_limits(PaperProposalRow, record.model_dump())
         superseded = 0

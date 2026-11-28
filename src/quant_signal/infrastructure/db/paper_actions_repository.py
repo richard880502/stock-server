@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 
-from quant_signal.domain.paper_actions import CorporateActionRecord, dividend_ledger_entry
+from quant_signal.domain.paper_actions import (
+    CorporateActionRecord,
+    DividendCheckRecord,
+    dividend_ledger_entry,
+)
 from quant_signal.infrastructure.db.paper_models import (
     PaperAccountRow,
     PaperCorporateActionRow,
+    PaperDividendCheckRow,
     PaperFillRow,
     PaperLedgerRow,
 )
@@ -19,7 +25,7 @@ from quant_signal.infrastructure.db.paper_models import (
 _ACTION_COLUMNS = (
     "id account_id epoch symbol ex_date event_kind entitled_shares cash_dividend_per_share "
     "stock_dividend_per_share cash_amount shares_added ex_at applied_at source "
-    "source_revision source_available_at"
+    "source_revision source_available_at revalued_at"
 ).split()
 
 
@@ -81,6 +87,91 @@ class PaperActionsRepositoryMixin:
             )
         )
         return [_action(row) for row in rows]
+
+    async def list_active_paper_corporate_actions(self) -> list[CorporateActionRecord]:
+        """Every action of every active account's current epoch (one query for the job)."""
+        rows = await self.session.scalars(
+            select(PaperCorporateActionRow)
+            .join(
+                PaperAccountRow,
+                (PaperAccountRow.id == PaperCorporateActionRow.account_id)
+                & (PaperAccountRow.epoch == PaperCorporateActionRow.epoch),
+            )
+            .where(PaperAccountRow.archived.is_(False))
+            .order_by(
+                PaperCorporateActionRow.account_id,
+                PaperCorporateActionRow.ex_at,
+                PaperCorporateActionRow.symbol,
+                PaperCorporateActionRow.id,
+            )
+        )
+        return [_action(row) for row in rows]
+
+    async def list_paper_actions_to_revalue(self) -> list[CorporateActionRecord]:
+        """Actions of active accounts' current epochs whose snapshots are not re-valued yet."""
+        rows = await self.session.scalars(
+            select(PaperCorporateActionRow)
+            .join(
+                PaperAccountRow,
+                (PaperAccountRow.id == PaperCorporateActionRow.account_id)
+                & (PaperAccountRow.epoch == PaperCorporateActionRow.epoch),
+            )
+            .where(
+                PaperAccountRow.archived.is_(False),
+                PaperCorporateActionRow.revalued_at.is_(None),
+            )
+            .order_by(PaperCorporateActionRow.ex_at, PaperCorporateActionRow.id)
+        )
+        return [_action(row) for row in rows]
+
+    async def mark_paper_actions_revalued(self, action_ids: list[UUID], *, now: datetime) -> None:
+        if not action_ids:
+            return
+        await self.session.execute(
+            update(PaperCorporateActionRow)
+            .where(PaperCorporateActionRow.id.in_(action_ids))
+            .values(revalued_at=now)
+        )
+        await self.session.commit()
+
+    async def record_paper_dividend_check(self, check: DividendCheckRecord) -> None:
+        """Remember that an event revision was evaluated with nothing due (an upsert)."""
+        values = check.model_dump()
+        await self.session.execute(
+            insert(PaperDividendCheckRow)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=["account_id", "epoch", "symbol", "ex_date"],
+                set_={
+                    "source_revision": values["source_revision"],
+                    "evaluated_at": values["evaluated_at"],
+                },
+            )
+        )
+        await self.session.commit()
+
+    async def list_paper_dividend_checks(self) -> list[DividendCheckRecord]:
+        """The checks of every active account's current epoch."""
+        rows = await self.session.scalars(
+            select(PaperDividendCheckRow)
+            .join(
+                PaperAccountRow,
+                (PaperAccountRow.id == PaperDividendCheckRow.account_id)
+                & (PaperAccountRow.epoch == PaperDividendCheckRow.epoch),
+            )
+            .where(PaperAccountRow.archived.is_(False))
+        )
+        return [
+            DividendCheckRecord(
+                account_id=row.account_id,
+                epoch=row.epoch,
+                symbol=row.symbol,
+                ex_date=row.ex_date,
+                source_revision=row.source_revision,
+                evaluated_at=row.evaluated_at,
+            )
+            for row in rows
+        ]
 
     async def list_paper_traded_pairs(self) -> list[tuple[UUID, str]]:
         """``(account_id, symbol)`` an active account has traded in its current epoch.

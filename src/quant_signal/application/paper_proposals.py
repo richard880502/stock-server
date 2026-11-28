@@ -236,7 +236,14 @@ class PaperProposalService:
         payload["data_sufficient"] = data_sufficient
         payload["account"] = self._account_block(valuation, symbol, state)
         payload["trading_rules"] = self._rules_block(account, rules, session_date)
+        # The reads above opened a transaction on the request's session. End it before the
+        # model call (up to the LLM timeout, twice) so no pooled connection sits "idle in
+        # transaction" meanwhile, then re-check what may have changed during the call.
+        await self.repo.release_read_transaction()  # type: ignore[attr-defined]
         draft, raw = await self._ask(payload)
+        current = await self.paper._own(user_id, account_id)  # 404 if deleted or archived
+        if current.epoch != account.epoch:
+            raise PaperConflict("模擬帳戶在產生提案期間已重設，請重新產生提案")
         draft.evidence_refs = [ref for ref in draft.evidence_refs if ref in valid_refs]
 
         notes: list[Check] = []

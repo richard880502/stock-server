@@ -43,6 +43,15 @@ def _pprop_record(row: PaperProposalRow) -> ProposalRecord:
 class PaperProposalRepositoryMixin:
     """Expects ``self.session``; every writer commits (or rolls back) its own work."""
 
+    async def release_read_transaction(self) -> None:
+        """End the session's open (read) transaction, e.g. before a long model call.
+
+        Commits rather than rolls back so anything a caller wrote on the way (an
+        auto-sync) is kept; a no-op when no transaction is open.
+        """
+        if self.session.in_transaction():
+            await self.session.commit()
+
     async def add_paper_proposal(self, record: ProposalRecord) -> int:
         await self.session.execute(
             select(PaperAccountRow.id)

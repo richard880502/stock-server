@@ -7,6 +7,9 @@ import {
   groupChecks,
   keepProposalLink,
   latestPendingFor,
+  linkAfterAccountChange,
+  PROPOSAL_STALE_MESSAGE,
+  submitFailure,
   parseProposalParam,
   pctFrom,
   planSummary,
@@ -14,6 +17,7 @@ import {
   proposalHref,
   proposalIsFor,
 } from "./proposal-math";
+import { ApiError } from "@/lib/api/errors";
 import {
   PROPOSAL_BLOCKED,
   PROPOSAL_BUY,
@@ -113,6 +117,7 @@ describe("url param and prefill", () => {
       lots: 1,
       limitPrice: 2175,
       proposalId: "p-buy",
+      proposalAccountId: "acc-1",
     });
     expect(prefillFromProposal(PROPOSAL_BLOCKED)).toBeNull();
     expect(prefillFromProposal(PROPOSAL_SPARSE)).toBeNull();
@@ -133,6 +138,31 @@ describe("keepProposalLink", () => {
   });
   it("stays null without a link", () => {
     expect(keepProposalLink(null, { symbol: "2330.TW", side: "buy" })).toBeNull();
+  });
+});
+
+describe("proposal link: account and stale proposals", () => {
+  const link = { id: "p-buy", symbol: "2330.TW", side: "buy" as const, accountId: "acc-1" };
+  it("is never sent from another account", () => {
+    expect(keepProposalLink(link, { symbol: "2330.TW", side: "buy", accountId: "acc-2" })).toBeNull();
+    expect(keepProposalLink(link, { symbol: "2330.TW", side: "buy", accountId: "acc-1" })).toBe(link);
+  });
+  it("is dropped when the account changes, unless it moves to the proposal's own account", () => {
+    expect(linkAfterAccountChange(link, "acc-2")).toBeNull();
+    expect(linkAfterAccountChange(link, "acc-1")).toBe(link);
+    expect(linkAfterAccountChange({ ...link, accountId: null }, "acc-1")).toBeNull();
+    expect(linkAfterAccountChange(null, "acc-1")).toBeNull();
+  });
+  it("a 409 on an order that carried proposal_id drops the link and says it was not placed", () => {
+    const failure = submitFailure(new ApiError("此提案已過期", 409), "p-buy");
+    expect(failure).toEqual({ dropLink: true, message: PROPOSAL_STALE_MESSAGE });
+    expect(PROPOSAL_STALE_MESSAGE).toContain("提案已失效，請確認後以一般委託送出");
+    expect(PROPOSAL_STALE_MESSAGE).toContain("未送出");
+  });
+  it("other failures keep the link and show the server's message", () => {
+    expect(submitFailure(new ApiError("已有名稱", 409), null)).toEqual({ dropLink: false, message: "已有名稱" });
+    expect(submitFailure(new ApiError("資金不足", 422), "p-buy")).toEqual({ dropLink: false, message: "資金不足" });
+    expect(submitFailure("boom", "p-buy")).toEqual({ dropLink: false, message: "送出失敗" });
   });
 });
 

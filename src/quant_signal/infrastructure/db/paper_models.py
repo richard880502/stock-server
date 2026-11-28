@@ -216,6 +216,31 @@ class PaperCorporateActionRow(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     source_available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # When the equity snapshots from the ex-date on were re-valued with this action; NULL
+    # until then, so a failed or interrupted re-valuation is retried from the database.
+    revalued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PaperDividendCheckRow(Base):
+    """A dividend event evaluated for an account epoch with nothing due (migration 0024).
+
+    Keyed like ``uq_paper_actions_event``; keeps the dividend job from re-evaluating the
+    event every run. ``source_revision`` is the event revision it was evaluated against: a
+    different revision is evaluated again.
+    """
+
+    __tablename__ = "paper_dividend_checks"
+
+    account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("paper_accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ex_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class PaperProposalRow(Base):

@@ -9,7 +9,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from quant_signal.domain.paper_actions import CorporateActionRecord, dividend_ledger_entry
+from quant_signal.domain.paper_actions import (
+    CorporateActionRecord,
+    DividendCheckRecord,
+    dividend_ledger_entry,
+)
 
 _MAX_LENGTH = {"symbol": 32, "event_kind": 20, "source": 32}
 
@@ -50,6 +54,50 @@ class MemoryPaperActionsMixin:
             if a.account_id == account_id and (epoch is None or a.epoch == epoch)
         ]
         return sorted(found, key=lambda a: (a.ex_at, a.symbol, str(a.id)))
+
+    @property
+    def paper_dividend_checks(self) -> dict[tuple, DividendCheckRecord]:
+        return self.__dict__.setdefault("_paper_dividend_checks", {})
+
+    def _pact_active_epoch(self, account_id: UUID, epoch: int) -> bool:
+        account = self.paper.accounts.get(account_id)  # type: ignore[attr-defined]
+        return account is not None and not account.archived and account.epoch == epoch
+
+    async def list_active_paper_corporate_actions(self) -> list[CorporateActionRecord]:
+        found = [
+            a.model_copy()
+            for a in self.paper_actions.values()
+            if self._pact_active_epoch(a.account_id, a.epoch)
+        ]
+        return sorted(found, key=lambda a: (str(a.account_id), a.ex_at, a.symbol, str(a.id)))
+
+    async def list_paper_actions_to_revalue(self) -> list[CorporateActionRecord]:
+        found = [
+            a.model_copy()
+            for a in self.paper_actions.values()
+            if a.revalued_at is None and self._pact_active_epoch(a.account_id, a.epoch)
+        ]
+        return sorted(found, key=lambda a: (a.ex_at, str(a.id)))
+
+    async def mark_paper_actions_revalued(self, action_ids: list[UUID], *, now) -> None:
+        for action_id in action_ids:
+            if action_id in self.paper_actions:
+                self.paper_actions[action_id].revalued_at = now
+
+    async def record_paper_dividend_check(self, check: DividendCheckRecord) -> None:
+        if len(check.symbol) > _MAX_LENGTH["symbol"]:
+            raise ValueError(f"value too long for symbol (max {_MAX_LENGTH['symbol']})")
+        if check.account_id not in self.paper.accounts:  # type: ignore[attr-defined]
+            raise ValueError("foreign key violated: paper_dividend_checks.account_id")
+        key = (check.account_id, check.epoch, check.symbol, check.ex_date)
+        self.paper_dividend_checks[key] = check.model_copy()
+
+    async def list_paper_dividend_checks(self) -> list[DividendCheckRecord]:
+        return [
+            c.model_copy()
+            for c in self.paper_dividend_checks.values()
+            if self._pact_active_epoch(c.account_id, c.epoch)
+        ]
 
     async def list_paper_traded_pairs(self) -> list[tuple[UUID, str]]:
         pairs = set()

@@ -215,18 +215,24 @@ class PaperJobs:
         catch-up), see ``paper_actions.apply_due_corporate_actions``. Idempotent.
         """
         stats = stats or TickStats()
-        self._actions_last = now
+        self._actions_last = now  # the throttle: a failure below is retried at the next pass
         report = await apply_due_corporate_actions(repo, now, audit=self._actions_audit)
-        self._actions_more = not report.complete
         stats.dividends += len(report.applied)
+        # Which days to re-value comes from the database (actions not yet marked
+        # re-valued), not from this run's report: a rewrite that failed, or a restart in
+        # between, is picked up by the next pass.
+        unvalued = await repo.list_paper_actions_to_revalue()
+        touched: dict[date, set[UUID]] = {}
+        for action in unvalued:
+            touched.setdefault(action.ex_date, set()).add(action.account_id)
+        if touched:
+            await self._rewrite_snapshots(repo, touched, now, stats)
+            await repo.mark_paper_actions_revalued([a.id for a in unvalued], now=now)
+        # Only a pass that got this far counts as done.
+        self._actions_more = not report.complete
         local_now = local(now)
         if report.complete and local_now.time() >= ACTIONS_SETTLED_AFTER:
             self._actions_done_day = local_now.date()
-        touched: dict[date, set[UUID]] = {}
-        for account_id, ex_date in report.applied:
-            touched.setdefault(ex_date, set()).add(account_id)
-        if touched:
-            await self._rewrite_snapshots(repo, touched, now, stats)
         return stats
 
     # --- demand --------------------------------------------------------------------

@@ -1,4 +1,5 @@
-"""Paper trading: dividends (paper_corporate_actions) and the ledger's link to them."""
+"""Paper trading: dividends (paper_corporate_actions), the ledger's link to them, and
+the events evaluated with nothing due (paper_dividend_checks)."""
 
 from collections.abc import Sequence
 
@@ -33,6 +34,7 @@ def upgrade() -> None:
         sa.Column("source", sa.String(32), nullable=False),
         sa.Column("source_revision", sa.Integer, nullable=False),
         sa.Column("source_available_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revalued_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["account_id"], ["paper_accounts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -48,6 +50,18 @@ def upgrade() -> None:
         "ix_paper_actions_account_epoch",
         "paper_corporate_actions",
         ["account_id", "epoch", "ex_at"],
+    )
+
+    op.create_table(
+        "paper_dividend_checks",
+        sa.Column("account_id", UUID, nullable=False),
+        sa.Column("epoch", sa.Integer, nullable=False),
+        sa.Column("symbol", sa.String(32), nullable=False),
+        sa.Column("ex_date", sa.Date, nullable=False),
+        sa.Column("source_revision", sa.Integer, nullable=False),
+        sa.Column("evaluated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["account_id"], ["paper_accounts.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("account_id", "epoch", "symbol", "ex_date"),
     )
 
     op.add_column("paper_cash_ledger", sa.Column("action_id", UUID, nullable=True))
@@ -76,5 +90,6 @@ def downgrade() -> None:
     op.drop_constraint("uq_paper_ledger_action_kind", "paper_cash_ledger", type_="unique")
     op.drop_constraint("fk_paper_ledger_action", "paper_cash_ledger", type_="foreignkey")
     op.drop_column("paper_cash_ledger", "action_id")
+    op.drop_table("paper_dividend_checks")
     op.drop_index("ix_paper_actions_account_epoch", table_name="paper_corporate_actions")
     op.drop_table("paper_corporate_actions")
