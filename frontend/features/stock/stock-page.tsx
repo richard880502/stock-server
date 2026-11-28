@@ -51,7 +51,7 @@ export function StockPage({ symbol }: { symbol: string | null }) {
 
 function Cell({ id, className = "", children }: { id?: string; className?: string; children: ReactNode }) {
   return (
-    <div id={id} className={`stock-cell ${className}`.trim()}>
+    <div id={id} className={`stock-sec ${className}`.trim()}>
       {children}
     </div>
   );
