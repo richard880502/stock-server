@@ -602,6 +602,7 @@ def test_http_etf_page_and_stock_only_endpoints() -> None:
             ):
                 assert client.get(f"/api/v1/stocks/0050.TW/{path}").status_code == 200, path
             signal = client.get("/api/v1/signals/0050.TW")
-            assert signal.status_code == 422 and "ETF 不適用" in signal.json()["detail"]
+            # No daily bars are tracked for it here, so the price-based signal cannot be computed.
+            assert signal.status_code == 422 and "尚無歷史行情" in signal.json()["detail"]
     finally:
         app.dependency_overrides.clear()

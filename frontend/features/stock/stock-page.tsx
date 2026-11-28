@@ -131,28 +131,7 @@ function StockPageBody({ symbol }: { symbol: string }) {
 
   const etf = isEtfSymbol(symbol);
   let body: ReactNode;
-  if (etf) {
-    // ETFs have official daily quotes only: no signal, filings or chip data exist for them.
-    body = (
-      <div className="stock-grid">
-        <Cell id="summary" className="stock-main">
-          <QuickStockPanel
-            symbol={symbol}
-            syncWait={null}
-            signalLoading={false}
-            onCancelSync={cancelSync}
-            onReload={() => refresh()}
-          />
-        </Cell>
-        {rail}
-        <Cell id="profile" className="stock-main">
-          <EmptyState icon={<SearchIcon size={22} />} title="個股全貌">
-            ETF 不適用個股財報與籌碼分析。
-          </EmptyState>
-        </Cell>
-      </div>
-    );
-  } else if (!signal || !synced) {
+  if (!signal || !synced) {
     if (synced && (syncWait || (error && !loading))) {
       // No full signal yet (history still being prepared, too short, or the wait ran out):
       // the instant snapshot view with the status of the full analysis.
@@ -220,7 +199,14 @@ function StockPageBody({ symbol }: { symbol: string }) {
           </div>
         </Cell>
         <Cell id="profile" className="stock-main">
-          <StockProfileSection symbol={signal.symbol} asOf={profileAsOf(query.asOf, signal.as_of)} />
+          {etf ? (
+            // Price-based analysis applies to an ETF; filings, holders and chip data do not exist for it.
+            <EmptyState icon={<SearchIcon size={22} />} title="個股全貌">
+              ETF 不適用個股財報與籌碼分析。
+            </EmptyState>
+          ) : (
+            <StockProfileSection symbol={signal.symbol} asOf={profileAsOf(query.asOf, signal.as_of)} />
+          )}
         </Cell>
         <Cell id="chips" className={`stock-main${dim}`}>
           <ChipPanel chipFlow={chipFlow} />
@@ -235,7 +221,8 @@ function StockPageBody({ symbol }: { symbol: string }) {
               <Link href={paperLink(symbol, "buy")} className="button">
                 模擬買進
               </Link>
-              <WatchlistStar symbol={symbol} />
+              {/* The watchlist does not take ETFs yet. */}
+              {!etf && <WatchlistStar symbol={symbol} />}
             </div>
           </div>
         </Cell>
@@ -246,7 +233,7 @@ function StockPageBody({ symbol }: { symbol: string }) {
   return (
     <div className="stock-page">
       <StockHeader symbol={symbol} name={name} price={price} liveEnabled={liveEnabled} />
-      <SectionNav active={activeSection} etf={etf} />
+      <SectionNav active={activeSection} />
       {body}
     </div>
   );

@@ -8,7 +8,7 @@ import math
 import re
 import secrets
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -476,8 +476,17 @@ def create_app() -> FastAPI:
         benchmark: str | None = None,
         strategy_version: str = "regime_v1",
     ) -> SignalSnapshot:
-        if is_etf_symbol(normalize_symbol(symbol)):
-            raise HTTPException(status_code=422, detail="ETF 不適用個股訊號分析")
+        normalized = normalize_symbol(symbol)
+        if is_etf_symbol(normalized):
+            # The signal is price-based, so it works for an ETF whose daily bars are tracked
+            # (0050 has been since the start). One without bars cannot be synced on demand:
+            # answer plainly instead of looping on sync_pending.
+            end = as_of or date.today()
+            recent = await repository.list_bars(normalized, start=end - timedelta(days=30), end=end)
+            if not recent:
+                raise HTTPException(
+                    status_code=422, detail="這檔 ETF 尚無歷史行情，無法計算量化訊號"
+                )
         service = SignalService(repository, auto_sync=True)
         try:
             return await service.analyze(
