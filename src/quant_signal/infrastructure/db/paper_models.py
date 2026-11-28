@@ -136,6 +136,12 @@ class PaperLedgerRow(Base):
     __table_args__ = (
         # A fill posts each kind at most once, so replaying a booking cannot double-post.
         UniqueConstraint("fill_id", "kind", name="uq_paper_ledger_fill_kind"),
+        # fill_id is NULL on dividend postings (NULLs never collide), so they are unique per
+        # corporate action instead; and a dividend row must point at its action.
+        UniqueConstraint("action_id", "kind", name="uq_paper_ledger_action_kind"),
+        CheckConstraint(
+            "(kind = 'dividend') = (action_id IS NOT NULL)", name="ck_paper_ledger_action"
+        ),
         Index("ix_paper_ledger_account_epoch", "account_id", "epoch"),
     )
 
@@ -149,6 +155,9 @@ class PaperLedgerRow(Base):
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
     fill_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("paper_fills.id", ondelete="CASCADE")
+    )
+    action_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("paper_corporate_actions.id", ondelete="CASCADE")
     )
     note: Mapped[str | None] = mapped_column(Text)
 
@@ -171,3 +180,38 @@ class PaperSnapshotRow(Base):
     equity: Mapped[int] = mapped_column(BigInteger, nullable=False)
     realized_pnl_cum: Mapped[int] = mapped_column(BigInteger, nullable=False)
     benchmark_close: Mapped[float | None] = mapped_column(Float)
+
+
+class PaperCorporateActionRow(Base):
+    """One dividend event applied to one account epoch (migration 0024)."""
+
+    __tablename__ = "paper_corporate_actions"
+    __table_args__ = (
+        # The idempotency key: an event can never be applied twice to the same epoch.
+        UniqueConstraint("account_id", "epoch", "symbol", "ex_date", name="uq_paper_actions_event"),
+        Index("ix_paper_actions_account_epoch", "account_id", "epoch", "ex_at"),
+        CheckConstraint("entitled_shares > 0", name="ck_paper_actions_entitled"),
+        CheckConstraint(
+            "cash_amount >= 0 AND shares_added >= 0 AND (cash_amount > 0 OR shares_added > 0)",
+            name="ck_paper_actions_payout",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("paper_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    ex_date: Mapped[date] = mapped_column(Date, nullable=False)
+    event_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    entitled_shares: Mapped[int] = mapped_column(Integer, nullable=False)
+    cash_dividend_per_share: Mapped[Decimal | None] = mapped_column(Numeric(14, 8))
+    stock_dividend_per_share: Mapped[Decimal | None] = mapped_column(Numeric(14, 8))
+    cash_amount: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    shares_added: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    ex_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

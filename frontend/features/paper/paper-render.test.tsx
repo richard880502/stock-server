@@ -4,11 +4,14 @@ import { AccountHeader } from "./account-header";
 import { NewAccountForm } from "./account-forms";
 import { EquityCard } from "./equity-card";
 import { ConfirmPanel, EstimateBlock, RulesDialog } from "./order-estimate";
-import { FillsTable, OrdersTable } from "./orders-panel";
+import { CorporateActionsTable, DIVIDEND_NOTE, FillsTable, OrdersTable } from "./orders-panel";
 import {
   ACCOUNT_MAIN,
+  ACTION_BOTH,
+  ACTION_CASH,
   ACCOUNT_SECOND,
   DETAIL_MAIN,
+  DETAIL_WITH_DIVIDENDS,
   EQUITY_POINTS,
   FILL_BUY,
   FILL_SELL,
@@ -112,6 +115,41 @@ describe("orders and fills", () => {
     expect(markup).toContain("逐筆");
     expect(markup).toContain("分K");
     expect(markup).toContain("台積電");
+  });
+});
+
+describe("corporate actions", () => {
+  const markup = html(<CorporateActionsTable actions={[ACTION_BOTH, ACTION_CASH]} />);
+
+  it("lists the ex-date, the stock as a link, the cash credited and the bonus shares", () => {
+    expect(markup).toContain("11/27");
+    expect(markup).toContain("現金股利入帳 NT$5,000");
+    expect(markup).toContain("配股 +100 股");
+    expect(markup).toMatch(/<a [^>]*href="\/stock\/2330\.TW"/);
+    expect(markup).toContain("環球晶");
+  });
+
+  it("shows a dash where a kind of payout did not happen", () => {
+    expect(markup).toContain("現金股利入帳 NT$3,000");
+    expect(markup.match(/配股 \+/g)?.length).toBe(1);
+    expect(markup).toContain('<td class="num">—</td>');
+  });
+
+  it("carries the simplification note text", () => {
+    expect(DIVIDEND_NOTE).toContain("除息日");
+    expect(DIVIDEND_NOTE).toContain("零股");
+  });
+
+  it("shows 累計股利 in the header only when dividends were received", () => {
+    const props = {
+      accounts: [ACCOUNT_MAIN],
+      maxAccounts: 3,
+      account: ACCOUNT_MAIN,
+      stale: false,
+      actions: { onSelect: noop, onNew: noop, onSettings: noop, onReset: noop, onArchive: noop },
+    };
+    expect(html(<AccountHeader {...props} detail={DETAIL_WITH_DIVIDENDS} />)).toContain("累計股利");
+    expect(html(<AccountHeader {...props} detail={DETAIL_MAIN} />)).not.toContain("累計股利");
   });
 });
 

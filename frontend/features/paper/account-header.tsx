@@ -109,6 +109,11 @@ export function AccountHeader({
           {formatSignedMoney(figures.total_pnl)}
         </Figure>
         <Figure label="可用資金">{formatMoney(figures.available_cash)}</Figure>
+        {figures.dividend_income != null && figures.dividend_income > 0 && (
+          <Figure label="累計股利" className={toneClass(figures.dividend_income)}>
+            {formatSignedMoney(figures.dividend_income)}
+          </Figure>
+        )}
       </dl>
     </header>
   );

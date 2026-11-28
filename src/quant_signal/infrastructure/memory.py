@@ -48,6 +48,7 @@ from quant_signal.infrastructure.memory_fundamentals import MemoryFundamentalsMi
 from quant_signal.infrastructure.memory_holders import MemoryHoldersMixin
 from quant_signal.infrastructure.memory_official import MemoryOfficialDataMixin
 from quant_signal.infrastructure.memory_paper import MemoryPaperMixin
+from quant_signal.infrastructure.memory_paper_actions import MemoryPaperActionsMixin
 from quant_signal.infrastructure.memory_short_data import MemoryShortDataMixin
 
 
@@ -60,6 +61,7 @@ class MemoryQuantRepository(
     MemoryFundamentalsMixin,
     MemoryDerivativesMixin,
     MemoryPaperMixin,
+    MemoryPaperActionsMixin,
 ):
     """Test and demo repository with the same contract as PostgreSQL."""
 
