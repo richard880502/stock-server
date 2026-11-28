@@ -181,8 +181,8 @@ svg {
 }
 
 /* iOS Safari zooms the page when a focused field is under 16px. Applies to
-   phones and any coarse pointer; !important so per-component sizes (e.g. the
-   compact query-bar date input) cannot reintroduce the zoom. */
+   phones and any coarse pointer; !important so per-component sizes (e.g. a
+   compact date input) cannot reintroduce the zoom. */
 @media (max-width: 719px), (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"]),
   select,

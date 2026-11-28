@@ -5,6 +5,7 @@ import type { Alert, ScreenerEntry, ScreenerMeta, SectorRow, WatchlistItem } fro
 import {
   candidatePresets,
   derivativeHeadlines,
+  environmentFacts,
   extremeSectors,
   paperSummary,
   screenerHref,
@@ -170,5 +171,43 @@ describe("paperSummary", () => {
     expect(paperSummary(undefined)).toBeNull();
     const s = paperSummary([{ id: "1", name: "主帳戶", equity: 1_000_000, positions_count: 2 } as AccountSummary]);
     expect(s).toMatchObject({ equity: 1_000_000, positions: 2, dayPnl: null, workingOrders: null, accountCount: 1 });
+  });
+});
+
+describe("environmentFacts", () => {
+  const env = (latest: Record<string, unknown> | undefined) => ({ latest }) as never;
+  const full = {
+    total_issues: 1086,
+    advancing_issues: 439,
+    declining_issues: 550,
+    above_ma20_issues: 149,
+    foreign_net_flow: -29628066640,
+  };
+  it("derives the three facts from a normal payload", () => {
+    const [adv, ma, foreign] = environmentFacts(env(full))!;
+    expect(adv.value).toBe("上漲 439 · 下跌 550");
+    expect(adv.share).toBeCloseTo(439 / 989);
+    expect(ma.value).toBe("13.7%");
+    expect(ma.note).toBe("149 / 1,086 檔");
+    expect(foreign.value).toBe("−296.3 億");
+    expect(foreign.tone).toBe("down");
+  });
+  it("zero totals give dashes, not NaN", () => {
+    const [adv, ma, foreign] = environmentFacts(
+      env({ total_issues: 0, advancing_issues: 0, declining_issues: 0, above_ma20_issues: 0, foreign_net_flow: 0 }),
+    )!;
+    expect(adv.share).toBeNull();
+    expect(ma.value).toBe("—");
+    expect(foreign.value).toBe("0.0 億");
+    expect(foreign.tone).toBe("flat");
+  });
+  it("null and missing fields are dashes", () => {
+    const facts = environmentFacts(env({ total_issues: null, advancing_issues: 5, foreign_net_flow: null }))!;
+    expect(facts.map((f) => f.value)).toEqual(["—", "—", "—"]);
+    expect(facts[0].share).toBeNull();
+  });
+  it("no latest returns null", () => {
+    expect(environmentFacts(env(undefined))).toBeNull();
+    expect(environmentFacts(null)).toBeNull();
   });
 });

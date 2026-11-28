@@ -65,9 +65,60 @@ export function topAlerts(environment: Pick<MarketEnvironment, "alerts"> | null,
     .map((item) => item.alert);
 }
 
+const finite = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+/** Three label/value facts of a market-environment card; a missing field is "—", never 0 or NaN. */
+export function environmentFacts(environment: Pick<MarketEnvironment, "latest"> | null | undefined): Headline[] | null {
+  const latest = environment?.latest;
+  if (!latest) return null;
+  const up = finite(latest.advancing_issues);
+  const down = finite(latest.declining_issues);
+  const total = finite(latest.total_issues);
+  const above = finite(latest.above_ma20_issues);
+  const foreign = finite(latest.foreign_net_flow);
+  const upShare = up != null && down != null && up + down > 0 ? up / (up + down) : null;
+  const aboveShare = above != null && total != null && total > 0 ? above / total : null;
+  return [
+    {
+      key: "advdec",
+      label: "漲跌家數",
+      value: up != null && down != null ? `上漲 ${formatNumber(up, 0)} · 下跌 ${formatNumber(down, 0)}` : "—",
+      tone: "flat",
+      note: "",
+      share: upShare,
+    },
+    {
+      key: "ma20",
+      label: "站上月線",
+      value: aboveShare != null ? `${formatNumber(aboveShare * 100, 1)}%` : "—",
+      tone: "flat",
+      note:
+        aboveShare != null && above != null && total != null
+          ? `${formatNumber(above, 0)} / ${formatNumber(total, 0)} 檔`
+          : "尚無資料",
+    },
+    {
+      key: "foreign",
+      label: "外資買賣超",
+      value: foreign != null ? `${formatSigned(foreign / 1e8, 1)} 億` : "—",
+      tone: foreign != null ? directionOf(foreign) : "flat",
+      note: foreign != null ? "NT$，當日" : "尚無資料",
+    },
+  ];
+}
+
 /* ---- Derivatives ------------------------------------------------------------------------ */
 
-export type Headline = { key: string; label: string; value: string; tone: Tone; note: string };
+/** `share` (0..1) draws a two-tone up/down bar under the row. */
+export type Headline = {
+  key: string;
+  label: string;
+  value: string;
+  tone: Tone;
+  note: string;
+  share?: number | null;
+};
 
 /** Newest day with a real number for `pick`; an API one release behind may omit the field entirely. */
 function newest(days: MarketDerivativesDay[], pick: (day: MarketDerivativesDay) => number | null | undefined) {

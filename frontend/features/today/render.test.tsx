@@ -79,6 +79,23 @@ describe("environment card", () => {
     expect(out).toContain("量能急縮");
     expect(html(<EnvironmentBody environment={{ ...(env as object), alerts: undefined } as never} />)).not.toContain("今日警示");
   });
+  it("shows breadth, MA20 share and foreign flow; dashes for missing fields; no latest = score only", () => {
+    const env = { market: "TW", as_of: "2026-11-27", score: 38.66, regime: "risk_off", alerts: [] };
+    const latest = { total_issues: 1086, advancing_issues: 439, declining_issues: 550, above_ma20_issues: 149, foreign_net_flow: -29628066640 };
+    const full = html(<EnvironmentBody environment={{ ...env, latest } as never} />);
+    expect(full).toContain("上漲 439 · 下跌 550");
+    expect(full).toContain("13.7%");
+    expect(full).toContain("149 / 1,086 檔");
+    expect(full).toContain("−296.3 億");
+    expect(full).toContain("today-ratio");
+    const sparse = html(<EnvironmentBody environment={{ ...env, latest: {} } as never} />);
+    expect(sparse).toContain("—");
+    expect(sparse).not.toContain("NaN");
+    expect(sparse).not.toContain("today-ratio");
+    const none = html(<EnvironmentBody environment={env as never} />);
+    expect(none).not.toContain("漲跌家數");
+    expect(none).toContain("39");
+  });
 });
 
 describe("candidates", () => {

@@ -1,11 +1,5 @@
 /* Screener (選股): presets, filters, results table / phone cards, row detail. Prefix: sc- */
 
-.home-card-links {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 /* Tighter rhythm than the default page gap so results start high on the first screen. */
 .sc-page {
   display: flex;

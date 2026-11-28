@@ -138,7 +138,7 @@ function StockPageBody({ symbol }: { symbol: string }) {
     body = (
       <div className="stock-grid">
         <Cell id="summary" className="stock-main">
-          <VerdictHero signal={signal} name={name} alertCount={alerts.length} refreshing={refreshing} />
+          <VerdictHero signal={signal} name={name} alertCount={alerts.length} refreshing={refreshing} showIdentity={false} />
         </Cell>
         {rail}
         <Cell id="chart" className={`stock-main${dim}`}>

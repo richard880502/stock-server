@@ -8,13 +8,14 @@ import type { MarketEnvironment } from "@/lib/api/types";
 import { regimeGloss, severityCopy } from "@/lib/copy";
 import { formatNumber, shortDate, today } from "@/lib/format";
 import { usePolled } from "@/features/paper/use-paper-data";
-import { derivativeHeadlines, type Headline, topAlerts } from "./today-model";
+import { derivativeHeadlines, environmentFacts, type Headline, topAlerts } from "./today-model";
 import { CardError, CardSkeleton, MoreLink } from "./today-parts";
 
 const MARKET_NAME: Record<MarketCode, string> = { TW: "上市", TWO: "上櫃" };
 
 export function EnvironmentBody({ environment }: { environment: MarketEnvironment }) {
   const alerts = topAlerts(environment, 2);
+  const facts = environmentFacts(environment);
   return (
     <>
       <div className="today-score">
@@ -23,6 +24,7 @@ export function EnvironmentBody({ environment }: { environment: MarketEnvironmen
         <span className="today-score-gloss">{regimeGloss[environment.regime]}</span>
       </div>
       <p className="today-meta">資料日期 {environment.as_of}</p>
+      {facts && <HeadlineList items={facts} />}
       {alerts.length > 0 && (
         <ul className="today-alerts" aria-label="市場警示">
           {alerts.map((alert) => (
@@ -68,7 +70,12 @@ export function HeadlineList({ items }: { items: Headline[] }) {
         <div key={item.key} className="today-headline">
           <dt>{item.label}</dt>
           <dd className={`num ${item.tone === "flat" ? "" : `text-${item.tone}`}`}>{item.value}</dd>
-          <dd className="today-headline-note">{item.note}</dd>
+          {item.share != null && (
+            <dd className="today-ratio" role="img" aria-label={`上漲占漲跌家數 ${formatNumber(item.share * 100, 0)}%`}>
+              <span className="today-ratio-up" style={{ width: `${item.share * 100}%` }} />
+            </dd>
+          )}
+          {item.note && <dd className="today-headline-note">{item.note}</dd>}
         </div>
       ))}
     </dl>
