@@ -35,6 +35,7 @@ from quant_signal.application.paper_market import (
     past_references,
 )
 from quant_signal.application.paper_ports import PaperInsufficientCash, PaperRepository
+from quant_signal.application.paper_transfers import transfer_flow
 from quant_signal.domain.paper import (
     LedgerEntry,
     PaperAccountRecord,
@@ -681,6 +682,9 @@ class PaperJobs:
         book = await load_book(repo, account.id, account.epoch, through=day)
         ledger = await repo.list_paper_ledger(account.id, account.epoch)
         cash = sum(e.amount for e in ledger if local(e.at).date() <= day)
+        # The day's flow: transfers dated after the previous trading day, through ``day``
+        # (a weekend deposit belongs to Monday). Every snapshot writer goes through here.
+        net_transfer = transfer_flow(ledger, after=previous_trading_day(day), through=day)
         open_positions = book.open_positions()
         closes = await official_closes_on(repo, [p.symbol for p in open_positions], day)
         views = await load_market(repo, [p.symbol for p in open_positions])
@@ -713,6 +717,7 @@ class PaperJobs:
                 equity=cash + market_value,
                 realized_pnl_cum=book.realized_total,
                 benchmark_close=benchmark,
+                net_transfer=net_transfer,
             ),
             official,
         )

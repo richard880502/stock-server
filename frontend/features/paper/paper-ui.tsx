@@ -168,11 +168,14 @@ export function Figure({
   label,
   children,
   sub,
+  subTitle,
   className = "",
 }: {
   label: string;
   children: ReactNode;
   sub?: ReactNode;
+  /** Tooltip of the sub figure (e.g. what the return is measured by). */
+  subTitle?: string;
   className?: string;
 }) {
   return (
@@ -180,7 +183,11 @@ export function Figure({
       <dt>{label}</dt>
       <dd>
         <span className="paper-figure-value num">{children}</span>
-        {sub && <span className="paper-figure-sub num">{sub}</span>}
+        {sub && (
+          <span className="paper-figure-sub num" title={subTitle}>
+            {sub}
+          </span>
+        )}
       </dd>
     </div>
   );

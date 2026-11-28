@@ -23,7 +23,15 @@ export type AccountSummary = {
   realized_pnl: number;
   /** Gross cash dividends credited since the last reset; absent on an API older than dividends. */
   dividend_income?: number;
+  /**
+   * Initial cash + deposits - withdrawals of the current epoch; total_pnl = equity - this.
+   * Absent on an API older than 入金／出金.
+   */
+  contributed_capital?: number;
+  /** Net deposits - withdrawals counted in today's figures (after the previous close). */
+  day_net_transfer?: number;
   total_pnl: number;
+  /** Time-weighted since the last reset: deposits are not profit, withdrawals are not loss. */
   total_return_pct: number;
   day_pnl: number;
   day_return_pct: number;
@@ -134,6 +142,10 @@ export type EquityPoint = {
   market_value: number;
   benchmark_close: number | null;
   live: boolean;
+  /** Net deposits - withdrawals counted on this day; absent on an older API. */
+  net_transfer?: number;
+  /** Time-weighted return index, 100 at the first point; absent on an older API. */
+  twr_index?: number | null;
 };
 
 export type OrderRequest = {
@@ -219,8 +231,12 @@ export const updateAccount = (id: string, patch: AccountPatch) =>
     body: JSON.stringify(patch),
   });
 
-export const resetAccount = (id: string) =>
-  postJson<AccountSummary>(apiUrl(`${base}/accounts/${enc(id)}/reset`), {});
+/** `initialCash` starts the new epoch with that cash; leave it out to keep the current amount. */
+export const resetAccount = (id: string, initialCash?: number) =>
+  postJson<AccountSummary>(
+    apiUrl(`${base}/accounts/${enc(id)}/reset`),
+    initialCash == null ? {} : { initial_cash: initialCash },
+  );
 
 export const archiveAccount = (id: string) =>
   fetchJson<unknown>(apiUrl(`${base}/accounts/${enc(id)}`), { method: "DELETE" });
@@ -293,5 +309,40 @@ export async function listCorporateActions(
   return pageOf<CorporateAction>(
     await fetchJson<unknown>(apiUrl(`${base}/accounts/${enc(id)}/corporate-actions?${params}`), init),
     ["actions", "items"],
+  );
+}
+
+export type TransferDirection = "in" | "out";
+
+/** One deposit or withdrawal (入金／出金); `amount` is always positive. */
+export type Transfer = {
+  id: string;
+  direction: TransferDirection;
+  amount: number;
+  at: string;
+  note: string | null;
+};
+
+export type TransferBody = {
+  direction: TransferDirection;
+  amount: number;
+  note?: string;
+  /** Generated once per dialog open: a double click or retry cannot book twice. */
+  request_id: string;
+};
+
+/** Deposit or withdraw simulated cash; answers the updated account summary. */
+export const postTransfer = (id: string, body: TransferBody) =>
+  postJson<AccountSummary>(apiUrl(`${base}/accounts/${enc(id)}/transfers`), body);
+
+export async function listTransfers(
+  id: string,
+  query: { limit: number; offset: number },
+  init?: Init,
+): Promise<Page<Transfer>> {
+  const params = new URLSearchParams({ limit: String(query.limit), offset: String(query.offset) });
+  return pageOf<Transfer>(
+    await fetchJson<unknown>(apiUrl(`${base}/accounts/${enc(id)}/transfers?${params}`), init),
+    ["transfers", "items"],
   );
 }

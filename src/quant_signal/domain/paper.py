@@ -18,13 +18,30 @@ OrderType = Literal["market", "limit"]
 OrderStatus = Literal["working", "filled", "cancelled", "expired", "rejected"]
 OrderSource = Literal["manual", "ai"]
 PriceSource = Literal["tick", "snapshot", "minute_bar", "open"]
-LedgerKind = Literal["deposit", "buy", "sell", "commission", "tax", "dividend", "reset"]
+LedgerKind = Literal[
+    "deposit",  # the opening deposit of a new account
+    "buy",
+    "sell",
+    "commission",
+    "tax",
+    "dividend",
+    "reset",  # the re-deposit of ``initial_cash`` that starts a new epoch
+    "transfer_in",  # a later deposit by the user (not P&L)
+    "transfer_out",  # a withdrawal by the user (not P&L)
+]
+TRANSFER_KINDS: tuple[str, str] = ("transfer_in", "transfer_out")
+TransferDirection = Literal["in", "out"]
 
 MAX_ACCOUNTS = 3
 MIN_INITIAL_CASH = 100_000
 MAX_INITIAL_CASH = 100_000_000
 DEFAULT_INITIAL_CASH = 1_000_000
 MAX_LOTS_PER_ORDER = 10_000
+MIN_TRANSFER = 1_000
+MAX_TRANSFER = 100_000_000
+MAX_CASH = 1_000_000_000  # a deposit may not take the cash balance above this
+MAX_TRANSFERS_PER_DAY = 20  # per account and Taipei calendar day
+MAX_TRANSFER_NOTE = 60
 MAX_LIMIT_PRICE = Decimal("100000")  # exclusive; the column holds 10 digits before the point
 MIN_DISCOUNT = Decimal("0.1")
 MAX_DISCOUNT = Decimal("1.0")
@@ -107,6 +124,9 @@ class LedgerEntry(BaseModel):
     fill_id: UUID | None = None
     # Set on dividend postings: the corporate action (paper_corporate_actions) they came from.
     action_id: UUID | None = None
+    # Set on transfer postings (transfer_in / transfer_out): the client's idempotency key,
+    # unique per account.
+    request_id: UUID | None = None
     note: str | None = None
 
 
@@ -119,6 +139,9 @@ class SnapshotRecord(BaseModel):
     equity: int
     realized_pnl_cum: int
     benchmark_close: float | None = None
+    # Net deposits minus withdrawals dated in (previous trading day, trading_date]: the
+    # flow that has to be removed from this day's equity change (time-weighted return).
+    net_transfer: int = 0
 
 
 # --- requests ----------------------------------------------------------------------
@@ -178,6 +201,47 @@ class AccountPatch(BaseModel):
         if not value:
             raise ValueError("帳戶名稱不可空白")
         return value
+
+
+class ResetRequest(BaseModel):
+    """Optional body of ``POST /accounts/{id}/reset``: start the new epoch with this cash."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    initial_cash: int | None = None
+
+    @field_validator("initial_cash")
+    @classmethod
+    def _cash(cls, value: int | None) -> int | None:
+        if value is not None and not (MIN_INITIAL_CASH <= value <= MAX_INITIAL_CASH):
+            raise ValueError(
+                f"初始資金必須介於 NT${MIN_INITIAL_CASH:,} 到 NT${MAX_INITIAL_CASH:,} 之間"
+            )
+        return value
+
+
+class TransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: TransferDirection
+    amount: int
+    note: str | None = Field(default=None, max_length=MAX_TRANSFER_NOTE)
+    request_id: UUID
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, value: int) -> int:
+        if not (MIN_TRANSFER <= value <= MAX_TRANSFER):
+            raise ValueError(f"金額必須介於 NT${MIN_TRANSFER:,} 到 NT${MAX_TRANSFER:,} 之間")
+        return value
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
 
 class OrderRequest(BaseModel):
@@ -288,6 +352,12 @@ class AccountSummary(BaseModel):
     # Cash dividends credited since the last reset (gross, NT$). ``realized_pnl`` is trading
     # P&L only; total_pnl = realized_pnl + unrealized_pnl + dividend_income.
     dividend_income: int = 0
+    # Initial cash + deposits - withdrawals of the current epoch; total_pnl = equity - this.
+    # Returns are time-weighted (transfers are neither profit nor loss).
+    contributed_capital: int
+    # Net transfers counted in today's figures (those after the previous snapshot day);
+    # day_pnl = equity - previous close - day_net_transfer.
+    day_net_transfer: int = 0
     total_pnl: int
     total_return_pct: float
     day_pnl: int
@@ -347,6 +417,10 @@ class EquityPoint(BaseModel):
     market_value: int
     benchmark_close: float | None
     live: bool = False
+    # Net deposits - withdrawals counted on this point (see SnapshotRecord.net_transfer).
+    net_transfer: int = 0
+    # Time-weighted return index, 100 at the first point of the series.
+    twr_index: float | None = None
 
 
 class AccountList(BaseModel):
@@ -361,6 +435,19 @@ class OrderList(BaseModel):
 
 class FillList(BaseModel):
     fills: list[Fill]
+    has_more: bool
+
+
+class Transfer(BaseModel):
+    id: UUID
+    direction: TransferDirection
+    amount: int  # always positive; ``direction`` says which way
+    at: datetime
+    note: str | None = None
+
+
+class TransferList(BaseModel):
+    transfers: list[Transfer]
     has_more: bool
 
 

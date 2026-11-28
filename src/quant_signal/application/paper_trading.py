@@ -31,6 +31,12 @@ from quant_signal.application.paper_market import (
     price_info,
 )
 from quant_signal.application.paper_ports import PaperRepository
+from quant_signal.application.paper_transfers import (
+    contributed_capital,
+    transfer_flow,
+    twr_index,
+    twr_return_pct,
+)
 from quant_signal.domain.paper import (
     MAX_ACCOUNTS,
     MAX_LOTS_PER_ORDER,
@@ -51,6 +57,9 @@ from quant_signal.domain.paper import (
     PaperFillRecord,
     PaperOrderRecord,
     Position,
+    ResetRequest,
+    TransferList,
+    TransferRequest,
 )
 from quant_signal.domain.paper_actions import CorporateActionList
 from quant_signal.domain.paper_proposals import ProposalRecord
@@ -220,6 +229,8 @@ def paper_rules(slippage_ticks: int, max_accounts: int) -> dict:
             f"委託當日有效（ROD），依即時行情撮合，成交價另加 {slippage_ticks} 檔滑價。",
             "非交易時段下的委託會排入下一個交易日開盤撮合；漲停鎖死不會買進、跌停鎖死不會賣出。",
             "全部成交或不成交，不會部分成交；這是模擬交易，不會送出任何真實委託。",
+            "可隨時入金或出金（每筆 NT$1,000 至 1 億、每天最多 20 筆，出金不得超過可用資金）；"
+            "入金不算獲利、出金不算虧損，累計與單日報酬率以時間加權計算，不受入出金金額與時點影響。",
         ],
     }
 
@@ -298,12 +309,44 @@ class PaperService:
             raise PaperNotFound("找不到這個模擬帳戶")
         return (await self._summaries([await self._own(user_id, account_id)]))[0]
 
-    async def reset_account(self, user_id: UUID, account_id: UUID) -> AccountSummary:
+    async def reset_account(
+        self, user_id: UUID, account_id: UUID, body: ResetRequest | None = None
+    ) -> AccountSummary:
         account = await self._own(user_id, account_id)
-        updated = await self.repo.reset_paper_account(account.id, now=self.clock())
+        updated = await self.repo.reset_paper_account(
+            account.id, now=self.clock(), initial_cash=None if body is None else body.initial_cash
+        )
         if updated is None:
             raise PaperNotFound("找不到這個模擬帳戶")
         return (await self._summaries([updated]))[0]
+
+    async def transfer(
+        self, user_id: UUID, account_id: UUID, body: TransferRequest
+    ) -> AccountSummary:
+        """Deposit or withdraw simulated cash (see ``paper_transfers``)."""
+        from quant_signal.application.paper_transfers import make_transfer
+
+        return await make_transfer(self, user_id, account_id, body)
+
+    async def list_transfers(
+        self,
+        user_id: UUID,
+        account_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_archived: bool = False,
+    ) -> TransferList:
+        from quant_signal.application.paper_transfers import list_transfers
+
+        return await list_transfers(
+            self,
+            user_id,
+            account_id,
+            limit=limit,
+            offset=offset,
+            include_archived=include_archived,
+        )
 
     async def archive_account(self, user_id: UUID, account_id: UUID) -> None:
         account = await self._own(user_id, account_id)
@@ -387,16 +430,31 @@ class PaperService:
     async def _summary(self, valuation: Valuation, now: datetime) -> AccountSummary:
         account = valuation.account
         initial = account.initial_cash
-        total_pnl = valuation.equity - initial
         realized = valuation.book.realized_total
         unrealized = sum(p.unrealized_pnl for p in valuation.positions)
         day_ref = latest_session_day(now)
+        transfers = await self.repo.list_paper_transfer_entries(  # type: ignore[attr-defined]
+            account.id, epoch=account.epoch
+        )
+        # Without transfers nothing below differs from the plain figures; with them the
+        # whole epoch's snapshots are needed for the time-weighted chain.
         snapshots = await self.repo.list_paper_snapshots(
-            account.id, epoch=account.epoch, since=day_ref - timedelta(days=14)
+            account.id,
+            epoch=account.epoch,
+            since=None if transfers else day_ref - timedelta(days=14),
         )
         previous = previous_snapshot(snapshots, day_ref)
         base = previous.equity if previous else initial
-        day_pnl = valuation.equity - base
+        capital = contributed_capital(initial, transfers)
+        total_pnl = valuation.equity - capital
+        today_flow = transfer_flow(transfers, after=previous.trading_date if previous else None)
+        day_pnl = valuation.equity - base - today_flow
+        if transfers:
+            steps = [(s.equity, s.net_transfer) for s in snapshots if s.trading_date < day_ref]
+            steps.append((valuation.equity, today_flow))
+            total_return = twr_return_pct(initial, steps)
+        else:
+            total_return = _pct(total_pnl, initial)
         return AccountSummary(
             id=account.id,
             name=account.name,
@@ -408,8 +466,10 @@ class PaperService:
             unrealized_pnl=unrealized,
             realized_pnl=realized,
             dividend_income=valuation.book.dividend_income,
+            contributed_capital=capital,
+            day_net_transfer=today_flow,
             total_pnl=total_pnl,
-            total_return_pct=_pct(total_pnl, initial),
+            total_return_pct=total_return,
             day_pnl=day_pnl,
             day_return_pct=_pct(day_pnl, base),
             positions_count=len(valuation.positions),
@@ -897,6 +957,15 @@ class PaperService:
         snapshots = await self.repo.list_paper_snapshots(
             account.id, epoch=account.epoch, since=today - timedelta(days=days)
         )
+        transfers = await self.repo.list_paper_transfer_entries(  # type: ignore[attr-defined]
+            account.id, epoch=account.epoch
+        )
+        if transfers:
+            # The live point's flow is everything after the newest earlier snapshot, which
+            # may lie before the requested window.
+            snapshots_all = await self.repo.list_paper_snapshots(account.id, epoch=account.epoch)
+        else:
+            snapshots_all = snapshots
         points = [
             EquityPoint(
                 date=s.trading_date,
@@ -904,6 +973,7 @@ class PaperService:
                 cash=s.cash,
                 market_value=s.market_value,
                 benchmark_close=s.benchmark_close,
+                net_transfer=s.net_transfer,
             )
             for s in snapshots
         ]
@@ -914,6 +984,7 @@ class PaperService:
         newest = closes[max(closes)] if closes else None
         points = [p for p in points if p.date != live_day]
         if live_day >= account_start_date(account):
+            earlier = [s.trading_date for s in snapshots_all if s.trading_date < live_day]
             points.append(
                 EquityPoint(
                     date=live_day,
@@ -922,8 +993,12 @@ class PaperService:
                     market_value=valuation.market_value,
                     benchmark_close=closes.get(live_day, newest),
                     live=True,
+                    net_transfer=transfer_flow(transfers, after=max(earlier, default=None)),
                 )
             )
+        index = twr_index([(p.equity, p.net_transfer) for p in points])
+        for point, value in zip(points, index, strict=True):
+            point.twr_index = value
         return EquityCurve(points=points)
 
 
