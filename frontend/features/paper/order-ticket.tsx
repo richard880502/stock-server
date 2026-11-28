@@ -33,6 +33,8 @@ import {
   stepPrice,
   tickBandsFrom,
 } from "./paper-math";
+import { keepProposalLink, type ProposalLink } from "@/features/proposals/proposal-math";
+import "@/features/proposals/proposals.css";
 import { SimBadge } from "./paper-ui";
 
 export type TicketPrefill = {
@@ -42,6 +44,10 @@ export type TicketPrefill = {
   name?: string;
   side?: OrderSide;
   lots?: number;
+  /** From an AI proposal: starts the limit price here instead of at the last price. */
+  limitPrice?: number;
+  /** The AI proposal this fill-in came from; sent as `proposal_id` with the order. */
+  proposalId?: string;
 };
 
 type PreviewState = { key: string; data: OrderPreview | null; error: string | null };
@@ -73,6 +79,8 @@ export function OrderTicket({
   recents,
   onSymbolChange,
   onPlaced,
+  onProposalSubmitted,
+  onViewProposal,
 }: {
   account: AccountSummary;
   positions: Position[];
@@ -85,6 +93,10 @@ export function OrderTicket({
   recents: RecentSymbol[];
   onSymbolChange: (symbol: string | null) => void;
   onPlaced: (order: Order) => void;
+  /** An order carrying `proposal_id` was submitted; `consumed` is false when the simulator rejected it. */
+  onProposalSubmitted?: (consumed: boolean) => void;
+  /** The 「查看提案」 link in the banner was used (the phone sheet should get out of the way). */
+  onViewProposal?: () => void;
 }) {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [name, setName] = useState<string | undefined>();
@@ -98,6 +110,7 @@ export function OrderTicket({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<{ id: string; text: string; tone: "ok" | "warn" } | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [proposalLink, setProposalLink] = useState<ProposalLink | null>(null);
   const [appliedNonce, setAppliedNonce] = useState<number | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [tick, setTick] = useState(0);
@@ -113,7 +126,11 @@ export function OrderTicket({
     setName(prefill.name);
     if (prefill.side) setSide(prefill.side);
     setLotsText(String(prefill.lots ?? 1));
-    setPriceEdit(null);
+    if (prefill.limitPrice !== undefined) setOrderType("limit");
+    setPriceEdit(prefill.limitPrice !== undefined ? formatPriceInput(prefill.limitPrice) : null);
+    setProposalLink(
+      prefill.proposalId ? { id: prefill.proposalId, symbol: prefill.symbol, side: prefill.side ?? "buy" } : null,
+    );
     setStep("edit");
     setFrozen(null);
     setSubmitError(null);
@@ -223,6 +240,7 @@ export function OrderTicket({
   };
 
   const pickSymbol = (next: string, nextName?: string) => {
+    setProposalLink((link) => keepProposalLink(link, { symbol: next, side }));
     setSymbol(next);
     setName(nextName);
     setPriceEdit(null);
@@ -236,8 +254,14 @@ export function OrderTicket({
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const order = await placeOrder(account.id, body);
+      // Only an order that still matches the proposal's stock and side may carry its id.
+      const link = keepProposalLink(proposalLink, { symbol, side: body.side });
+      const order = await placeOrder(account.id, link ? { ...body, proposal_id: link.id } : body);
       onPlaced(order);
+      if (link) {
+        if (order.status !== "rejected") setProposalLink(null);
+        onProposalSubmitted?.(order.status !== "rejected");
+      }
       if (order.status === "rejected") {
         setStep("edit");
         setFrozen(null);
@@ -273,6 +297,15 @@ export function OrderTicket({
         <SimBadge />
         <p className="paper-ticket-account">{account.name}</p>
       </header>
+
+      {proposalLink && (
+        <p className="paper-prop-banner" role="note">
+          <strong>來自 AI 提案 · 你可以修改價格與張數</strong>
+          <a href={`#proposal-${proposalLink.id}`} onClick={() => onViewProposal?.()}>
+            查看提案
+          </a>
+        </p>
+      )}
 
       {step === "confirm" && frozen && body ? (
         <ConfirmPanel
@@ -360,6 +393,7 @@ export function OrderTicket({
               value={side}
               options={SIDE_OPTIONS}
               onChange={(next) => {
+                setProposalLink((link) => keepProposalLink(link, { symbol, side: next }));
                 setSide(next);
                 resetResult();
               }}

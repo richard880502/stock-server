@@ -1,7 +1,7 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/card";
 import { ErrorBanner } from "@/components/error-banner";
 import {
@@ -18,6 +18,10 @@ import {
   resetAccount,
   updateAccount,
 } from "@/lib/api/paper";
+import { parseProposalParam, PAPER_ACCOUNT_KEY, prefillFromProposal, STATUS_LABEL as PROPOSAL_STATUS } from "@/features/proposals/proposal-math";
+import { ProposalsPanel } from "@/features/proposals/proposals-panel";
+import { useProposalLookup } from "@/features/proposals/use-proposal-lookup";
+import type { Proposal } from "@/lib/api/proposals";
 import { useDashboard } from "@/lib/dashboard-context";
 import { useLiveQuotes } from "@/lib/live-quotes";
 import { readStorage, writeStorage } from "@/lib/safe-storage";
@@ -25,13 +29,14 @@ import { AccountSettingsForm, NewAccountForm, type SettingsFocus } from "./accou
 import { AccountHeader, AccountHeaderSkeleton } from "./account-header";
 import { EquityCard } from "./equity-card";
 import { OrderTicket, type TicketPrefill } from "./order-ticket";
+import "@/features/proposals/proposals.css";
 import { OrdersPanel } from "./orders-panel";
 import { applyLivePrices, type EquityRange, maxSellLots, parseDeepLink, RANGE_DAYS } from "./paper-math";
 import { PaperDialog, SIM_DISCLAIMER, SimBadge } from "./paper-ui";
 import { PositionsTable } from "./positions-table";
 import { usePolled } from "./use-paper-data";
 
-const ACCOUNT_KEY = "quant_signal_paper_account";
+const ACCOUNT_KEY = PAPER_ACCOUNT_KEY;
 const NO_SYMBOLS: string[] = [];
 
 type Dialog =
@@ -44,6 +49,7 @@ type Dialog =
 /** 模擬交易: header strip, equity curve, positions, orders, and the order ticket. */
 export function PaperPage() {
   const search = useSearchParams();
+  const router = useRouter();
   const { recentSymbols } = useDashboard();
 
   const accounts = usePolled("accounts", (signal) => listAccounts({ signal }));
@@ -67,6 +73,9 @@ export function PaperPage() {
     return link.symbol ? { nonce: 1, symbol: link.symbol, side: link.side ?? "buy", lots: link.lots ?? undefined } : null;
   });
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [proposalsToken, setProposalsToken] = useState(0);
+  const proposalParam = parseProposalParam(search);
+  const appliedProposal = useRef<string | null>(null);
   const [ordersToken, setOrdersToken] = useState(0);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
@@ -114,6 +123,36 @@ export function PaperPage() {
   const choose = (id: string) => {
     setChosen(id);
     writeStorage(ACCOUNT_KEY, id);
+  };
+  const fillFromProposal = useCallback((proposal: Proposal) => {
+    const fill = prefillFromProposal(proposal);
+    if (!fill) return;
+    setPrefill((previous) => ({ nonce: (previous?.nonce ?? 0) + 1, ...fill }));
+    setSheetOpen(true);
+  }, []);
+
+  // `?proposal=<id>`: switch to the account that owns it, then fill the ticket once.
+  const lookup = useProposalLookup(proposalParam, list.length ? list : null, accountId, (proposal) => {
+    if (appliedProposal.current === proposal.id) return;
+    appliedProposal.current = proposal.id;
+    if (proposal.account_id && proposal.account_id !== accountId) choose(proposal.account_id);
+    if (proposal.status === "pending") fillFromProposal(proposal);
+  });
+
+  const proposalNotice = (() => {
+    if (!proposalParam || !lookup) return null;
+    if (lookup.phase === "missing") return "找不到這份 AI 提案，可能已被刪除，或不屬於你的帳戶。";
+    if (lookup.phase === "error") return "暫時無法讀取這份 AI 提案，請稍後再試。";
+    if (lookup.phase !== "found") return null;
+    const proposal = lookup.proposal;
+    if (proposal.status !== "pending") {
+      const label = typeof proposal.status === "string" ? PROPOSAL_STATUS[proposal.status as keyof typeof PROPOSAL_STATUS] : null;
+      return `這份 AI 提案${label ? `狀態為「${label}」` : "已不是待確認狀態"}，不能再帶入委託。`;
+    }
+    return prefillFromProposal(proposal) ? null : "這份 AI 提案沒有可帶入的委託。";
+  })();
+  const clearProposalParam = () => {
+    if (proposalParam) router.replace("/paper");
   };
   const closeDialog = () => {
     setDialog(null);
@@ -240,6 +279,18 @@ export function PaperPage() {
           onArchive: () => setDialog({ kind: "archive" }),
         }}
       />
+      {proposalNotice && (
+        <div className="notice" role="status">
+          <div className="notice-body">
+            <p>{proposalNotice}</p>
+          </div>
+          <div className="notice-actions">
+            <button type="button" className="button small" onClick={clearProposalParam}>
+              關閉
+            </button>
+          </div>
+        </div>
+      )}
       {detail.error && !live && <ErrorBanner message={detail.error.message} onDismiss={() => {}} onRetry={detail.reload} />}
 
       <div className="paper-layout">
@@ -260,6 +311,9 @@ export function PaperPage() {
             stale={detail.stale}
             onTrade={trade}
           />
+          {accountId && (
+            <ProposalsPanel accountId={accountId} refreshToken={proposalsToken} onUse={fillFromProposal} />
+          )}
           <OrdersPanel
             accountId={account.id}
             workingHint={live?.working_orders ?? account.working_orders}
@@ -291,6 +345,11 @@ export function PaperPage() {
             recents={recentSymbols}
             onSymbolChange={setTicketSymbol}
             onPlaced={afterOrderChange}
+            onProposalSubmitted={(consumed) => {
+              setProposalsToken((n) => n + 1);
+              if (consumed) clearProposalParam();
+            }}
+            onViewProposal={() => setSheetOpen(false)}
           />
         </aside>
         {sheetOpen && <div className="paper-scrim" onClick={() => setSheetOpen(false)} aria-hidden="true" />}

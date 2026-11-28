@@ -82,6 +82,11 @@ export function OrdersTable({
               <td className="num">{formatDateTime(order.created_at)}</td>
               <th scope="row" className="paper-stock-cell">
                 <Stock symbol={order.symbol} name={order.name} />
+                {order.source === "ai" && (
+                  <span className="paper-ai-badge" title="由 AI 提案帶入的委託">
+                    AI
+                  </span>
+                )}
               </th>
               <td><Side side={order.side} /></td>
               <td className="num">{order.lots}</td>

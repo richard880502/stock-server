@@ -1,0 +1,282 @@
+/* AI 提案 cards and the paper page's 提案 section. Tokens only; both themes come from them. */
+.prop-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.prop-card[data-status="expired"],
+.prop-card[data-status="superseded"],
+.prop-card[data-status="rejected"] {
+  background: var(--surface-2);
+}
+.prop-card p,
+.prop-card h4,
+.prop-card h5,
+.prop-card ul,
+.prop-card dl {
+  margin: 0;
+}
+.prop-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+.prop-top .chip {
+  font-size: var(--text-xs);
+  padding-inline: 0.55rem;
+}
+.prop-stock {
+  flex: 1 1 6rem;
+  min-width: 0;
+  color: var(--text);
+  text-decoration: none;
+}
+.prop-stock:hover {
+  text-decoration: underline;
+}
+.prop-conf {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.prop-headline {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold, 600);
+  line-height: 1.45;
+}
+.prop-plan {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: var(--space-1) var(--space-2);
+}
+.prop-cell {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.prop-cell dt {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.prop-cell dd {
+  margin: 0;
+  font-weight: var(--weight-semibold, 600);
+  font-variant-numeric: tabular-nums;
+}
+.prop-cell dd small {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-weight: normal;
+}
+.prop-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold, 600);
+  letter-spacing: 0.04em;
+}
+.prop-title small {
+  color: var(--text-3);
+  font-weight: normal;
+  letter-spacing: 0;
+}
+.prop-signal,
+.prop-checks,
+.prop-sizing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.prop-signal small,
+.prop-aligned {
+  color: var(--text-3);
+}
+.prop-warn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: var(--space-2);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.prop-warn span {
+  color: var(--text-2);
+  font-size: var(--text-xs);
+}
+.prop-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0;
+  list-style: none;
+}
+.prop-check {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--border-strong);
+}
+.prop-check.blocked {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+.prop-check.blocked strong {
+  color: var(--warn);
+}
+.prop-check.adjusted {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.prop-check.adjusted strong {
+  color: var(--accent-strong);
+}
+.prop-check.info {
+  border-left-color: var(--border);
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.prop-more summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: var(--text-xs);
+}
+.prop-more[open] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.prop-sub {
+  margin-top: var(--space-1);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+}
+.prop-list {
+  padding-left: 1.1rem;
+}
+.prop-text {
+  line-height: 1.55;
+}
+.prop-note,
+.prop-meta {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.prop-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.prop-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.prop-btn-row .button {
+  flex: 1 1 auto;
+}
+.prop-reject {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.prop-outcome {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.prop-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border);
+}
+
+/* ---- Stock-page rail block ------------------------------------------------ */
+.prop-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.prop-rail-line {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.prop-rail .button {
+  align-self: stretch;
+  justify-content: center;
+}
+
+/* ---- Paper page ----------------------------------------------------------- */
+.prop-section-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-3);
+}
+.prop-history {
+  display: flex;
+  flex-direction: column;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.prop-history li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.prop-history .prop-h-plan {
+  grid-column: 2 / -1;
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.prop-history .prop-h-date {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+.paper-prop-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  align-items: baseline;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: var(--text-xs);
+}
+.paper-ai-badge {
+  margin-left: var(--space-1);
+  padding: 0 0.35rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  vertical-align: middle;
+}

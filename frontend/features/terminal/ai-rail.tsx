@@ -4,6 +4,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { SparkIcon } from "@/components/icons";
 import { StanceChip } from "@/components/status-chip";
 import { SyncPendingNotice } from "@/components/sync-pending-notice";
+import { RailProposal } from "@/features/proposals/rail-proposal";
 import { LlmErrorNotice } from "@/features/llm/llm-error";
 import type { DebateReport } from "@/lib/api/types";
 import { useDashboard } from "@/lib/dashboard-context";
@@ -153,6 +154,8 @@ export function AiRail({
               </button>
             </div>
 
+            {variant === "page" && <RailProposal key={symbol} symbol={symbol} configured={configured} />}
+
             {llm.streamSyncWait ? (
               <SyncPendingNotice wait={llm.streamSyncWait} onCancel={llm.cancelStreamSync} />
             ) : streamError && !streaming ? (
@@ -178,7 +181,7 @@ export function AiRail({
                     <PriceDrift generatedPrice={guideMeta.price} livePrice={quote?.price} dataAsOf={dataAsOf} />
                   </>
                 )}
-                {!streaming && guideText && <BacktestLink />}
+                {!streaming && guideText && <BacktestLink symbol={symbol} />}
               </div>
             ) : null}
 
@@ -223,7 +226,7 @@ export function AiRail({
                     <PriceDrift generatedPrice={debateMeta.price} livePrice={quote?.price} dataAsOf={dataAsOf} />
                   </>
                 )}
-                <BacktestLink />
+                <BacktestLink symbol={symbol} />
               </div>
             ) : null}
 
