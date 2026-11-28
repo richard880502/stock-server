@@ -75,20 +75,25 @@ export function checkTransfer(input: {
 }
 
 /** 「當日入金 NT$1,000,000」 for a day's net transfer; null when there was none. */
-export function flowLabel(flow: number): string | null {
+export function flowLabel(flow: number, when: "day" | "post-close" = "day"): string | null {
   if (!flow) return null;
-  return `當日${flow > 0 ? "入金" : "出金"} NT$${formatMoney(Math.abs(flow))}`;
+  return `${when === "day" ? "當日" : "收盤後"}${flow > 0 ? "入金" : "出金"} NT$${formatMoney(Math.abs(flow))}`;
 }
 
 /** The chart days that carry a transfer: index, date and the 「當日入金 NT$…」 line. */
 export function flowMarks(
   dates: readonly string[],
   flows: readonly number[],
+  postFlows: readonly number[] = [],
 ): { index: number; date: string; label: string }[] {
   const marks: { index: number; date: string; label: string }[] = [];
-  flows.forEach((flow, index) => {
-    const label = flowLabel(flow);
-    if (label && dates[index] !== undefined) marks.push({ index, date: dates[index], label });
+  dates.forEach((date, index) => {
+    // A transfer after the close already shows in that point's equity but belongs to the next
+    // trading day's return: mark it too, or the line would seem to jump for no reason.
+    const labels = [flowLabel(flows[index] ?? 0), flowLabel(postFlows[index] ?? 0, "post-close")].filter(
+      (label): label is string => label !== null,
+    );
+    if (labels.length) marks.push({ index, date, label: labels.join("；") });
   });
   return marks;
 }

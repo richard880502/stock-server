@@ -224,6 +224,8 @@ export type EquitySeries = {
   hasBenchmark: boolean;
   /** Net deposits - withdrawals counted on each day (0 when none or the API is older). */
   flows: number[];
+  /** Transfers made after the last close (only ever non-zero on the live point). */
+  postFlows: number[];
 };
 
 const postClose = (point: EquityPoint) => point.post_close_transfer ?? 0;
@@ -272,6 +274,7 @@ export function rebaseBenchmark(points: EquityPoint[]): EquitySeries {
     benchmark,
     hasBenchmark: benchmark.filter((v) => v !== null).length >= 2,
     flows,
+    postFlows: points.map(postClose),
   };
 }
 

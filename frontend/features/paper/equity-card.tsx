@@ -66,8 +66,8 @@ export function EquityCard({
 }
 
 function EquityLines({ series }: { series: ReturnType<typeof rebaseBenchmark> }) {
-  const { dates, equity, benchmark, hasBenchmark, flows } = series;
-  const marks = flowMarks(dates, flows);
+  const { dates, equity, benchmark, hasBenchmark, flows, postFlows } = series;
+  const marks = flowMarks(dates, flows, postFlows);
   const n = equity.length;
   const values = [...equity, ...benchmark.filter((v): v is number => v !== null)];
   const ticks = niceTicks(Math.min(...values), Math.max(...values), 4);
@@ -85,6 +85,9 @@ function EquityLines({ series }: { series: ReturnType<typeof rebaseBenchmark> })
           rows: [
             { label: "總權益", value: formatMoney(equity[i]), color: STRATEGY },
             ...(flowLabel(flows[i]) ? [{ label: flowLabel(flows[i]) as string, value: "不計入損益", color: "var(--text-3)" }] : []),
+            ...(flowLabel(postFlows[i], "post-close")
+              ? [{ label: flowLabel(postFlows[i], "post-close") as string, value: "算在下一個交易日", color: "var(--text-3)" }]
+              : []),
             ...(benchmark[i] != null
               ? [{ label: "加權指數（換算）", value: formatMoney(benchmark[i] as number), color: BASELINE, dashed: true }]
               : []),

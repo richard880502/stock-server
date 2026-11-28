@@ -150,4 +150,11 @@ describe("requestIdFor", () => {
     requestIdFor(ids, "in", 1_000, counter());
     expect(ids).toEqual({});
   });
+
+  it("marks a post-close transfer on the live point so the jump is explained", () => {
+    const marks = flowMarks(["2026-11-26", "2026-11-27"], [0, 0], [0, 1_000_000]);
+    expect(marks).toEqual([{ index: 1, date: "2026-11-27", label: "收盤後入金 NT$1,000,000" }]);
+    expect(flowMarks(["2026-11-27"], [-200_000], [500_000])[0].label).toBe("當日出金 NT$200,000；收盤後入金 NT$500,000");
+    expect(flowLabel(-300_000, "post-close")).toBe("收盤後出金 NT$300,000");
+  });
 });
