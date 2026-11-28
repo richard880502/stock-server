@@ -6,7 +6,10 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 
 from quant_signal.application.derivatives_data import refresh_derivatives_data
-from quant_signal.application.fundamentals_data import refresh_fundamentals_data
+from quant_signal.application.fundamentals_data import (
+    refresh_fundamentals_data,
+    trading_session_open,
+)
 from quant_signal.application.holders_data import refresh_holders_data
 from quant_signal.application.market_industry import refresh_industries
 from quant_signal.application.official_events import refresh_official_data
@@ -15,6 +18,7 @@ from quant_signal.application.screener import refresh_screener
 from quant_signal.application.short_data import refresh_short_data
 from quant_signal.application.sync_jobs import (
     enqueue_daily_refresh,
+    enqueue_market_repairs,
     ensure_market_snapshots,
     process_next_job,
     retry_delay_seconds,
@@ -37,9 +41,18 @@ SCREENER_UPKEEP_EVERY = timedelta(minutes=10)
 _screener_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 # Dates already computed for their current source rows, so upkeep does not redo them.
 _screener_settled: dict[date, tuple[tuple, bool]] = {}
+# Older dates without a snapshot (their market rows were repaired late) built per upkeep,
+# outside the trading session only: each is a whole-market compute.
+SCREENER_GAPS_PER_UPKEEP = 2
+# How often an idle worker looks for market days stored empty while the other exchange
+# traded (see ``enqueue_market_repairs``); outside the trading session only.
+MARKET_REPAIR_EVERY = timedelta(minutes=30)
+_market_repair_attempt: dict[str, datetime] = {"at": datetime.min.replace(tzinfo=UTC)}
 
 
-async def _refresh_screener(repository: QuantRepository, *, recompute_latest: bool) -> None:
+async def _refresh_screener(
+    repository: QuantRepository, *, recompute_latest: bool, fill_gaps: int = 0
+) -> None:
     settings = get_settings()
     done = await refresh_screener(
         repository,
@@ -48,6 +61,7 @@ async def _refresh_screener(repository: QuantRepository, *, recompute_latest: bo
         backfill_sessions=settings.screener_backfill_sessions,
         recompute_latest=recompute_latest,
         settled=_screener_settled,
+        fill_gaps=fill_gaps,
     )
     if done:
         logger.info("screener snapshot computed for %s", ", ".join(d.isoformat() for d in done))
@@ -257,10 +271,27 @@ async def tick(
         await run_side_feeds(repository, twse, tpex, taifex, datetime.now(UTC))
         if job_error is not None:
             raise job_error
+        quiet = not trading_session_open(now)
+        if outcome is None and quiet and now - _market_repair_attempt["at"] >= MARKET_REPAIR_EVERY:
+            # Idle: a day stored empty while the other exchange traded was a failed fetch;
+            # queue its market so the next tick refetches it (no exchange request here).
+            _market_repair_attempt["at"] = now
+            try:
+                await enqueue_market_repairs(
+                    repository, now=now, lookback_days=settings.sync_market_lookback_days
+                )
+            except Exception:
+                logger.exception("market repair check failed")
+                await _rollback_quietly(repository)
         if outcome is None and now - _screener_attempt["at"] >= SCREENER_UPKEEP_EVERY:
-            # Idle: catch up on any date the snapshot is missing (first run, downtime).
+            # Idle: catch up on any date the snapshot is missing (first run, downtime,
+            # market days repaired after newer snapshots were built).
             _screener_attempt["at"] = now
-            await _refresh_screener(repository, recompute_latest=False)
+            await _refresh_screener(
+                repository,
+                recompute_latest=False,
+                fill_gaps=SCREENER_GAPS_PER_UPKEEP if quiet else 0,
+            )
         return outcome
 
 

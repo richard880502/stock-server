@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 
 from fakes import FakeMarketProvider
 
 from quant_signal.application.market_sync import MarketSnapshotSyncService
-from quant_signal.application.sync_jobs import enqueue_daily_refresh, process_next_job
+from quant_signal.application.sync_jobs import (
+    enqueue_daily_refresh,
+    enqueue_market_repairs,
+    process_next_job,
+)
 from quant_signal.domain.models import Instrument, JobStatus, SyncJobKind
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 from quant_signal.infrastructure.providers.market_snapshot import (
@@ -200,3 +204,158 @@ async def test_each_daily_time_triggers_one_refresh_including_market_jobs() -> N
     evening = await enqueue_daily_refresh(repository, now=EVENING, **args)
     assert evening == 4
     assert await enqueue_daily_refresh(repository, now=EVENING, **args) == 0
+
+
+# ------------------------------------------------- self-healing of suspicious empty days
+
+
+class FlakyMarketProvider(FakeMarketProvider):
+    """Returns nothing for ``broken`` days although they were trading days."""
+
+    def __init__(self, holidays: set[date] | None = None, broken: set[date] | None = None):
+        super().__init__(holidays)
+        self.broken = broken or set()
+
+    async def fetch_market_stock_day(self, trading_date: date):
+        rows = await super().fetch_market_stock_day(trading_date)
+        return [] if trading_date in self.broken else rows
+
+
+HOLIDAY = date(2026, 10, 12)  # both exchanges closed
+BROKEN = date(2026, 10, 13)  # TPEx answered nothing, TWSE traded
+
+
+def _services(repository, twse, tpex, now):
+    tw = MarketSnapshotSyncService(
+        repository,
+        twse,
+        market="TW",
+        source="twse_official",
+        sibling=("tpex_official", "TWO"),
+        clock=lambda: now["value"],
+    )
+    two = MarketSnapshotSyncService(
+        repository,
+        tpex,
+        market="TWO",
+        source="tpex_official",
+        sibling=("twse_official", "TW"),
+        clock=lambda: now["value"],
+    )
+    return tw, two
+
+
+async def test_an_empty_day_the_other_exchange_traded_is_retried_and_stored() -> None:
+    repository = MemoryQuantRepository()
+    twse = FlakyMarketProvider(holidays={HOLIDAY})
+    tpex = FlakyMarketProvider(holidays={HOLIDAY}, broken={BROKEN})
+    now = {"value": _at(date(2026, 10, 14))}  # 16:00 Taipei the next day
+    tw, two = _services(repository, twse, tpex, now)
+    window = {"start": HOLIDAY, "end": BROKEN}
+
+    await tw.sync(**window)
+    await two.sync(**window)
+    entry = repository.fetch_coverage[("tpex_official", "market_stock_day", "TWO", "2026-10-13")]
+    assert entry.status == "empty"
+
+    # Too soon: the retry waits at least as long as the day was old when fetched (16 h).
+    tpex.calls.clear()
+    now["value"] = _at(date(2026, 10, 14), hour=20)
+    assert (await two.sync(**window)).periods_fetched == 0 and tpex.calls == []
+
+    tpex.broken.clear()  # e.g. a fresh process whose index cache is not stale
+    now["value"] = _at(date(2026, 10, 15))
+    report = await two.sync(**window)
+
+    assert tpex.calls == [BROKEN]  # the shared holiday is final and not asked again
+    assert report.market_observations_inserted == 2
+    entry = repository.fetch_coverage[("tpex_official", "market_stock_day", "TWO", "2026-10-13")]
+    assert entry.status == "ok" and entry.row_count == 2
+
+    tpex.calls.clear()
+    now["value"] = _at(date(2026, 10, 30))
+    assert (await two.sync(**window)).periods_fetched == 0 and tpex.calls == []
+
+
+async def test_a_day_that_keeps_coming_back_empty_backs_off() -> None:
+    repository = MemoryQuantRepository()
+    twse = FlakyMarketProvider()
+    tpex = FlakyMarketProvider(broken={BROKEN})
+    now = {"value": _at(date(2026, 10, 14))}
+    tw, two = _services(repository, twse, tpex, now)
+    window = {"start": BROKEN, "end": BROKEN}
+    await tw.sync(**window)
+
+    attempts: list[datetime] = []
+    moment = _at(date(2026, 10, 14))
+    while moment < _at(date(2026, 12, 31)):
+        now["value"] = moment
+        tpex.calls.clear()
+        await two.sync(**window)
+        if tpex.calls:
+            attempts.append(moment)
+        moment += timedelta(hours=1)
+
+    # First fetch, then waits that double with the day's age: a handful, not one per run.
+    assert 4 <= len(attempts) <= 8
+    gaps = [b - a for a, b in zip(attempts, attempts[1:], strict=False)]
+    assert gaps == sorted(gaps) and gaps[0] >= timedelta(hours=6)
+
+
+async def test_the_sibling_is_optional_and_an_empty_without_it_stays_final() -> None:
+    repository = MemoryQuantRepository()
+    twse = FlakyMarketProvider()
+    tpex = FlakyMarketProvider(broken={BROKEN})
+    now = {"value": _at(date(2026, 10, 14))}
+    tw, _ = _services(repository, twse, tpex, now)
+    await tw.sync(start=BROKEN, end=BROKEN)
+    lone = MarketSnapshotSyncService(
+        repository, tpex, market="TWO", source="tpex_official", clock=lambda: now["value"]
+    )
+    await lone.sync(start=BROKEN, end=BROKEN)
+    now["value"] = _at(date(2026, 11, 30))
+    assert (await lone.sync(start=BROKEN, end=BROKEN)).periods_fetched == 0
+
+
+async def test_worker_queues_a_repair_job_and_the_job_heals_the_day() -> None:
+    repository = MemoryQuantRepository()
+    twse = FlakyMarketProvider(holidays={HOLIDAY})
+    tpex = FlakyMarketProvider(holidays={HOLIDAY}, broken={BROKEN})
+    now = {"value": _at(date(2026, 10, 14))}
+    tw, two = _services(repository, twse, tpex, now)
+    await tw.sync(start=HOLIDAY, end=BROKEN)
+    await two.sync(start=HOLIDAY, end=BROKEN)
+
+    later = _at(date(2026, 10, 17))  # a Saturday: no daily refresh would come
+    assert await enqueue_market_repairs(repository, now=later, lookback_days=30) == ["TWO"]
+    jobs = [j for j in repository.sync_jobs.values() if j.kind is SyncJobKind.MARKET]
+    assert [(j.symbol, j.lookback_days) for j in jobs] == [("TWO", 30)]
+
+    tpex.broken.clear()
+    tpex.calls.clear()
+    outcome = await process_next_job(
+        repository,
+        twse,
+        tpex,
+        max_attempts=2,
+        today=date(2026, 10, 17),  # type: ignore[arg-type]
+    )
+    assert outcome is True
+    assert BROKEN in tpex.calls and HOLIDAY not in tpex.calls
+    entry = repository.fetch_coverage[("tpex_official", "market_stock_day", "TWO", "2026-10-13")]
+    assert entry.status == "ok"
+    assert await enqueue_market_repairs(repository, now=later, lookback_days=30) == []
+
+
+async def test_no_repair_job_when_both_exchanges_were_empty() -> None:
+    repository = MemoryQuantRepository()
+    twse = FlakyMarketProvider(holidays={HOLIDAY})
+    tpex = FlakyMarketProvider(holidays={HOLIDAY})
+    now = {"value": _at(date(2026, 10, 14))}
+    tw, two = _services(repository, twse, tpex, now)
+    await tw.sync(start=HOLIDAY, end=BROKEN)
+    await two.sync(start=HOLIDAY, end=BROKEN)
+
+    later = _at(date(2026, 10, 20))
+    assert await enqueue_market_repairs(repository, now=later, lookback_days=30) == []
+    assert repository.sync_jobs == {}

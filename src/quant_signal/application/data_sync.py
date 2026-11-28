@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict, deque
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -77,6 +77,35 @@ def _fetched_after(entry: FetchCoverage | None, closed_on: date) -> bool:
     if entry is None:
         return False
     return entry.fetched_at.astimezone(TAIPEI).date() > closed_on
+
+
+# Shortest wait before an "empty" day the sibling exchange traded is asked for again.
+EMPTY_RETRY_AFTER = timedelta(hours=6)
+
+
+def _retry_empty(
+    entry: FetchCoverage | None,
+    sibling: FetchCoverage | None,
+    day: date,
+    now: datetime,
+    *,
+    retry_after: timedelta = EMPTY_RETRY_AFTER,
+) -> bool:
+    """True when a final-looking ``empty`` for ``day`` is suspicious and due for a retry.
+
+    TWSE and TPEx share one trading calendar, so a day one exchange reported rows for
+    (``sibling`` ok with rows) was a trading day for the other too: its ``empty`` was a
+    failed fetch, not a holiday. A day both reported empty stays final. Each retry waits at
+    least ``retry_after`` and at least as long as the day was old when last fetched, so a
+    day that keeps coming back empty costs a logarithmic number of requests, not one per run.
+    """
+    if entry is None or entry.status != "empty" or not _fetched_after(entry, day):
+        return False
+    if sibling is None or sibling.status != "ok" or sibling.row_count <= 0:
+        return False
+    day_over = datetime.combine(day + timedelta(days=1), time(0), tzinfo=TAIPEI)
+    wait = max(retry_after, entry.fetched_at - day_over)
+    return now - entry.fetched_at >= wait
 
 
 def _consecutive_runs(days: list[date], *, step: Callable[[date], date]) -> list[list[date]]:
