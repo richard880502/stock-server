@@ -599,6 +599,11 @@ async def test_factor_snapshot_storage_and_history_stream(sessions) -> None:
         assert await repo.prune_market_factors("zz_test", 2) == 1
         assert await repo.list_market_factors(days[0], "zz_test") == []
         assert await repo.prune_market_factors("zz_test", 2) == 0
+        old = snapshot(a, days[2]).model_copy(update={"version": "zz_old"})
+        assert await repo.replace_market_factors(days[2], "zz_old", [old]) == 1
+        assert await repo.delete_other_factor_versions("zz_test") >= 1
+        assert await repo.list_market_factors(days[2], "zz_old") == []
+        assert [r.symbol for r in await repo.list_market_factors(days[2], "zz_test")] == [a]
 
 
 # ----------------------------------------------------- market page aggregates (perf)

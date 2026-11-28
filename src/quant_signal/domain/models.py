@@ -703,6 +703,16 @@ class LLMAnalysisContext(BaseModel):
     chip_flow: ChipFlowSnapshot | None = None
     news_sentiment: NewsSentimentSnapshot | None = None
     backtest: BacktestReport | None = None
+    # Compact dated official-data blocks (see application/official_evidence.py); None = no data.
+    valuation: dict[str, Any] | None = None
+    revenue_trend: dict[str, Any] | None = None
+    earnings: dict[str, Any] | None = None
+    holders: dict[str, Any] | None = None
+    short_interest: dict[str, Any] | None = None
+    stock_futures: dict[str, Any] | None = None
+    upcoming_events: dict[str, Any] | None = None
+    market_derivatives: dict[str, Any] | None = None
+    screener: dict[str, Any] | None = None
 
 
 class LLMAnalysisReport(BaseModel):
