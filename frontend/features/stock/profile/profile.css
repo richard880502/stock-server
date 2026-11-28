@@ -94,6 +94,7 @@
 .pf-market-tile { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); display: grid; gap: var(--space-2); align-content: start; min-width: 0; }
 .pf-market-tile.wide { grid-column: 1 / -1; }
 .pf-strikes { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-3); }
+.pf-strike-lines { display: grid; gap: 2px; font-size: var(--text-sm, 0.9rem); font-weight: 600; font-variant-numeric: tabular-nums; }
 .pf-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .pf-market-tile > .pf-tile { padding: 0; border: 0; background: transparent; }
 .pf-market-tile .pf-strikes .pf-tile { padding: var(--space-3); border: 1px solid var(--border); background: var(--surface); }

@@ -3,6 +3,15 @@ import type { ScreenerEntry, ScreenerMeta } from "@/lib/api/types";
 import type { ShortDay, StockFutures, StockHolders, StockShortInterest, UpcomingEvent } from "@/lib/api/profile";
 import { formatNumber, formatSigned } from "@/lib/format";
 
+/**
+ * The as-of date the profile endpoints are asked for: the date the user queried (`query.asOf`),
+ * not the signal's data date, which can lag it (e.g. a Saturday query on Friday's data). Each tab
+ * still shows the data date the server answers with. Falls back to the signal date only when the
+ * query carries none.
+ */
+export const profileAsOf = (queryAsOf: string | null | undefined, signalAsOf: string): string =>
+  queryAsOf && /^\d{4}-\d{2}-\d{2}$/.test(queryAsOf) ? queryAsOf : signalAsOf;
+
 /* ---- Units ---------------------------------------------------------------------------- */
 
 /** NT$ thousands (千元, as statements and monthly revenue are published) → 億 NT$. */
@@ -46,9 +55,16 @@ export function percentileText(percentile: number | null | undefined): string | 
 }
 
 /** Why a percentile bar is missing, in one line. */
-export function percentileReason(value: number | null | undefined, percentile: number | null | undefined): string | null {
+export function percentileReason(
+  value: number | null | undefined,
+  percentile: number | null | undefined,
+  progress?: { observations: number; required: number } | null,
+): string | null {
   if (percentile !== null && percentile !== undefined) return null;
   if (value === null || value === undefined) return "目前沒有數值，無法比較。";
+  if (progress && progress.observations < progress.required) {
+    return `已累積 ${progress.observations} / ${progress.required} 個交易日，滿 ${progress.required} 日後顯示分位`;
+  }
   return "近一年的觀測不足 60 筆，累積到 60 筆才計算分位。";
 }
 

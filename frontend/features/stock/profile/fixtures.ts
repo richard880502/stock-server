@@ -33,6 +33,8 @@ export const FUNDAMENTALS_FULL: StockFundamentals = {
     pe_percentile_250d: 23.4,
     pb_percentile_250d: 71,
     yield_percentile_250d: 8,
+    observations: 250,
+    observations_required: 60,
     history: Array.from({ length: 40 }, (_, i) => ({
       date: `2026-${String(1 + Math.floor(i / 4)).padStart(2, "0")}-${String(1 + (i % 4) * 7).padStart(2, "0")}`,
       pe_ratio: 18 + (i % 9) * 0.6,
@@ -75,6 +77,8 @@ export const FUNDAMENTALS_PARTIAL: StockFundamentals = {
     pe_percentile_250d: null,
     pb_percentile_250d: null,
     yield_percentile_250d: null,
+    observations: 23,
+    observations_required: 60,
     history: [
       { date: "2026-11-20", pe_ratio: 20.36, pb_ratio: 7.41, dividend_yield_pct: 1.1 },
       { date: "2026-11-27", pe_ratio: 22.19, pb_ratio: 8.08, dividend_yield_pct: 1.01 },
@@ -299,9 +303,15 @@ export const MARKET_DERIVATIVES_FULL: MarketDerivatives = {
     max_put_oi_strike: 22000,
     max_call_oi_expiry: "202612",
     max_put_oi_expiry: "202612",
+    max_call_oi_contracts: 2429,
+    max_put_oi_contracts: 3399,
     weekly_max_call_oi_strike: 23800,
     weekly_max_put_oi_strike: null,
+    weekly_max_call_oi_contracts: 1180,
+    weekly_max_put_oi_contracts: null,
     weekly_expiry: "202612W1",
+    index_close: 23150.5,
+    index_close_date: "2026-10-30",
   },
   notes: ["期貨未平倉為各法人身份別於收盤後的多空未平倉口數；淨額＝多方－空方，僅描述部位，不是預測。"],
 };

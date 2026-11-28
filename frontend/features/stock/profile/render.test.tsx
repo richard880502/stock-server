@@ -8,7 +8,15 @@ vi.mock("@/features/screener/use-screener-meta", async () => {
 });
 
 import { DerivativesBody, DerivativesSection } from "@/features/market/derivatives-section";
-import { derivativesEmptyReason, lastDays, latestValue, strikeFacts } from "@/features/market/derivatives-model";
+import {
+  derivativesEmptyReason,
+  indexReference,
+  lastDays,
+  latestValue,
+  pcEmptyNote,
+  strikeGroups,
+  strikeLine,
+} from "@/features/market/derivatives-model";
 import { EarningsBody, revenueFactReason } from "./earnings-tab";
 import { EventsBody } from "./events-tab";
 import {
@@ -64,8 +72,9 @@ describe("ValuationBody", () => {
   });
   it("partial: no percentile bars, one-line reason, short-history note", () => {
     const out = html(createElement(ValuationBody, { data: FUNDAMENTALS_PARTIAL }));
-    expect(out).not.toContain("分位</span>");
-    expect(out).toContain("累積到 60 筆才計算分位");
+    expect(out).not.toContain('role="meter"');
+    expect(out).toContain("已累積 23 / 60 個交易日，滿 60 日後顯示分位");
+    expect(out).not.toContain("累積到 60 筆才計算分位");
     expect(out).toContain("歷史僅 2 週");
   });
   it("loss-making: says so instead of a P/E", () => {
@@ -182,9 +191,20 @@ describe("market derivatives", () => {
     expect(lastDays(days, 99)).toHaveLength(30);
     expect(latestValue(days, (d) => d.vix)?.date).toBe(days[29].date);
     expect(latestValue([], (d) => d.vix)).toBeNull();
-    const strikes = strikeFacts(MARKET_DERIVATIVES_FULL.latest);
-    expect(strikes.map((s) => s.role)).toEqual(["上方壓力參考", "下方支撐參考", "上方壓力參考"]);
-    expect(strikeFacts(null)).toEqual([]);
+    const strikes = strikeGroups(MARKET_DERIVATIVES_FULL.latest);
+    expect(strikes.map((g) => [g.title, g.expiry])).toEqual([
+      ["近月", "202612"],
+      ["週選", "202612W1"],
+    ]);
+    expect(strikeLine("買權", strikes[0].call!)).toBe("買權 24,000（2,429 口）");
+    expect(strikeLine("賣權", strikes[0].put!)).toBe("賣權 22,000（3,399 口）");
+    expect(strikeLine("買權", { strike: 50000, contracts: null })).toBe("買權 50,000");
+    expect(strikes[1].put).toBeNull();
+    expect(strikeGroups(null)).toEqual([]);
+    expect(indexReference(MARKET_DERIVATIVES_FULL.latest)).toBe("加權指數收盤 23,150.5");
+    expect(indexReference(null)).toBeNull();
+    expect(pcEmptyNote(true)).toBe("資料回補中");
+    expect(pcEmptyNote(false)).toBe("尚無資料");
     expect(derivativesEmptyReason(null, 0)).toContain("回補");
     expect(derivativesEmptyReason("2026-11-27", 0)).toContain("之前還沒有");
     expect(derivativesEmptyReason("2026-11-27", 3)).toBeNull();
@@ -194,10 +214,23 @@ describe("market derivatives", () => {
     expect(out).toContain("外資台指期淨未平倉（大台等值，口）");
     expect(out).toContain("text-down"); // net short
     expect(out).toContain("淨空單");
-    expect(out).toContain("買權未平倉最大履約價");
-    expect(out).toContain("上方壓力參考");
+    expect(out).toContain("未平倉最大履約價");
+    expect(out).toContain("買權 24,000（2,429 口）");
+    expect(out).toContain("賣權 22,000（3,399 口）");
+    expect(out).toContain("近月 202612");
+    expect(out).toContain("加權指數收盤 23,150.5");
+    expect(out).not.toMatch(/壓力|支撐/);
     expect(out).toContain("不是預測");
     expect(out).toContain("VIX");
+  });
+  it("Put/Call tile says it is still back-filling when other derivatives data exists", () => {
+    const noPc = {
+      ...MARKET_DERIVATIVES_FULL,
+      days: MARKET_DERIVATIVES_FULL.days.map((d) => ({ ...d, pc_oi_ratio: null, pc_volume_ratio: null })),
+    };
+    const out = html(createElement(DerivativesBody, { data: noPc, range: 20 }));
+    expect(out).toContain("資料回補中");
+    expect(out).not.toContain("尚無資料");
   });
   it("section shows its loading skeleton, never throws, before data arrives", () => {
     expect(html(createElement(DerivativesSection, { asOf: "2026-11-27" }))).toContain("期貨與選擇權");

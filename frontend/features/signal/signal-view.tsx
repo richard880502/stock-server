@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Card } from "@/components/card";
 import { LlmSection } from "@/features/llm/llm-section";
 import { PriceChartCard } from "@/features/stock/price-chart-card";
+import { profileAsOf } from "@/features/stock/profile/model";
 import { StockProfileSection } from "@/features/stock/profile/profile-section";
 import { QuickStockPanel } from "@/features/stock/quick-stock-panel";
 import { useDashboard } from "@/lib/dashboard-context";
@@ -107,7 +108,7 @@ function SignalDetail() {
           </div>
         </div>
       </div>
-      <StockProfileSection symbol={signal.symbol} asOf={signal.as_of} />
+      <StockProfileSection symbol={signal.symbol} asOf={profileAsOf(query.asOf, signal.as_of)} />
       <div className={`grid${refreshing ? " is-refreshing" : ""}`}>
         <div className="span-12">
           <ChipPanel chipFlow={chipFlow} />

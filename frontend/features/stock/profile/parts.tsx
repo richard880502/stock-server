@@ -68,10 +68,21 @@ export function TileGrid({ children, wide = false }: { children: ReactNode; wide
 }
 
 /** 0-100 bar with its wording, or the reason there is none. */
-export function PercentileBar({ value, percentile, label }: { value: number | null; percentile: number | null; label: string }) {
+export function PercentileBar({
+  value,
+  percentile,
+  label,
+  progress,
+}: {
+  value: number | null;
+  percentile: number | null;
+  label: string;
+  /** Days of history stored vs. needed, for the "still accumulating" line. */
+  progress?: { observations: number; required: number } | null;
+}) {
   const text = percentileText(percentile);
   if (text === null || percentile === null) {
-    return <span className="pf-percentile-reason">{percentileReason(value, percentile)}</span>;
+    return <span className="pf-percentile-reason">{percentileReason(value, percentile, progress)}</span>;
   }
   const pct = Math.min(100, Math.max(0, percentile));
   return (

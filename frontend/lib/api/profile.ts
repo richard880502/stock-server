@@ -30,6 +30,10 @@ export type ValuationSection = {
   pe_percentile_250d: number | null;
   pb_percentile_250d: number | null;
   yield_percentile_250d: number | null;
+  /** Valuation days visible as of the query date within the newest 250 sessions. */
+  observations: number;
+  /** Days a percentile needs (60). */
+  observations_required: number;
   /** Weekly-sampled history, oldest first. */
   history: ValuationPoint[];
 };
@@ -215,9 +219,17 @@ export type MarketDerivativesLatest = MarketDerivativesDay & {
   max_put_oi_strike: number | null;
   max_call_oi_expiry: string | null;
   max_put_oi_expiry: string | null;
+  /** Open interest (contracts) at the strikes above. */
+  max_call_oi_contracts: number | null;
+  max_put_oi_contracts: number | null;
   weekly_max_call_oi_strike: number | null;
   weekly_max_put_oi_strike: number | null;
+  weekly_max_call_oi_contracts: number | null;
+  weekly_max_put_oi_contracts: number | null;
   weekly_expiry: string | null;
+  /** TAIEX close on `index_close_date`, for reference next to the strikes. */
+  index_close: number | null;
+  index_close_date: string | null;
 };
 
 export type MarketDerivatives = {

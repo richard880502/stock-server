@@ -42,7 +42,7 @@ export const META: ScreenerMeta = {
   presets: [
     { key: "balanced", label: "綜合評分", description: "多因子綜合分數由高到低。", sort: "composite", order: "desc", filters: [{ key: "avg_turnover_20d", min: 20000000 }], columns: ["composite", "momentum", "flow", "fundamental", "stability"] },
     { key: "money_flow", label: "資金流入", description: "法人持續買超、資金流向分數最高。", sort: "flow", order: "desc", filters: [{ key: "inst_flow_ratio_20d", min: 0 }, { key: "avg_turnover_20d", min: 20000000 }], columns: ["flow", "total_net_20d", "inst_flow_ratio_20d", "foreign_streak", "trust_streak", "margin_change_20d_pct"] },
-    { key: "quiet_accumulation", label: "低調吸籌", description: "法人穩定買進、股價尚未大漲。", sort: "accumulation", order: "desc", filters: [{ key: "inst_flow_ratio_60d", min: 0 }, { key: "inst_buy_days_60d", min: 55 }, { key: "ret_20d", min: -8, max: 8 }, { key: "avg_turnover_20d", min: 10000000 }], columns: ["accumulation", "inst_flow_ratio_60d", "inst_buy_days_60d", "ret_20d", "ret_60d", "cmf_20"] },
+    { key: "quiet_accumulation", label: "低調吸籌", description: "法人穩定買進、股價尚未大漲。", sort: "accumulation", order: "desc", filters: [{ key: "inst_flow_ratio_60d", min: 0 }, { key: "inst_buy_days_60d", min: 55 }, { key: "ret_20d", min: -8, max: 8 }, { key: "avg_turnover_20d", min: 10000000 }], columns: ["accumulation", "inst_flow_ratio_60d", "inst_buy_days_60d", "ret_20d", "ret_60d", "cmf_20"], requires: ["inst_flow_ratio_60d", "inst_buy_days_60d", "ret_20d", "avg_turnover_20d"] },
     { key: "momentum", label: "強勢動能", description: "多頭排列且動能分數最高。", sort: "momentum", order: "desc", filters: [{ key: "trend_aligned", flag: true }, { key: "avg_turnover_20d", min: 50000000 }], columns: ["momentum", "ret_20d", "ret_60d", "high_52w_gap_pct"] },
   ],
   industries: [

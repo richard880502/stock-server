@@ -74,7 +74,12 @@ export function ValuationBody({ data }: { data: StockFundamentals }) {
                 )
               }
             >
-              <PercentileBar value={m.value} percentile={m.percentile} label={m.label} />
+              <PercentileBar
+                value={m.value}
+                percentile={m.percentile}
+                label={m.label}
+                progress={{ observations: v.observations, required: v.observations_required }}
+              />
               {series.some((x) => x !== null) && (
                 <ProfileChart
                   title={`${m.label}歷史（週）`}

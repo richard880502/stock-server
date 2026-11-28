@@ -15,6 +15,7 @@ import {
   percentileReason,
   percentileText,
   PROFILE_TABS,
+  profileAsOf,
   rankText,
   recentAverage,
   scoreBars,
@@ -24,6 +25,17 @@ import {
   toneOf,
   weeklyChange,
 } from "./model";
+
+describe("profileAsOf", () => {
+  it("uses the date the user asked for, not the signal's data date", () => {
+    expect(profileAsOf("2026-11-28", "2026-11-27")).toBe("2026-11-28");
+  });
+  it("falls back to the signal date when the query has none", () => {
+    expect(profileAsOf("", "2026-11-27")).toBe("2026-11-27");
+    expect(profileAsOf(undefined, "2026-11-27")).toBe("2026-11-27");
+    expect(profileAsOf("tomorrow", "2026-11-27")).toBe("2026-11-27");
+  });
+});
 
 describe("units", () => {
   it("converts NT$ thousands to 億 (1 億 = 100,000 千元)", () => {
@@ -57,6 +69,11 @@ describe("percentile wording", () => {
     expect(percentileReason(22, null)).toContain("60 筆");
     expect(percentileReason(null, null)).toContain("沒有數值");
     expect(percentileReason(22, 50)).toBeNull();
+    expect(percentileReason(22, null, { observations: 23, required: 60 })).toBe(
+      "已累積 23 / 60 個交易日，滿 60 日後顯示分位",
+    );
+    // enough days but still no percentile (e.g. few non-empty P/E days): the generic line
+    expect(percentileReason(22, null, { observations: 80, required: 60 })).toContain("60 筆");
   });
 });
 

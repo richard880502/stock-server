@@ -777,7 +777,15 @@ async def test_services(api_repo) -> None:
     market = await MarketDerivativesService(api_repo).get(as_of=date(2026, 11, 28), days=60)
     assert market.data_through == date(2026, 11, 27) and market.days[-1].vix == 51.94
     assert market.latest is not None and market.latest.max_call_oi_strike == 50000.0
+    assert market.latest.index_close is None  # no market observation stored yet
     assert market.notes
+    await api_repo.upsert_market_observations([observation(date(2026, 11, 26))])
+    with_index = await MarketDerivativesService(api_repo).get(as_of=date(2026, 11, 28), days=60)
+    assert with_index.latest is not None
+    assert (with_index.latest.index_close, with_index.latest.index_close_date) == (
+        20000.0,
+        date(2026, 11, 26),
+    )  # newest observation on or before the derivatives date, dated honestly
     early = await MarketDerivativesService(api_repo).get(as_of=date(2026, 11, 1))
     assert early.days == [] and early.latest is None and early.data_through is None
     stock = await StockFuturesService(api_repo).get("2330", as_of=date(2026, 11, 28))

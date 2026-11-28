@@ -641,6 +641,8 @@ export type ScreenerPreset = {
   order: ScreenerOrder;
   filters: ScreenerPresetFilter[];
   columns: string[];
+  /** Metric keys the filters / sort depend on (absent from older servers). */
+  requires?: string[];
 };
 
 export type ScreenerIndustry = { code: string; name: string; count: number };
@@ -688,5 +690,7 @@ export type ScreenerResponse = {
   snapshot_pending: boolean;
   /** Server explanation shown above the results (e.g. the date is outside the retained range). */
   notice?: string | null;
+  /** Metric keys no stock of the snapshot has a value for yet (history still filling). */
+  unavailable_metrics?: string[];
   entries: ScreenerEntry[];
 };

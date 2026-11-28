@@ -202,6 +202,10 @@ class MarketDerivativesLatest(MarketDerivativesDay):
     weekly_max_call_oi_contracts: int | None = None
     weekly_max_put_oi_contracts: int | None = None
     weekly_expiry: str | None = None
+    # TAIEX close on ``index_close_date`` (the newest market observation on or before the
+    # derivatives date), shown next to the strikes for reference only
+    index_close: float | None = None
+    index_close_date: date | None = None
 
 
 class MarketDerivatives(BaseModel):

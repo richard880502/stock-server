@@ -225,8 +225,11 @@ async def test_evening_slot_for_three_days_through_the_real_repository(
     finally:
         async with sessions() as session:
             for table in TABLES:
+                # rows of past days are stamped with their own publication time (up to two
+                # days before the fetch), so clean from three days earlier
                 await session.execute(
-                    text(f"DELETE FROM {table} WHERE available_at >= :t"), {"t": moment}
+                    text(f"DELETE FROM {table} WHERE available_at >= :t"),
+                    {"t": moment - timedelta(days=3)},
                 )
             await session.execute(
                 text("DELETE FROM fetch_coverage WHERE source = 'short_data' AND fetched_at >= :t"),

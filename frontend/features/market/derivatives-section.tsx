@@ -16,16 +16,18 @@ import {
   DERIVATIVES_RANGES,
   type DerivativesRange,
   derivativesEmptyReason,
+  indexReference,
   lastDays,
   latestValue,
+  pcEmptyNote,
   positionWord,
-  strikeFacts,
+  strikeGroups,
+  strikeLine,
 } from "./derivatives-model";
 
 const FETCH_DAYS = 60;
 const RANGE_OPTIONS = DERIVATIVES_RANGES.map((value) => ({ value, label: `${value} 日` }));
 const kTick = (v: number) => (v === 0 ? "0" : `${formatNumber(v / 1000, 0)}k`);
-const int = (v: number) => Math.round(v).toLocaleString("zh-TW");
 
 export function DerivativesBody({ data, range }: { data: MarketDerivatives; range: DerivativesRange }) {
   const days = lastDays(data.days, range);
@@ -37,7 +39,9 @@ export function DerivativesBody({ data, range }: { data: MarketDerivatives; rang
   const top5 = latestValue(days, (d) => d.top5_net_oi);
   const vix = latestValue(days, (d) => d.vix);
   const latest = data.latest;
-  const strikes = strikeFacts(latest);
+  const strikes = strikeGroups(latest);
+  const indexNote = indexReference(latest);
+  const otherData = foreign !== null || top10 !== null || vix !== null;
   const single = days.length < 3 ? "資料才剛開始累積，趨勢要再等幾個交易日。" : null;
 
   return (
@@ -97,7 +101,7 @@ export function DerivativesBody({ data, range }: { data: MarketDerivatives; rang
           note={
             pc
               ? `${pc.date}・賣權未平倉 ÷ 買權未平倉${latest?.pc_volume_ratio != null ? `；成交量比 ${formatNumber(latest.pc_volume_ratio, 1)}%` : ""}`
-              : "尚無資料"
+              : pcEmptyNote(otherData)
           }
         />
         <ProfileChart
@@ -155,14 +159,28 @@ export function DerivativesBody({ data, range }: { data: MarketDerivatives; rang
       </div>
 
       <div className="pf-market-tile">
-        <Tile label="未平倉最大履約價" value={strikes.length ? "" : "—"} note={strikes.length ? "近月與週選臺指選擇權，僅描述未平倉分布，不是預測。" : "最大未平倉履約價自啟用日起逐日累積，尚無資料。"} />
+        <Tile
+          label="未平倉最大履約價"
+          value={strikes.length ? "" : "—"}
+          note={strikes.length ? "臺指選擇權各履約價中未平倉口數最多者，僅描述分布，不是預測。" : "最大未平倉履約價自啟用日起逐日累積，尚無資料。"}
+        />
         {strikes.length > 0 && (
           <div className="pf-strikes">
-            {strikes.map((s) => (
-              <Tile key={s.key} label={s.label} value={int(s.strike)} note={`${s.role}${s.expiry ? `・${s.expiry}` : ""}`} />
+            {strikes.map((g) => (
+              <Tile
+                key={g.key}
+                label={`${g.title}${g.expiry ? ` ${g.expiry}` : ""}`}
+                value={
+                  <span className="pf-strike-lines">
+                    {g.call && <span className="pf-strike-line">{strikeLine("買權", g.call)}</span>}
+                    {g.put && <span className="pf-strike-line">{strikeLine("賣權", g.put)}</span>}
+                  </span>
+                }
+              />
             ))}
           </div>
         )}
+        {indexNote && <p className="pf-reason">{indexNote}，僅供對照。</p>}
       </div>
     </div>
   );
