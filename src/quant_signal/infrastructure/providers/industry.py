@@ -124,7 +124,9 @@ def _parse(
     return list(rows.values())
 
 
-async def fetch_json_list(client: httpx.AsyncClient, url: str, *, attempts: int = 4) -> list[Any]:
+async def fetch_json_list(
+    client: httpx.AsyncClient, url: str, *, attempts: int = 4
+) -> list[Any]:
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:

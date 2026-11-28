@@ -599,6 +599,156 @@ async def test_factor_snapshot_storage_and_history_stream(sessions) -> None:
         assert await repo.prune_market_factors("zz_test", 2) == 1
         assert await repo.list_market_factors(days[0], "zz_test") == []
         assert await repo.prune_market_factors("zz_test", 2) == 0
+        old = snapshot(a, days[2]).model_copy(update={"version": "zz_old"})
+        assert await repo.replace_market_factors(days[2], "zz_old", [old]) == 1
+        assert await repo.delete_other_factor_versions("zz_test") >= 1
+        assert await repo.list_market_factors(days[2], "zz_old") == []
+        assert [r.symbol for r in await repo.list_market_factors(days[2], "zz_test")] == [a]
+
+
+# ----------------------------------------------------- market page aggregates (perf)
+async def _seed_random_market(session, seed: int):
+    """The same randomised whole-market rows in Postgres and in the in-memory repository."""
+    from market_perf_fixture import build_industries
+    from test_market_perf import _random_market
+
+    from quant_signal.infrastructure.memory import MemoryQuantRepository
+
+    rows = [
+        row.model_copy(update={"symbol": "ZZ" + row.symbol}) for row in _random_market(seed)
+    ]
+    industries = [
+        item.model_copy(update={"symbol": "ZZ" + item.symbol}) for item in build_industries(45)
+    ]
+    repo = PostgresQuantRepository(session)
+    await repo.upsert_market_stock_days(rows)
+    await repo.upsert_market_industries(industries)
+    memory = MemoryQuantRepository()
+    await memory.upsert_market_stock_days(rows)
+    await memory.upsert_market_industries(industries)
+    return repo, memory
+
+
+@pytest.mark.parametrize("seed", [1, 2])
+async def test_sql_ranking_aggregate_matches_the_in_memory_contract(sessions, seed) -> None:
+    from market_perf_fixture import sessions as session_dates
+    from test_market_perf import METRICS
+
+    async with sessions() as session:
+        pg, memory = await _seed_random_market(session, seed)
+        days = session_dates(14)
+        checked = 0
+        for metric in METRICS:
+            for market in ("ALL", "TW", "TWO"):
+                for window in (1, 3, 8):
+                    for order in ("desc", "asc"):
+                        for as_of in (None, days[-3]):
+                            args = (metric, market, window, order, as_of)
+                            results = []
+                            for repo in (pg, memory):
+                                ranking = await MarketRankingService(repo).ranking(
+                                    metric,  # type: ignore[arg-type]
+                                    market=market,  # type: ignore[arg-type]
+                                    window=window,
+                                    order=order,  # type: ignore[arg-type]
+                                    limit=15,
+                                    as_of=as_of,
+                                )
+                                results.append(ranking)
+                            sql, python = results
+                            assert [e.symbol for e in sql.entries] == [
+                                e.symbol for e in python.entries
+                            ], args
+                            for a, b in zip(sql.entries, python.entries, strict=True):
+                                assert a.value == pytest.approx(b.value, rel=1e-9, abs=1e-9), args
+                                assert (a.close, a.day_change_pct, a.volume_lots) == (
+                                    b.close,
+                                    b.day_change_pct,
+                                    b.volume_lots,
+                                ), args
+                                assert a.turnover_value == pytest.approx(b.turnover_value)
+                            assert (sql.data_through, sql.window_start, sql.trading_days) == (
+                                python.data_through,
+                                python.window_start,
+                                python.trading_days,
+                            ), args
+                            assert sql.awaiting_report_date == python.awaiting_report_date, args
+                            checked += 1
+        assert checked == 9 * 3 * 3 * 2 * 2
+
+
+async def test_sql_change_pct_uses_the_oldest_days_reference_price(sessions) -> None:
+    a = _symbol()
+    rows = [
+        _market_row(a, Z1, close=100.0, change=10.0),  # reference 90
+        _market_row(a, Z2, close=95.0, change=-5.0),
+        _market_row(a, Z3, close=99.0, change=4.0),
+    ]
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        await repo.upsert_market_stock_days(rows)
+        ranking = await MarketRankingService(repo).ranking("change_pct", window=3, as_of=Z3)
+    assert [(e.symbol, e.value) for e in ranking.entries] == [(a, pytest.approx(10.0))]
+
+
+async def test_market_overview_queries_agree_with_the_in_memory_repository(sessions) -> None:
+    from market_perf_fixture import sessions as session_dates
+
+    async with sessions() as session:
+        pg, memory = await _seed_random_market(session, 3)
+        days = session_dates(14)
+
+        status = {s.market: s for s in await pg.market_data_status()}
+        expected = {s.market: s for s in await memory.market_data_status()}
+        assert status["TW"].last_date >= days[-1]  # the table may hold other rows
+        for market, item in expected.items():
+            assert status[market].stocks_on_last_day == item.stocks_on_last_day
+            assert status[market].institutional_coverage == pytest.approx(
+                item.institutional_coverage
+            )
+        assert await pg.market_session_summary("TWO") == (14, days[-1])
+
+        for market in (None, "TW", "TWO"):
+            for require in (None, "total_net", "margin_change"):
+                assert await pg.list_market_trading_dates(
+                    market, as_of=None, limit=14, require=require
+                ) == await memory.list_market_trading_dates(
+                    market, as_of=None, limit=14, require=require
+                )
+
+        sql_flows = await pg.market_flow_totals(days, None)
+        py_flows = await memory.market_flow_totals(days, None)
+        assert len(sql_flows) == len(py_flows) == 14
+        for a, b in zip(sql_flows, py_flows, strict=True):
+            for field in type(a).model_fields:
+                x, y = getattr(a, field), getattr(b, field)
+                assert x == pytest.approx(y) if isinstance(x, float) else x == y, field
+
+        lean_sql = await pg.list_market_sector_days(days[-3:], as_of=days[-2])
+        lean_py = await memory.list_market_sector_days(days[-3:], as_of=days[-2])
+        assert sorted(map(tuple, lean_sql)) == sorted(lean_py)
+
+
+async def test_data_version_changes_only_when_the_newest_rows_change(sessions) -> None:
+    symbol = _symbol()
+    async with sessions() as session:
+        repo = PostgresQuantRepository(session)
+        await repo.upsert_market_stock_days([_market_row(symbol, Z1), _market_row(symbol, Z2)])
+        first = await repo.market_data_version()
+        assert first.newest_date is not None and first.newest_date >= Z2
+        assert await repo.market_data_version() == first  # a read changes nothing
+
+        await repo.upsert_market_stock_days([_market_row(_symbol(), Z3)])
+        added = await repo.market_data_version()
+        assert added != first and added.newest_date >= Z3
+
+        later = _market_row(symbol, Z3).model_copy(
+            update={"available_at": datetime.now(UTC) + timedelta(hours=1)}
+        )
+        await repo.upsert_market_stock_days([later])
+        assert await repo.market_data_version() != added  # a late update to a row counts
+
+
 
 
 async def test_paper_fill_cannot_be_booked_twice(sessions) -> None:

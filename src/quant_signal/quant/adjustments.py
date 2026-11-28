@@ -33,7 +33,10 @@ def apply_forward_adjustments(
     event_index = 0
     adjusted: list[Bar] = []
     for bar in sorted(bars, key=lambda item: item.trading_date):
-        while event_index < len(applicable) and applicable[event_index].ex_date <= bar.trading_date:
+        while (
+            event_index < len(applicable)
+            and applicable[event_index].ex_date <= bar.trading_date
+        ):
             action = applicable[event_index]
             factor *= action.previous_close / action.reference_price
             event_index += 1

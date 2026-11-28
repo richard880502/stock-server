@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 
-from quant_signal.infrastructure.providers.cache import ReportCache
+from quant_signal.infrastructure.providers.cache import TAIPEI, ReportCache
 from quant_signal.infrastructure.providers.twse import TwseProvider
+
+
+def _taipei_today() -> date:
+    """The cache decides "settled" by the Taipei date; the runner's local date can be a day off."""
+    return datetime.now(UTC).astimezone(TAIPEI).date()
 
 
 def _provider(counter: list[str]) -> TwseProvider:
@@ -22,7 +27,7 @@ def _provider(counter: list[str]) -> TwseProvider:
 async def test_settled_market_wide_report_is_fetched_once_for_many_symbols() -> None:
     calls: list[str] = []
     provider = _provider(calls)
-    past = date.today() - timedelta(days=10)
+    past = _taipei_today() - timedelta(days=10)
 
     for symbol in ("2330.TW", "2317.TW", "2454.TW"):
         await provider.fetch_institutional_flow(symbol, past, include_holding_ratio=False)
@@ -35,7 +40,9 @@ async def test_todays_report_is_never_cached() -> None:
     provider = _provider(calls)
 
     for symbol in ("2330.TW", "2317.TW"):
-        await provider.fetch_institutional_flow(symbol, date.today(), include_holding_ratio=False)
+        await provider.fetch_institutional_flow(
+            symbol, _taipei_today(), include_holding_ratio=False
+        )
 
     assert len(calls) == 2
 

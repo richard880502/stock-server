@@ -42,6 +42,11 @@ class HoldersRepositoryMixin:
     async def upsert_foreign_holding(self, rows: list[ForeignHolding]) -> int:
         return await self._insert_rows(ForeignHoldingRow, rows) if rows else 0
 
+    async def has_shareholding_distribution(self) -> bool:
+        """Is anything stored at all (a fresh deploy has no TDCC history yet)?"""
+        statement = select(ShareholdingDistributionRow.symbol).limit(1)
+        return (await self.session.execute(statement)).first() is not None
+
     async def latest_shareholding_pairs(self, as_of: datetime) -> dict[str, ShareholdingPair]:
         """Per symbol: newest visible week and the comparison week (see ``pair_snapshots``)."""
         cls = ShareholdingDistributionRow

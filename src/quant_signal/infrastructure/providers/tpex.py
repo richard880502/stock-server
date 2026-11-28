@@ -192,7 +192,9 @@ class TpexProvider:
                         "response": "json",
                     },
                 )
-            index_close = self._index_month_cache[trading_date.replace(day=1)].get(trading_date)
+            index_close = self._index_month_cache[
+                trading_date.replace(day=1)
+            ].get(trading_date)
             if index_close is None:
                 return trading_date, None
             return trading_date, self.parse_daily_market(
@@ -448,7 +450,9 @@ class TpexProvider:
         requested = str(payload.get("date") or "")
         if len(requested) != 8:
             return None
-        trading_date = date.fromisoformat(f"{requested[:4]}-{requested[4:6]}-{requested[6:]}")
+        trading_date = date.fromisoformat(
+            f"{requested[:4]}-{requested[4:6]}-{requested[6:]}"
+        )
         tables = payload.get("tables") or []
         rows = (tables[0].get("data") or []) if tables else []
         quotes: list[TwseSecurityQuote] = []

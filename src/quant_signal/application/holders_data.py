@@ -23,6 +23,12 @@ from typing import Any, Protocol
 import httpx
 
 from quant_signal.application.data_sync import TAIPEI
+from quant_signal.application.publication_time import (
+    FOREIGN_PUBLISHED,
+    publication_moment,
+    stamp_available_at,
+)
+from quant_signal.application.source_guard import Backoff, MissingSources, SourceBlocked, retrying
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import holders as src
 
@@ -34,6 +40,20 @@ FOREIGN_HOLDING = "foreign_holding"
 RETRY_AFTER = timedelta(minutes=10)
 MIN_TDCC_ROWS = 1500  # ~1,900 listed + OTC common stocks
 MIN_FOREIGN_ROWS = 400  # TWSE alone has ~1,000 common stocks, TPEx ~800
+FOREIGN_EXCHANGES = ("twse", "tpex")
+FINAL_HOUR = 22  # Taipei: after this a still-empty exchange counts as "not published today"
+
+
+def foreign_dataset(exchange: str) -> str:
+    """Coverage per exchange: TWSE and TPEx publish at different times."""
+    return f"{FOREIGN_HOLDING}_{exchange}"
+
+
+def foreign_available_at(day: date, moment: datetime) -> datetime:
+    """Stamp for a day's foreign-holding rows: the fetch time for the live same-day fetch,
+    otherwise the day's publication time (21:00 Taipei, never later than the fetch), so a
+    snapshot recomputed for a past date can see rows we only fetched afterwards."""
+    return stamp_available_at(publication_moment(day, FOREIGN_PUBLISHED), moment)
 
 
 class _HasClient(Protocol):
@@ -64,33 +84,35 @@ def foreign_days(now: datetime, count: int) -> list[date]:
 
 
 async def _get(
-    client: httpx.AsyncClient, url: str, params: dict[str, str] | None, *, attempts: int
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, str] | None,
+    *,
+    attempts: int,
+    backoff: Backoff | None = None,
 ) -> httpx.Response:
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            response = await client.get(url, params=params, headers={"Accept": "*/*"})
-            response.raise_for_status()
-            return response
-        except httpx.HTTPError as exc:
-            last_error = exc
-            await asyncio.sleep(min(1.5 * (2**attempt), 15))
-    raise RuntimeError(f"holders request failed after retries: {url}") from last_error
+    async def call() -> httpx.Response:
+        response = await client.get(url, params=params, headers={"Accept": "*/*"})
+        response.raise_for_status()
+        return response
+
+    return await retrying(backoff, call, url=url, attempts=attempts)
 
 
 async def _get_json(
-    client: httpx.AsyncClient, url: str, params: dict[str, str], *, attempts: int
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, str],
+    *,
+    attempts: int,
+    backoff: Backoff | None = None,
 ) -> Any:
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            response = await client.get(url, params=params, headers={"Accept": "*/*"})
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            last_error = exc
-            await asyncio.sleep(min(1.5 * (2**attempt), 15))
-    raise RuntimeError(f"holders request failed after retries: {url}") from last_error
+    async def call() -> Any:
+        response = await client.get(url, params=params, headers={"Accept": "*/*"})
+        response.raise_for_status()
+        return response.json()
+
+    return await retrying(backoff, call, url=url, attempts=attempts)
 
 
 async def _rollback(repository: Any) -> None:
@@ -116,13 +138,18 @@ async def _record(repository: Any, dataset: str, period: str, rows: int, moment:
 
 
 async def _refresh_tdcc(
-    repository: Any, twse: _HasClient, *, moment: datetime, fetch_attempts: int
+    repository: Any,
+    twse: _HasClient,
+    *,
+    moment: datetime,
+    fetch_attempts: int,
+    backoff: Backoff | None = None,
 ) -> tuple[int, int]:
     industries = await repository.list_market_industries()
     markets = {item.symbol.split(".")[0]: item.symbol for item in industries}
     if not markets:
         raise RuntimeError("industry classification not loaded yet; cannot map TDCC codes")
-    response = await _get(twse.client, src.TDCC_URL, None, attempts=fetch_attempts)
+    response = await _get(twse.client, src.TDCC_URL, None, attempts=fetch_attempts, backoff=backoff)
     rows = src.parse_tdcc_distribution(
         response.content.decode("utf-8-sig"), markets=markets, available_at=moment
     )
@@ -137,31 +164,43 @@ async def _refresh_foreign_day(
     tpex: _HasClient,
     day: date,
     *,
+    exchanges: tuple[str, ...] = FOREIGN_EXCHANGES,
     moment: datetime,
     fetch_attempts: int,
     request_interval: float,
-) -> tuple[int, int, int]:
-    """Returns (rows parsed, rows written, failed exchange count) for one day."""
-    parsed = written = failures = 0
-    plan = (
-        (twse, src.TWSE_QFIIS_URL, src.twse_qfiis_params(day), src.parse_twse_qfiis),
-        (tpex, src.TPEX_QFII_URL, src.tpex_qfii_params(day), src.parse_tpex_qfii),
-    )
-    for index, (provider, url, params, parse) in enumerate(plan):
+    backoff: Backoff | None = None,
+) -> tuple[dict[str, int], int, list[str]]:
+    """Returns (rows parsed per exchange, rows written, exchanges that failed) for one day."""
+    stamp = foreign_available_at(day, moment)
+    plan = {
+        "twse": (twse, src.TWSE_QFIIS_URL, src.twse_qfiis_params(day), src.parse_twse_qfiis),
+        "tpex": (tpex, src.TPEX_QFII_URL, src.tpex_qfii_params(day), src.parse_tpex_qfii),
+    }
+    counts: dict[str, int] = {}
+    failed: list[str] = []
+    written = 0
+    for index, exchange in enumerate(exchanges):
+        provider, url, params, parse = plan[exchange]
         if index and request_interval:
             await asyncio.sleep(request_interval)
         try:
-            payload = await _get_json(provider.client, url, params, attempts=fetch_attempts)
-            rows = [row for row in parse(payload, available_at=moment) if row.trading_date == day]
+            payload = await _get_json(
+                provider.client, url, params, attempts=fetch_attempts, backoff=backoff
+            )
+            rows = [row for row in parse(payload, available_at=stamp) if row.trading_date == day]
             if rows and len(rows) < MIN_FOREIGN_ROWS // 2:
                 raise RuntimeError(f"foreign holding looks incomplete: {len(rows)} rows ({url})")
-            parsed += len(rows)
+            counts[exchange] = len(rows)
             written += await repository.upsert_foreign_holding(rows) if rows else 0
+        except SourceBlocked:
+            failed.append(exchange)
+            logger.warning("foreign holding source unavailable: %s %s", url, day)
+            await _rollback(repository)
         except Exception:
-            failures += 1
+            failed.append(exchange)
             logger.exception("foreign holding request failed: %s %s", url, day)
             await _rollback(repository)
-    return parsed, written, failures
+    return counts, written, failed
 
 
 async def refresh_holders_data(
@@ -187,13 +226,21 @@ async def refresh_holders_data(
         failed_at = last_failure.get(dataset)
         return failed_at is not None and moment - failed_at < retry_after
 
+    backoff = Backoff(last_failure, moment, retry_after)
+    tracker = MissingSources(
+        repository, source=SOURCE, moment=moment, last_failure=last_failure, retry_after=retry_after
+    )
     slot = tdcc_slot(moment) if tdcc_enabled else None
+    # A fresh deploy has no TDCC history: do not wait for the next 08:00 / 17:00 slot.
+    first_run = tdcc_enabled and not await repository.has_shareholding_distribution()
+    if first_run and slot is None:
+        slot = f"{moment.astimezone(TAIPEI).date().isoformat()}-first"
     if slot and not throttled(TDCC_SHAREHOLDING):
         done = await repository.list_fetch_coverage(SOURCE, TDCC_SHAREHOLDING, "*", [slot])
-        if slot not in done:
+        if slot not in done or first_run:
             try:
                 parsed, new = await _refresh_tdcc(
-                    repository, twse, moment=moment, fetch_attempts=fetch_attempts
+                    repository, twse, moment=moment, fetch_attempts=fetch_attempts, backoff=backoff
                 )
             except Exception:
                 last_failure[TDCC_SHAREHOLDING] = moment
@@ -206,34 +253,65 @@ async def refresh_holders_data(
                 logger.info("tdcc shareholding: %s rows, %s new (%s)", parsed, new, slot)
 
     if foreign_enabled and not throttled(FOREIGN_HOLDING):
-        today = moment.astimezone(TAIPEI).date()
-        days = foreign_days(moment, foreign_window)
-        done = await repository.list_fetch_coverage(
-            SOURCE, FOREIGN_HOLDING, "*", [day.isoformat() for day in days]
-        )
-        pending = [day for day in days if day.isoformat() not in done]
+        local = moment.astimezone(TAIPEI)
+        today = local.date()
         total = 0
-        for index, day in enumerate(pending):
-            if index and request_interval:
+        worked = False
+        for day in foreign_days(moment, foreign_window):
+            key = day.isoformat()
+            past = day < today
+            final = past or local.hour >= FINAL_HOUR
+            covered = {
+                exchange: await repository.list_fetch_coverage(
+                    SOURCE, foreign_dataset(exchange), "*", [key]
+                )
+                for exchange in FOREIGN_EXCHANGES
+            }
+            due = tuple(
+                [
+                    exchange
+                    for exchange in FOREIGN_EXCHANGES
+                    if key not in covered[exchange]
+                    and await tracker.due(foreign_dataset(exchange), key, final=final)
+                ]
+            )
+            if not due:
+                continue
+            if worked and request_interval:
                 await asyncio.sleep(request_interval)
-            parsed, new, failures = await _refresh_foreign_day(
+            worked = True
+            counts, new, failed = await _refresh_foreign_day(
                 repository,
                 twse,
                 tpex,
                 day,
+                exchanges=due,
                 moment=moment,
                 fetch_attempts=fetch_attempts,
                 request_interval=request_interval,
+                backoff=backoff,
             )
             total += new
-            if failures:
+            day_has_rows = any(counts.values()) or any(
+                key in covered[exchange] and covered[exchange][key].status == "ok"
+                for exchange in FOREIGN_EXCHANGES
+            )
+            for exchange, rows in counts.items():
+                if failed and not rows:
+                    continue  # the exchange that failed may be why this one looks empty
+                await tracker.settle(
+                    foreign_dataset(exchange),
+                    key,
+                    key,
+                    rows,
+                    day_has_rows=day_has_rows,
+                    past=past,
+                    final=final,
+                )
+            logger.info("foreign holding %s: rows %s, %s new", day, counts, new)
+            if failed:
                 last_failure[FOREIGN_HOLDING] = moment
                 break  # retry later; do not keep hitting an exchange that is failing
-            if parsed == 0 and day >= today:
-                last_failure[FOREIGN_HOLDING] = moment  # not published yet
-                break
-            await _record(repository, FOREIGN_HOLDING, day.isoformat(), parsed, moment)
-            logger.info("foreign holding %s: %s rows, %s new", day, parsed, new)
-        if pending:
+        if worked:
             written[FOREIGN_HOLDING] = total
     return written

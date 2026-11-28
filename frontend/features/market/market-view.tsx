@@ -8,6 +8,7 @@ import { getMarketFlows, getMarketRankings } from "@/lib/api/endpoints";
 import { needsAttention } from "@/lib/backfill";
 import { useDashboard } from "@/lib/dashboard-context";
 import { useBackfillStatus } from "@/lib/use-backfill-status";
+import { DerivativesSection } from "./derivatives-section";
 import { MarketDataFooter } from "./data-footer";
 import { FlowSection } from "./flow-section";
 import { MarketControls } from "./market-controls";
@@ -141,6 +142,8 @@ export function MarketView() {
         loading={flows.loading}
         stale={flows.stale}
       />
+
+      <DerivativesSection asOf={asOf} />
 
       <SectorSection asOf={asOf} onPick={pick} />
 

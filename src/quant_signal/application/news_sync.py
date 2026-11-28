@@ -225,7 +225,9 @@ class NewsSentimentSyncService:
             written[symbol] = await self.ingest(symbol, headlines)
         return written
 
-    async def ingest(self, symbol: str, raw: list[RawHeadline], *, limit: int = MAX_BATCH) -> int:
+    async def ingest(
+        self, symbol: str, raw: list[RawHeadline], *, limit: int = MAX_BATCH
+    ) -> int:
         fetched_at = datetime.now(UTC)
         async with self._repo() as repo:
             existing = await repo.list_news_items(

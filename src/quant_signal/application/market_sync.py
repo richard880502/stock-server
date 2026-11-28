@@ -76,7 +76,9 @@ class MarketSnapshotSyncService:
             [day.isoformat() for day in weekdays],
         )
         pending = [
-            day for day in weekdays if not _fetched_after(coverage.get(day.isoformat()), day)
+            day
+            for day in weekdays
+            if not _fetched_after(coverage.get(day.isoformat()), day)
         ]
         stored = 0
         # Newest first: if the run is cut short, the most useful days exist.

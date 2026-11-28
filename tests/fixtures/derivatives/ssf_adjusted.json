@@ -1,0 +1,38 @@
+[
+ {
+  "Date": "20261126",
+  "Contract": "CM1",
+  "StockCode": "2887",
+  "ContractName": "台新新光金",
+  "TWSEStock/TPExStock/TWSEETF": "上市普通股",
+  "Futures/Options": "股票期貨",
+  "UnderlyingSecurityShares": "2020",
+  "UnderlyingSecurityDistributionofCashDividends": "0",
+  "UnderlyingSecurityFairValueOfPreemptiveRightsToParticipateInCashCapitalIncrease": "0",
+  "DeliveryMonths": "202612、202703"
+ },
+ {
+  "Date": "20261126",
+  "Contract": "DC1",
+  "StockCode": "2801",
+  "ContractName": "彰銀",
+  "TWSEStock/TPExStock/TWSEETF": "上市普通股",
+  "Futures/Options": "股票期貨",
+  "UnderlyingSecurityShares": "2050",
+  "UnderlyingSecurityDistributionofCashDividends": "0",
+  "UnderlyingSecurityFairValueOfPreemptiveRightsToParticipateInCashCapitalIncrease": "0",
+  "DeliveryMonths": "202703"
+ },
+ {
+  "Date": "20261126",
+  "Contract": "FT1",
+  "StockCode": "2313",
+  "ContractName": "華通",
+  "TWSEStock/TPExStock/TWSEETF": "上市普通股",
+  "Futures/Options": "股票期貨",
+  "UnderlyingSecurityShares": "2000",
+  "UnderlyingSecurityDistributionofCashDividends": "0",
+  "UnderlyingSecurityFairValueOfPreemptiveRightsToParticipateInCashCapitalIncrease": "1155",
+  "DeliveryMonths": "202612、202703"
+ }
+]

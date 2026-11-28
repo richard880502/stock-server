@@ -15,6 +15,7 @@ from annotated_types import MaxLen
 from pydantic import BaseModel, ValidationError
 
 from quant_signal.application.news_matching import clean_text, headline_hash
+from quant_signal.application.official_evidence import BLOCK_KEYS, build_official_blocks
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.services import (
     BacktestJobService,
@@ -36,8 +37,8 @@ from quant_signal.domain.models import (
 )
 from quant_signal.settings import Settings
 
-PROMPT_VERSION = "quant_analyst_v2"
-DEBATE_PROMPT_VERSION = "debate_v3"
+PROMPT_VERSION = "quant_analyst_v3"
+DEBATE_PROMPT_VERSION = "debate_v4"
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 SYSTEM_PROMPT = """你是一位以風險管理為優先的量化市場分析師。
@@ -74,6 +75,17 @@ NEWS_GUARD = """
 - 新聞與量化證據衝突時，必須明確指出衝突並降低信心與結論強度。
 - 沒有新聞時，在 limitations（風險審查則寫在 summary）說明「無可用新聞」，絕不可自行編造新聞。
 - 可用 news_items 的 id（如 news:ab12cd34）放進 evidence_refs 引用單則新聞。
+"""
+
+OFFICIAL_GUARD = """
+官方資料區塊規則（valuation、revenue_trend、earnings、holders、short_interest、stock_futures、
+upcoming_events、market_derivatives、screener）：
+- 這些區塊是程式依官方資料計算的事實，各自附資料日期；引用時須寫出區塊名稱與日期
+  （例如 valuation 2026-11-27），並留意日期是否過舊。只能把這些區塊當證據，不得補造其他數字。
+- official_blocks_missing 列出的區塊代表「未知」，不是中性也不是零，不得推測其數值或方向；
+  重要的缺漏要寫進 limitations（風險審查寫在 summary）。
+- short_interest（借券、當沖）與 stock_futures 的數字不得單獨用來推論多空方向，只能搭配其他證據。
+- 不得更改或重新計算任何量化數字。
 """
 
 NEWS_LIMIT = 8
@@ -176,6 +188,15 @@ BEAR_SYSTEM_PROMPT += NEWS_GUARD
 RISK_SYSTEM_PROMPT += NEWS_GUARD
 DEBATE_SYNTHESIS_PROMPT += NEWS_GUARD
 STREAM_GUIDANCE_PROMPT += NEWS_GUARD
+for _name in (
+    "SYSTEM_PROMPT",
+    "BULL_SYSTEM_PROMPT",
+    "BEAR_SYSTEM_PROMPT",
+    "RISK_SYSTEM_PROMPT",
+    "DEBATE_SYNTHESIS_PROMPT",
+    "STREAM_GUIDANCE_PROMPT",
+):
+    globals()[_name] += OFFICIAL_GUARD
 
 
 async def select_news_items(
@@ -202,6 +223,17 @@ async def select_news_items(
     return chosen
 
 
+def _block_date(block: dict, fallback: date) -> date:
+    for key in ("date", "tdcc_date", "sbl_date", "published", "as_of"):
+        value = block.get(key)
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                continue
+    return fallback
+
+
 def news_evidence_id(item: NewsItem) -> str:
     return f"news:{item.short_id}"
 
@@ -226,6 +258,12 @@ def prompt_context(context: LLMAnalysisContext, items: list[NewsItem]) -> dict:
     if data.get("news_sentiment"):
         data["news_sentiment"].pop("top_headlines", None)
     data["news_items"] = news_prompt_entries(items, headline_chars=NEWS_HEADLINE_CHARS)
+    # Absent official blocks are listed by name instead of sent as nulls, so "no data" is
+    # explicit (unknown) and the payload stays small.
+    missing = [key for key in BLOCK_KEYS if data.get(key) is None]
+    for key in missing:
+        data.pop(key, None)
+    data["official_blocks_missing"] = missing
     return data
 
 
@@ -672,12 +710,14 @@ class AnalysisContextService:
             if job.result.spec.end > as_of:
                 raise ValueError("backtest end must not be after analysis as_of")
             backtest = job.result
+        blocks = await build_official_blocks(self.repository, symbol, as_of)
         return LLMAnalysisContext(
             symbol_signal=symbol_signal,
             market_environment=market_environment,
             chip_flow=chip_flow,
             news_sentiment=news_sentiment,
             backtest=backtest,
+            **blocks,
         )
 
 
@@ -802,6 +842,17 @@ class DebateAnalysisService:
                         source=source,
                         as_of=item.spec.end if source == "backtest" else item.as_of,
                         details=item.model_dump(mode="json"),
+                    )
+                )
+        for source in BLOCK_KEYS:
+            block = getattr(context, source)
+            if block is not None:
+                evidence.append(
+                    DebateEvidence(
+                        id=source,
+                        source=source,
+                        as_of=_block_date(block, as_of),
+                        details=block,
                     )
                 )
         news_items = await select_news_items(self.context_service.repository, symbol, as_of)

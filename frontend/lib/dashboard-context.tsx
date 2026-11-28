@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import {
   createContext,
   type ReactNode,
@@ -7,14 +8,16 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useBacktest } from "@/features/backtest/use-backtest";
 import { useLlmAnalysis } from "@/features/llm/use-llm-analysis";
-import { useSignalData } from "@/features/signal/use-signal-data";
+import { type SignalQuery, useSignalData } from "@/features/signal/use-signal-data";
 import { getDataStatus, getLlmStatus, searchInstruments } from "./api/endpoints";
 import type { DataStatus, LlmStatus } from "./api/types";
 import { today } from "./format";
+import { routeUsesSignalData } from "./signal-routes";
 import { getRecentSymbols, type RecentSymbol, rememberSymbol } from "./recent-symbols";
 import {
   benchmarkForSymbol,
@@ -37,7 +40,23 @@ function useDashboardState() {
     [symbol, benchmark, asOf, market],
   );
 
-  const signalData = useSignalData(setError);
+  const signalLoader = useSignalData(setError);
+  // The signal, chip flow and market environment are fetched only on routes that show them
+  // (see lib/signal-routes.ts). On other routes a requested load is parked in `pendingSignal`
+  // and runs when the user reaches such a route.
+  const needsSignal = routeUsesSignalData(usePathname());
+  const needsSignalRef = useRef(needsSignal);
+  const [initialQuery] = useState<SignalQuery>(() => ({
+    symbol: DEFAULT_SYMBOL,
+    benchmark: DEFAULT_BENCHMARK,
+    asOf: today(),
+    market: marketOf(DEFAULT_SYMBOL),
+  }));
+  const [pendingSignal, setPendingSignal] = useState<SignalQuery | null>(initialQuery);
+  const signalData = {
+    ...signalLoader,
+    loading: signalLoader.loading || (needsSignal && pendingSignal !== null),
+  };
   const backtest = useBacktest(query, setError);
   const llm = useLlmAnalysis(
     query,
@@ -55,7 +74,7 @@ function useDashboardState() {
     setBenchmark((current) => benchmarkForSymbol(upper, current));
   }, []);
 
-  const { load } = signalData;
+  const { load } = signalLoader;
   const { reset: resetBacktest } = backtest;
   const { resetStream } = llm;
 
@@ -76,24 +95,30 @@ function useDashboardState() {
     setAsOf(nextAsOf);
     resetStream();
     resetBacktest();
-    void load({
+    const next: SignalQuery = {
       symbol: nextSymbol,
       benchmark: nextBenchmark,
       asOf: nextAsOf,
       market: marketOf(nextSymbol),
-    });
+    };
+    if (needsSignalRef.current) {
+      setPendingSignal(null);
+      void load(next);
+    } else {
+      setPendingSignal(next);
+    }
   };
 
-  // First load uses the defaults, exactly as the single-page dashboard did.
-  const [initialQuery] = useState(() => ({
-    symbol: DEFAULT_SYMBOL,
-    benchmark: DEFAULT_BENCHMARK,
-    asOf: today(),
-    market: marketOf(DEFAULT_SYMBOL),
-  }));
+  // First load uses the defaults, exactly as the single-page dashboard did, but only once a
+  // route that shows the analysis is open; a parked query loads when its route is reached.
   useEffect(() => {
-    void load(initialQuery);
-  }, [load, initialQuery]);
+    needsSignalRef.current = needsSignal;
+    if (!needsSignal || pendingSignal === null) return;
+    const parked = pendingSignal;
+    void load(parked);
+    // Cleared from a callback, not synchronously: `loading` stays true until the load has begun.
+    queueMicrotask(() => setPendingSignal((current) => (current === parked ? null : current)));
+  }, [needsSignal, pendingSignal, load]);
 
   // Recent symbols live in localStorage, so they can only be read after mount.
   useEffect(() => {
@@ -102,7 +127,8 @@ function useDashboardState() {
   }, []);
 
   // Once a symbol's signal has loaded, resolve its name and remember it as recent.
-  const loadedSymbol = signalData.signal?.symbol ?? null;
+  // Routes that skip the signal still resolve the name of the symbol their query bar shows.
+  const loadedSymbol = signalData.signal?.symbol ?? (needsSignal ? null : symbol);
   useEffect(() => {
     if (!loadedSymbol) return;
     const controller = new AbortController();
@@ -134,6 +160,7 @@ function useDashboardState() {
     recentSymbols,
     instrumentName,
     signalData,
+    needsSignal,
     backtest,
     llm,
     refresh,

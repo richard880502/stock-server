@@ -22,21 +22,30 @@ def select_latest_records[RecordT: VersionedMarketRecord](
     *,
     as_of: date | None = None,
 ) -> list[RecordT]:
-    candidates = [record for record in records if as_of is None or record.trading_date <= as_of]
+    candidates = [
+        record
+        for record in records
+        if as_of is None or record.trading_date <= as_of
+    ]
     production_dates = [
-        record.trading_date for record in candidates if source_priority(record.source) > 0
+        record.trading_date
+        for record in candidates
+        if source_priority(record.source) > 0
     ]
     production_start = min(production_dates) if production_dates else None
     production_end = max(production_dates) if production_dates else None
     production_is_sufficient = len(set(production_dates)) >= 60
     selected: dict[date, RecordT] = {}
     for record in candidates:
-        if record.source == "synthetic_demo" and (
-            production_is_sufficient
-            or (
-                production_start is not None
-                and production_end is not None
-                and production_start <= record.trading_date <= production_end
+        if (
+            record.source == "synthetic_demo"
+            and (
+                production_is_sufficient
+                or (
+                    production_start is not None
+                    and production_end is not None
+                    and production_start <= record.trading_date <= production_end
+                )
             )
         ):
             continue

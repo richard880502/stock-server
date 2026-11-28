@@ -1,0 +1,58 @@
+[
+ {
+  "ExRrightsExDividendDate": "1151118",
+  "SecuritiesCompanyCode": "00758B",
+  "CompanyName": "復華能源債",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "0.62000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ },
+ {
+  "ExRrightsExDividendDate": "1151126",
+  "SecuritiesCompanyCode": "6523",
+  "CompanyName": "達爾膚",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "4.00000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ },
+ {
+  "ExRrightsExDividendDate": "1151203",
+  "SecuritiesCompanyCode": "6160",
+  "CompanyName": "欣技",
+  "ExRrightsExDividend": "除權",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.16060945",
+  "SubscriptionPricePerShare": "註4",
+  "CashDividend": "0.00000000",
+  "AllocatedForPublicUnderwriting": "1100000",
+  "SubscribedByEmployees": "1650000",
+  "SubscribedByExistingShareholders": "8250000",
+  "SubscribedProRataInThousandShares": "120.45708866"
+ },
+ {
+  "ExRrightsExDividendDate": "1151229",
+  "SecuritiesCompanyCode": "6488",
+  "CompanyName": "環球晶",
+  "ExRrightsExDividend": "除息",
+  "StockDividendRatio": "0.00000000",
+  "SubscriptionRatioToNewSharesIssued": "0.00000000",
+  "SubscriptionPricePerShare": "0.00",
+  "CashDividend": "6.00000000",
+  "AllocatedForPublicUnderwriting": "0",
+  "SubscribedByEmployees": "0",
+  "SubscribedByExistingShareholders": "0",
+  "SubscribedProRataInThousandShares": "0.00000000"
+ }
+]

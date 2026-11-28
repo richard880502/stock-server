@@ -98,8 +98,16 @@ export function MarketPanel({
         />
         <Stat
           label="期貨淨部位"
-          value={isOfficial(environment) ? "尚未串接" : formatNumber(latest.futures_net_open_interest, 0)}
-          note={isOfficial(environment) ? "待串 TAIFEX" : undefined}
+          value={
+            isOfficial(environment) && latest.futures_net_open_interest === 0
+              ? "尚無資料"
+              : formatNumber(latest.futures_net_open_interest, 0)
+          }
+          note={
+            isOfficial(environment) && latest.futures_net_open_interest !== 0
+              ? "外資臺指期等值淨未平倉（口）"
+              : undefined
+          }
         />
       </div>
     </Card>

@@ -84,7 +84,9 @@ class InstrumentSearchService:
         """
         tracked = await self.repository.search_instruments(query, limit=limit)
         listed = await self.repository.search_market_stocks(query, limit=limit)
-        merged = {item.symbol: item.model_copy(update={"tracked": True}) for item in tracked}
+        merged = {
+            item.symbol: item.model_copy(update={"tracked": True}) for item in tracked
+        }
         for item in listed:
             merged.setdefault(item.symbol, item.model_copy(update={"tracked": False}))
         needle = query.strip()

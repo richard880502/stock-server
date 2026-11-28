@@ -138,6 +138,13 @@ class MemoryFactorDataMixin:
             removed += len(store.pop((version, day)))
         return removed
 
+    async def delete_other_factor_versions(self, keep_version: str) -> int:
+        store = self._factors()
+        removed = 0
+        for key in [key for key in store if key[0] != keep_version]:
+            removed += len(store.pop(key))
+        return removed
+
     async def latest_market_factor_date(
         self, version: str, as_of: date | None = None
     ) -> date | None:

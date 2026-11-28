@@ -28,9 +28,17 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 if TYPE_CHECKING:
+    from quant_signal.domain.derivatives import StockFuturesMetrics
+    from quant_signal.domain.fundamentals import EarningsMetrics, RevenueTrend, ValuationMetrics
     from quant_signal.domain.models import ForeignHolding, ShareholdingPair
+    from quant_signal.domain.short_data import (
+        DayTradeMetrics,
+        InsiderPledge,
+        NextEvent,
+        ShortLendingMetrics,
+    )
 
-VERSION = "screener_v1"
+VERSION = "screener_v2"
 SHARES_PER_LOT = 1000
 MIN_SESSIONS = 20
 HISTORY_SESSIONS = 260
@@ -81,8 +89,17 @@ FAMILY_INPUTS: dict[str, list[tuple[str, float, Transform]]] = {
         ("retail_holders_change_pct", 0.10, "neg"),
     ],
     "fundamental": [
-        ("revenue_yoy_pct", 0.60, "id"),
-        ("revenue_cum_yoy_pct", 0.40, "id"),
+        ("revenue_yoy_pct", 0.20, "id"),
+        ("revenue_yoy_3m_pct", 0.20, "id"),
+        ("eps_yoy_pct", 0.25, "id"),
+        ("gross_margin_change_pct", 0.15, "id"),
+        ("roe_ttm_pct", 0.20, "id"),
+    ],
+    "value": [
+        ("pe_percentile_250d", 0.35, "neg"),
+        ("pb_percentile_250d", 0.25, "neg"),
+        ("dividend_yield_pct", 0.25, "id"),
+        ("pe_ratio", 0.15, "neg"),
     ],
     "stability": [
         ("volatility_20d", 0.50, "neg"),
@@ -90,10 +107,11 @@ FAMILY_INPUTS: dict[str, list[tuple[str, float, Transform]]] = {
     ],
 }
 COMPOSITE_WEIGHTS: dict[str, float] = {
-    "momentum": 0.25,
-    "trend": 0.15,
-    "flow": 0.30,
-    "fundamental": 0.15,
+    "momentum": 0.20,
+    "trend": 0.10,
+    "flow": 0.25,
+    "fundamental": 0.20,
+    "value": 0.10,
     "stability": 0.15,
 }
 SCORE_KEYS = tuple(FAMILY_INPUTS)
@@ -309,6 +327,81 @@ METRICS: tuple[MetricDef, ...] = (
     _m("revenue_mom_pct", "營收月增率", "fundamental", "%", 1, "最新月營收月增率"),
     _m("revenue_cum_yoy_pct", "累計營收年增率", "fundamental", "%", 1, "累計營收年增率"),
     _m(
+        "revenue_yoy_3m_pct",
+        "近 3 月營收年增率",
+        "fundamental",
+        "%",
+        1,
+        "最近 3 個月營收合計相對去年同期 3 個月的年增率（缺任一月則無值）",
+    ),
+    _m(
+        "revenue_yoy_12m_pct",
+        "近 12 月營收年增率",
+        "fundamental",
+        "%",
+        1,
+        "最近 12 個月營收合計相對前 12 個月的年增率（缺任一月則無值）",
+    ),
+    _m(
+        "revenue_growth_streak_months",
+        "營收連續年增月數",
+        "fundamental",
+        "月",
+        0,
+        "月營收年增率連續大於 0 的月數（截至最新一期）",
+    ),
+    _m(
+        "revenue_is_12m_high",
+        "營收創 12 月新高",
+        "fundamental",
+        "",
+        0,
+        "最新月營收為近 12 個月最高（需連續 12 個月資料）",
+        True,
+        "bool",
+    ),
+    _m("eps_ttm", "近四季 EPS", "fundamental", "元", 2, "最近四季每股盈餘合計（累計財報推算）"),
+    _m(
+        "eps_yoy_pct",
+        "單季 EPS 年增率",
+        "fundamental",
+        "%",
+        1,
+        "最新單季 EPS 相對去年同季的年增率（去年同季 EPS 為正才有值）",
+    ),
+    _m(
+        "gross_margin_pct",
+        "毛利率",
+        "fundamental",
+        "%",
+        1,
+        "最新單季毛利除以營收（金融業無此數字）",
+    ),
+    _m(
+        "gross_margin_change_pct",
+        "毛利率年變化",
+        "fundamental",
+        "個百分點",
+        1,
+        "最新單季毛利率相對去年同季的變化",
+    ),
+    _m(
+        "operating_margin_pct",
+        "營業利益率",
+        "fundamental",
+        "%",
+        1,
+        "最新單季營業利益除以營收（金融業無此數字）",
+    ),
+    _m(
+        "roe_ttm_pct",
+        "近四季 ROE",
+        "fundamental",
+        "%",
+        1,
+        "近四季歸屬母公司淨利除以最新期末母公司權益（非平均權益）",
+    ),
+    _m(
         "big_holder_pct",
         "400 張以上大戶持股",
         "holders",
@@ -379,6 +472,137 @@ METRICS: tuple[MetricDef, ...] = (
         "外資及陸資持股佔流通在外股數的比例",
         None,
     ),
+    _m(
+        "pledge_ratio_pct",
+        "董監質押比例",
+        "holders",
+        "%",
+        1,
+        "董事、監察人持股中設質股數的比例（月資料）",
+        False,
+    ),
+    _m("pe_ratio", "本益比", "valuation", "倍", 1, "官方本益比（虧損公司無值）", None),
+    _m("pb_ratio", "股價淨值比", "valuation", "倍", 2, "官方股價淨值比", None),
+    _m("dividend_yield_pct", "殖利率", "valuation", "%", 2, "官方現金殖利率"),
+    _m(
+        "pe_percentile_250d",
+        "本益比一年分位",
+        "valuation",
+        "%",
+        0,
+        "最新本益比在自身近 250 個交易日中的分位（觀察值少於 60 筆則無值；越高代表相對自身越貴）",
+        False,
+    ),
+    _m(
+        "pb_percentile_250d",
+        "淨值比一年分位",
+        "valuation",
+        "%",
+        0,
+        "最新股價淨值比在自身近 250 個交易日中的分位（觀察值少於 60 筆則無值）",
+        False,
+    ),
+    _m(
+        "yield_percentile_250d",
+        "殖利率一年分位",
+        "valuation",
+        "%",
+        0,
+        "最新殖利率在自身近 250 個交易日中的分位（越高代表殖利率相對自身越高）",
+    ),
+    _m(
+        "sbl_pct_of_shares",
+        "借券餘額佔股本",
+        "short",
+        "%",
+        2,
+        "借券賣出餘額除以流通在外股數",
+        None,
+    ),
+    _m(
+        "sbl_change_5d_pct",
+        "借券餘額 5 日變化",
+        "short",
+        "%",
+        1,
+        "借券賣出餘額相對 5 個交易日前的變化",
+        None,
+    ),
+    _m(
+        "sbl_change_20d_pct",
+        "借券餘額 20 日變化",
+        "short",
+        "%",
+        1,
+        "借券賣出餘額相對 20 個交易日前的變化",
+        None,
+    ),
+    _m(
+        "days_to_cover",
+        "回補天數",
+        "short",
+        "日",
+        1,
+        "借券賣出餘額除以近期日均成交量",
+        None,
+    ),
+    _m(
+        "day_trade_ratio_pct",
+        "當沖比",
+        "short",
+        "%",
+        1,
+        "當日現股當沖成交股數佔總成交股數",
+        None,
+    ),
+    _m(
+        "day_trade_ratio_20d_pct",
+        "20 日當沖比",
+        "short",
+        "%",
+        1,
+        "近 20 個交易日當沖成交股數佔總成交股數",
+        None,
+    ),
+    _m(
+        "has_futures",
+        "有個股期貨",
+        "futures",
+        "",
+        0,
+        "該股票在期交所有個股期貨商品",
+        None,
+        "bool",
+    ),
+    _m(
+        "futures_oi_change_5d_pct",
+        "期貨未平倉 5 日變化",
+        "futures",
+        "%",
+        1,
+        "個股期貨全部契約未平倉量相對 5 個交易日前的變化",
+        None,
+    ),
+    _m(
+        "futures_basis_pct",
+        "期貨基差",
+        "futures",
+        "%",
+        2,
+        "近月個股期貨結算價相對現貨收盤價的差距（正為溢價）",
+        None,
+    ),
+    _m("next_ex_date", "下次除權息日", "events", "", 0, "未來 60 日內最近的除權息日", None, "text"),
+    _m("days_to_ex", "距除權息日", "events", "日", 0, "從資料日起算的日曆天數", None),
+    _m(
+        "next_cash_dividend",
+        "預計現金股利",
+        "events",
+        "元",
+        2,
+        "下次除權息事件公告的每股現金股利（未公告則無值）",
+        None,
+    ),
 )
 METRIC_BY_KEY = {metric.key: metric for metric in METRICS}
 NUMERIC_KEYS = frozenset(m.key for m in METRICS if m.kind == "number")
@@ -389,14 +613,22 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("price", "價格動能"),
     ("flow", "資金流向"),
     ("holders", "大戶籌碼"),
+    ("valuation", "估值"),
     ("credit", "信用交易"),
-    ("fundamental", "營收"),
+    ("short", "放空與當沖"),
+    ("fundamental", "營收與獲利"),
+    ("futures", "個股期貨"),
+    ("events", "事件"),
     ("risk", "風險"),
     ("liquidity", "流動性"),
 )
 
 FACTOR_LABELS: dict[str, tuple[str, str]] = {
-    "composite": ("綜合評分", "動能、趨勢、資金流向、營收與穩定度的加權百分位（缺項時重新配權）"),
+    "composite": (
+        "綜合評分",
+        "動能 20%、趨勢 10%、資金流向 25%、成長與獲利 20%、估值 10%、穩定度 15% 的加權平均"
+        "（缺項時依可得項目重新配權；緩步流入不計入）",
+    ),
     "momentum": ("價格動能", "20/60/120 日報酬與距 52 週高點的全市場百分位"),
     "trend": ("趨勢", "股價相對 20/60/120 日均線乖離的全市場百分位"),
     "flow": ("資金流向", "法人買超佔成交量與股本、買超日占比、CMF 與融資變化的全市場百分位"),
@@ -405,7 +637,16 @@ FACTOR_LABELS: dict[str, tuple[str, str]] = {
         "近 60 個交易日法人多數日子淨買超、400 張以上大戶持股比例上升、近 20 日股價漲跌幅不大的程度"
         "（百分位；集保資料缺時重新配權）",
     ),
-    "fundamental": ("營收", "最新月營收年增率與累計年增率的全市場百分位"),
+    "fundamental": (
+        "成長與獲利",
+        "月營收年增、近 3 月營收年增、單季 EPS 年增、毛利率年變化與近四季 ROE 的全市場百分位"
+        "（缺項時重新配權，可得權重不足一半則無分數）",
+    ),
+    "value": (
+        "估值",
+        "本益比與股價淨值比相對自身一年的分位（越低越高分）、殖利率與本益比的全市場百分位"
+        "（虧損公司本益比無值；缺項時重新配權）",
+    ),
     "stability": ("穩定度", "低波動與較小回檔的全市場百分位"),
 }
 
@@ -417,7 +658,8 @@ SHORT_LABELS: dict[str, str] = {
     "trend": "趨勢",
     "flow": "資金流向",
     "accumulation": "緩步流入",
-    "fundamental": "營收",
+    "fundamental": "成長與獲利",
+    "value": "估值",
     "stability": "穩定度",
     "change_pct": "單日漲跌",
     "ret_5d": "5日報酬",
@@ -474,6 +716,44 @@ SHORT_LABELS: dict[str, str] = {
     "holders_weeks_span": "比較間隔",
     "holders_data_date": "集保資料日",
     "foreign_holding_pct": "外資持股",
+    "pledge_ratio_pct": "董監質押",
+    "pe_ratio": "本益比",
+    "pb_ratio": "股價淨值比",
+    "dividend_yield_pct": "殖利率",
+    "pe_percentile_250d": "本益比分位",
+    "pb_percentile_250d": "淨值比分位",
+    "yield_percentile_250d": "殖利率分位",
+    "revenue_yoy_3m_pct": "近3月營收年增",
+    "revenue_yoy_12m_pct": "近12月營收年增",
+    "revenue_growth_streak_months": "營收連增月數",
+    "revenue_is_12m_high": "營收12月新高",
+    "eps_ttm": "近四季EPS",
+    "eps_yoy_pct": "單季EPS年增",
+    "gross_margin_pct": "毛利率",
+    "gross_margin_change_pct": "毛利率年變化",
+    "operating_margin_pct": "營業利益率",
+    "roe_ttm_pct": "近四季ROE",
+    "sbl_pct_of_shares": "借券佔股本",
+    "sbl_change_5d_pct": "借券5日變化",
+    "sbl_change_20d_pct": "借券20日變化",
+    "days_to_cover": "回補天數",
+    "day_trade_ratio_pct": "當沖比",
+    "day_trade_ratio_20d_pct": "20日當沖比",
+    "has_futures": "有個股期貨",
+    "futures_oi_change_5d_pct": "期貨OI5日變化",
+    "futures_basis_pct": "期貨基差",
+    "next_ex_date": "下次除息日",
+    "days_to_ex": "距除息日",
+    "next_cash_dividend": "預計現金股利",
+}
+
+# One-line notes shown with a metric group in ``/market/screener/meta``.
+GROUP_NOTES: dict[str, str] = {
+    "short": (
+        "借券賣出與當沖資料僅供觀察，不計入任何因子分數：借券餘額高可能是避險或套利、"
+        "也可能是看空，當沖比高只代表交易活躍，兩者方向都不明確。"
+    ),
+    "valuation": "官方本益比、股價淨值比與殖利率，以及各自相對自身近一年的分位（非與同業比較）。",
 }
 
 # ------------------------------------------------------------------------- input
@@ -770,16 +1050,92 @@ def holder_metrics(pair: ShareholdingPair | None, foreign: ForeignHolding | None
     return out
 
 
+EX_KINDS = frozenset({"ex_dividend", "ex_rights", "ex_rights_dividend"})
+OFFICIAL_KEYS = (
+    "pledge_ratio_pct pe_ratio pb_ratio dividend_yield_pct pe_percentile_250d "
+    "pb_percentile_250d yield_percentile_250d revenue_yoy_3m_pct revenue_yoy_12m_pct "
+    "revenue_growth_streak_months revenue_is_12m_high eps_ttm eps_yoy_pct gross_margin_pct "
+    "gross_margin_change_pct operating_margin_pct roe_ttm_pct sbl_pct_of_shares "
+    "sbl_change_5d_pct sbl_change_20d_pct days_to_cover day_trade_ratio_pct "
+    "day_trade_ratio_20d_pct has_futures futures_oi_change_5d_pct futures_basis_pct "
+    "next_ex_date days_to_ex next_cash_dividend"
+).split()
+
+
+def official_metrics(
+    trading_date: date,
+    *,
+    valuation: ValuationMetrics | None = None,
+    trend: RevenueTrend | None = None,
+    earnings: EarningsMetrics | None = None,
+    short_lending: ShortLendingMetrics | None = None,
+    day_trade: DayTradeMetrics | None = None,
+    pledge: InsiderPledge | None = None,
+    futures: StockFuturesMetrics | None = None,
+    has_futures: bool | None = None,
+    event: NextEvent | None = None,
+) -> dict[str, Any]:
+    """Metrics from the official valuation / revenue / earnings / short / futures / event feeds.
+
+    Every key is present; a missing input leaves its metrics ``None`` (never 0).
+    ``has_futures`` is ``None`` when the futures feed holds no data at all.
+    """
+    out: dict[str, Any] = dict.fromkeys(OFFICIAL_KEYS)
+    if valuation is not None:
+        for key in (
+            "pe_ratio",
+            "pb_ratio",
+            "dividend_yield_pct",
+            "pe_percentile_250d",
+            "pb_percentile_250d",
+            "yield_percentile_250d",
+        ):
+            out[key] = getattr(valuation, key)
+    if trend is not None:
+        out["revenue_yoy_3m_pct"] = trend.yoy_3m_pct
+        out["revenue_yoy_12m_pct"] = trend.yoy_12m_pct
+        out["revenue_growth_streak_months"] = trend.growth_streak_months
+        out["revenue_is_12m_high"] = trend.is_12m_high
+    if earnings is not None:
+        out["eps_ttm"] = earnings.eps_ttm
+        out["eps_yoy_pct"] = earnings.eps_yoy_pct
+        out["gross_margin_pct"] = earnings.gross_margin_pct
+        out["gross_margin_change_pct"] = earnings.gross_margin_yoy_pp
+        out["operating_margin_pct"] = earnings.operating_margin_pct
+        out["roe_ttm_pct"] = earnings.roe_ttm_pct
+    if short_lending is not None:
+        out["sbl_pct_of_shares"] = short_lending.sbl_pct_of_shares
+        out["sbl_change_5d_pct"] = short_lending.sbl_change_5d_pct
+        out["sbl_change_20d_pct"] = short_lending.sbl_change_20d_pct
+        out["days_to_cover"] = short_lending.days_to_cover
+    if day_trade is not None:
+        out["day_trade_ratio_pct"] = day_trade.day_trade_ratio_pct
+        out["day_trade_ratio_20d_pct"] = day_trade.day_trade_ratio_20d_pct
+    if pledge is not None:
+        out["pledge_ratio_pct"] = pledge.pledge_ratio_pct
+    out["has_futures"] = has_futures
+    if futures is not None:
+        out["futures_oi_change_5d_pct"] = futures.oi_change_5d
+        out["futures_basis_pct"] = futures.basis_pct
+    if event is not None and event.kind in EX_KINDS:
+        out["next_ex_date"] = event.date.isoformat()
+        out["days_to_ex"] = (event.date - trading_date).days
+        out["next_cash_dividend"] = event.cash_dividend
+    return out
+
+
 def compute_metrics(
     history: StockHistory,
     flow_through: date | None,
     holders: ShareholdingPair | None = None,
     foreign: ForeignHolding | None = None,
+    **official: Any,
 ) -> dict[str, Any] | None:
     """All spec metrics for the newest session in ``history``; ``None`` if under 20 sessions.
 
     ``flow_through`` is the newest session (≤ the newest date) with institutional data.
-    ``holders`` / ``foreign`` are the point-in-time TDCC pair and foreign-holding row.
+    ``holders`` / ``foreign`` are the point-in-time TDCC pair and foreign-holding row;
+    ``official`` forwards the optional per-stock feed inputs of :func:`official_metrics`.
     """
     n = len(history.dates)
     if n < MIN_SESSIONS:
@@ -858,6 +1214,7 @@ def compute_metrics(
     m["chip_transfer_20d"] = None if net20 is None or margin is None else bool(net20 > 0 > margin)
 
     m.update(holder_metrics(holders, foreign))
+    m.update(official_metrics(history.dates[-1], **official))
     shares = foreign.shares_outstanding if foreign is not None else 0
     m["market_cap"] = shares * float(close[-1]) if shares > 0 else None
     m["turnover_rate_20d"] = float(np.sum(volume[tail])) / shares * 100.0 if shares > 0 else None
@@ -951,6 +1308,26 @@ def _num(value: float, digits: int = 1) -> str:
     return f"{abs(value):.{digits}f}"
 
 
+# Thresholds above which an official-data metric earns a highlight (the single place to tune).
+HIGHLIGHT_THRESHOLDS: dict[str, float] = {
+    "pe_percentile_max": 15,  # P/E at or below this percentile of its own year
+    "dividend_yield_min": 5,  # percent
+    "eps_yoy_min": 30,  # single-quarter EPS growth, percent
+    "gross_margin_change_min": 2,  # percentage points vs the same quarter last year
+    "revenue_streak_min": 6,  # consecutive months of positive revenue YoY
+    "sbl_pct_min": 2,  # SBL balance as percent of shares outstanding
+    "day_trade_min": 50,  # day-trade share of volume, percent
+    "ex_days_max": 7,  # calendar days to the next ex-dividend date
+    "pledge_min": 50,  # insiders' pledge ratio, percent (also sets the high_pledge flag)
+}
+PLEDGE_FLAG_MIN = HIGHLIGHT_THRESHOLDS["pledge_min"]
+
+# Highlight priority: each candidate has a strength; the strongest ``limit`` win and ties
+# keep the order they were added in. Base strengths (before the small size bonus): 處置股 1.0,
+# 法人買融資退 .95, 注意股 / 52 週高點 .7, 董監質押 .65, 近期除息 .6, 營收連增 .55,
+# EPS 年增 .5, 毛利率年增 .5, 本益比低分位 .45, 殖利率 .4, 借券佔股本 .4, 當沖比 .35.
+
+
 def build_highlights(metrics: dict[str, Any], flags: list[str], limit: int = 4) -> list[str]:
     """Up to ``limit`` factual call-outs, strongest first (deterministic, no advice)."""
     candidates: list[tuple[float, int, str]] = []
@@ -1023,5 +1400,34 @@ def build_highlights(metrics: dict[str, Any], flags: list[str], limit: int = 4) 
     held = val("foreign_holding_pct")
     if held is not None and held >= 30:
         add(0.3 + min(held, 80) / 400, f"外資持股 {_num(held)}%")
+    th = HIGHLIGHT_THRESHOLDS
+    pledge = val("pledge_ratio_pct")
+    if pledge is not None and pledge >= th["pledge_min"]:
+        add(0.65 + min(pledge, 100) / 1000, f"董監質押 {_num(pledge, 0)}%")
+    days_to_ex, cash = val("days_to_ex"), val("next_cash_dividend")
+    if days_to_ex is not None and 0 <= days_to_ex <= th["ex_days_max"]:
+        when = "今日除息" if days_to_ex == 0 else f"{days_to_ex} 日後除息"
+        add(0.6 + (th["ex_days_max"] - days_to_ex) / 100, when + (f" {cash:g} 元" if cash else ""))
+    streak_m = val("revenue_growth_streak_months")
+    if streak_m is not None and streak_m >= th["revenue_streak_min"]:
+        add(0.55 + min(streak_m, 24) / 240, f"營收連 {streak_m} 個月年增")
+    eps_yoy = val("eps_yoy_pct")
+    if eps_yoy is not None and eps_yoy >= th["eps_yoy_min"]:
+        add(0.5 + min(eps_yoy, 200) / 2000, f"單季 EPS 年增 {_num(eps_yoy, 0)}%")
+    margin_pp = val("gross_margin_change_pct")
+    if margin_pp is not None and margin_pp >= th["gross_margin_change_min"]:
+        add(0.5 + min(margin_pp, 10) / 100, f"毛利率年增 {_num(margin_pp)} 個百分點")
+    pe_pct = val("pe_percentile_250d")
+    if pe_pct is not None and pe_pct <= th["pe_percentile_max"]:
+        add(0.45 + (th["pe_percentile_max"] - pe_pct) / 300, f"本益比位於近一年 {pe_pct:.0f}% 分位")
+    dividend = val("dividend_yield_pct")
+    if dividend is not None and dividend >= th["dividend_yield_min"]:
+        add(0.4 + min(dividend, 10) / 100, f"殖利率 {_num(dividend)}%")
+    sbl = val("sbl_pct_of_shares")
+    if sbl is not None and sbl >= th["sbl_pct_min"]:
+        add(0.4 + min(sbl, 10) / 100, f"借券餘額佔股本 {_num(sbl)}%")
+    day_trade = val("day_trade_ratio_pct")
+    if day_trade is not None and day_trade >= th["day_trade_min"]:
+        add(0.35 + min(day_trade, 100) / 1000, f"當沖比 {_num(day_trade, 0)}%")
     candidates.sort(key=lambda item: (-item[0], item[1]))
     return [text for _, _, text in candidates[:limit]]

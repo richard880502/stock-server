@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -139,6 +139,32 @@ class RankingEntry(BaseModel):
     value: float
     volume_lots: int
     turnover_value: float
+
+
+class MarketDataVersion(NamedTuple):
+    """Fingerprint of the whole-market tables: equal versions mean the same rows.
+
+    ``newest_date`` is the latest stored session (None when empty); ``fingerprint`` is
+    opaque but hashable and changes whenever a sync adds or updates the newest rows.
+    """
+
+    newest_date: date | None
+    fingerprint: tuple[Any, ...]
+
+
+class MarketRankingRow(BaseModel):
+    """One stock's ranking value (final units) with its newest session's fields."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    name: str
+    market: Literal["TW", "TWO"]
+    close: float
+    change: float
+    volume: int
+    turnover_value: float
+    value: float
 
 
 class MarketRanking(BaseModel):
@@ -515,11 +541,22 @@ class MarketObservation(BaseModel):
     investment_trust_net_flow: float
     dealer_net_flow: float
     futures_net_open_interest: float
+    # True when ``futures_net_open_interest`` is the real official position (which may be a
+    # genuine 0); False means "no TAIFEX data stored for that date" (the column itself is
+    # not nullable). Rows built without the flag keep the old meaning: 0 = unknown.
+    futures_oi_known: bool = False
     margin_balance: float = Field(ge=0)
     short_balance: float = Field(ge=0)
     available_at: datetime
     source: str
     revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_futures_oi_known(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "futures_oi_known" not in data:
+            return {**data, "futures_oi_known": data.get("futures_net_open_interest", 0) != 0}
+        return data
 
     @model_validator(mode="after")
     def validate_issue_counts(self) -> MarketObservation:
@@ -666,6 +703,16 @@ class LLMAnalysisContext(BaseModel):
     chip_flow: ChipFlowSnapshot | None = None
     news_sentiment: NewsSentimentSnapshot | None = None
     backtest: BacktestReport | None = None
+    # Compact dated official-data blocks (see application/official_evidence.py); None = no data.
+    valuation: dict[str, Any] | None = None
+    revenue_trend: dict[str, Any] | None = None
+    earnings: dict[str, Any] | None = None
+    holders: dict[str, Any] | None = None
+    short_interest: dict[str, Any] | None = None
+    stock_futures: dict[str, Any] | None = None
+    upcoming_events: dict[str, Any] | None = None
+    market_derivatives: dict[str, Any] | None = None
+    screener: dict[str, Any] | None = None
 
 
 class LLMAnalysisReport(BaseModel):

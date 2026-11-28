@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from quant_signal.application.screener import (
     refresh_screener,
 )
 from quant_signal.application.sync_jobs import process_next_job
+from quant_signal.domain.fundamentals import ValuationDay
 from quant_signal.domain.models import (
     ForeignHolding,
     MarketIndustry,
@@ -29,6 +31,7 @@ from quant_signal.domain.models import (
     ShareholdingDistribution,
     SyncJobKind,
 )
+from quant_signal.domain.short_data import ShortLendingDay
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 from quant_signal.quant import screener as math
 from quant_signal.quant.screener import VERSION
@@ -522,6 +525,7 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "flow",
         "accumulation",
         "fundamental",
+        "value",
         "stability",
     }
     assert factors["flow"]["inputs"][0] == {"key": "inst_flow_ratio_20d", "weight": 0.255}
@@ -537,6 +541,10 @@ async def test_meta_lists_factors_metrics_presets_and_industries(repository) -> 
         "big_holder_increase",
         "momentum",
         "revenue_growth",
+        "value_yield",
+        "earnings_growth",
+        "sbl_high_inst_buy",
+        "futures_oi_up",
         "chip_transfer",
         "stable",
     ]
@@ -643,6 +651,7 @@ async def test_rest_routes_return_the_contract_shapes(repository, client) -> Non
         "flow",
         "accumulation",
         "fundamental",
+        "value",
         "stability",
     }
 
@@ -829,10 +838,16 @@ async def test_big_holder_increase_preset(repository) -> None:
     await _computed(repository)
     empty = await service.screen(preset="big_holder_increase")
     assert empty.matched == 0 and empty.snapshot_pending is False  # no TDCC history yet
+    # no stock has the metric the preset needs yet: the UI can say "still accumulating"
+    needs = next(p for p in PRESETS if p["key"] == "big_holder_increase")["requires"]
+    assert needs[0] == "big_holder_pct_change"
+    assert "big_holder_pct_change" in empty.unavailable_metrics
+    assert "ret_20d" not in empty.unavailable_metrics  # computed for every stock
 
     await _with_holders(repository)
     await _computed(repository)
     result = await service.screen(preset="big_holder_increase")
+    assert "big_holder_pct_change" not in result.unavailable_metrics  # some stock has it now
     assert [e.symbol for e in result.entries] == ["1101.TW"]
     assert result.entries[0].metrics["big_holder_pct_change"] == pytest.approx(1.5)
     description = next(p for p in PRESETS if p["key"] == "big_holder_increase")["description"]
@@ -1022,3 +1037,90 @@ async def test_mcp_screen_market_rejects_bad_filters_without_raising() -> None:
         assert "error" in result and isinstance(result["error"], str), filters
     assert "equals" in (await screen_market(filters=[{"key": "x", "equals": False}]))["error"]
     assert "error" in await screen_market(as_of="not-a-date")
+
+
+# ------------------------------------------------- staleness: feeds other than prices
+
+
+def _valuation(day: date, stamp: datetime, pe: float = 12.0) -> ValuationDay:
+    return ValuationDay(
+        symbol="2330.TW",
+        trading_date=day,
+        source="twse",
+        pe_ratio=pe,
+        available_at=stamp,
+    )
+
+
+def _pe(repository: MemoryQuantRepository, day: date) -> float | None:
+    rows = repository.market_factors[(VERSION, day)]
+    return next(r for r in rows if r.symbol == "2330.TW").metrics.get("pe_ratio")
+
+
+async def test_snapshot_is_rebuilt_when_a_feed_it_reads_changes(repository) -> None:
+    taipei = ZoneInfo("Asia/Taipei")
+    previous = DAYS[-2]
+    await repository.upsert_valuation_daily(
+        [_valuation(previous, datetime.combine(previous, time(18), taipei), pe=10.0)]
+    )
+    await _snapshots(repository, backfill_sessions=3).refresh()
+    assert _pe(repository, LAST) == 10.0  # the 27th has no valuation row yet: the 26th is used
+
+    def fresh_service() -> ScreenerSnapshotService:  # a new process: nothing remembered
+        return _snapshots(repository, backfill_sessions=3)
+
+    assert await fresh_service().refresh(recompute_latest=False) == []  # nothing changed
+
+    # a row for the 27th is fetched late (Saturday) and stamped with the fetch time: it is not
+    # visible as of the 27th, so the snapshot stays as it is
+    saturday = datetime(2026, 11, 28, 10, 55, tzinfo=taipei)
+    await repository.upsert_valuation_daily([_valuation(LAST, saturday, pe=20.0)])
+    assert await fresh_service().refresh(recompute_latest=False) == []
+    assert _pe(repository, LAST) == 10.0
+
+    # the repair (migration 0022) lowers the stamp to the publication time: the next refresh
+    # notices - although nothing was "written after the snapshot" - and rebuilds that date
+    repository.valuation_rows[("2330.TW", LAST, "twse")] = _valuation(
+        LAST, datetime.combine(LAST, time(18), taipei), pe=20.0
+    )
+    assert await fresh_service().refresh(recompute_latest=False) == [LAST]
+    assert _pe(repository, LAST) == 20.0
+    assert await fresh_service().refresh(recompute_latest=False) == []  # and only once
+
+    # a new row in another feed (short lending) visible as of that date also counts
+    sbl = ShortLendingDay(
+        symbol="2330.TW",
+        trading_date=LAST,
+        source="twse_twt93u",
+        sbl_balance=1000,
+        available_at=datetime.combine(LAST, time(22, 40), taipei),
+    )
+    await repository.upsert_short_lending([sbl])
+    assert await fresh_service().refresh(recompute_latest=False) == [LAST]
+
+
+async def test_every_preset_declares_the_metrics_it_depends_on(repository) -> None:
+    meta = await ScreenerService(repository).meta()
+    keys = {m["key"] for m in meta["metrics"]}
+    by_key = {p["key"]: p for p in meta["presets"]}
+    for preset in by_key.values():
+        assert preset["requires"] and set(preset["requires"]) <= keys
+        assert all(item["key"] in preset["requires"] for item in preset["filters"])
+    assert by_key["value_yield"]["requires"][:2] == ["pe_percentile_250d", "dividend_yield_pct"]
+    assert "futures_oi_change_5d_pct" in by_key["futures_oi_up"]["requires"]
+    assert "composite" not in by_key["balanced"]["requires"]  # scores are always computed
+
+
+async def test_unavailable_metrics_comes_from_the_loaded_snapshot_and_ignores_the_market(
+    repository,
+) -> None:
+    await _computed(repository)
+    service = ScreenerService(repository)
+    everything = await service.screen()
+    only_otc = await service.screen(market="TWO")
+    assert everything.unavailable_metrics == only_otc.unavailable_metrics
+    rows = await repository.list_market_factors(LAST, VERSION)
+    present = {k for row in rows for k, v in row.metrics.items() if v is not None}
+    expected = [m["key"] for m in (await service.meta())["metrics"] if m["key"] not in present]
+    assert everything.unavailable_metrics == expected and expected  # e.g. no valuation yet
+    assert (await ScreenerService(MemoryQuantRepository()).screen()).unavailable_metrics == []

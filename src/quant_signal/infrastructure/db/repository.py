@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Select, case, func, or_, select, text, update
+from sqlalchemy import Select, and_, case, func, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from quant_signal.domain.models import (
     ApiKey,
@@ -27,10 +28,12 @@ from quant_signal.domain.models import (
     IntradaySnapshot,
     JobStatus,
     MarketDataStatus,
+    MarketDataVersion,
     MarketEnvironmentSnapshot,
     MarketFlowDay,
     MarketIndustry,
     MarketObservation,
+    MarketRankingRow,
     MarketStockDay,
     NewsItem,
     SignalSnapshot,
@@ -40,7 +43,15 @@ from quant_signal.domain.models import (
     hide_late_label,
     taipei_day_end,
 )
+from quant_signal.domain.ranking import (
+    LOT_COLUMNS,
+    SHARE_COLUMNS,
+    finalize_ranking_value,
+)
+from quant_signal.infrastructure.db.derivatives_repository import DerivativesRepositoryMixin
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
+from quant_signal.infrastructure.db.feed_stats_repository import FeedStatsRepositoryMixin
+from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -71,15 +82,23 @@ from quant_signal.infrastructure.db.prices import (
     read_latest,
     read_minutes,
 )
+from quant_signal.infrastructure.db.short_data_repository import ShortDataRepositoryMixin
 
 KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
+MARKET_EXCHANGES = ("TW", "TWO")
+SECTOR_STREAM_BATCH = 1000
+
 LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
 class PostgresQuantRepository(
     OfficialDataRepositoryMixin,
     FactorDataRepositoryMixin,
+    FeedStatsRepositoryMixin,
     HoldersRepositoryMixin,
+    ShortDataRepositoryMixin,
+    FundamentalsRepositoryMixin,
+    DerivativesRepositoryMixin,
     PaperRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
@@ -563,6 +582,7 @@ class PostgresQuantRepository(
                 investment_trust_net_flow=row.investment_trust_net_flow,
                 dealer_net_flow=row.dealer_net_flow,
                 futures_net_open_interest=row.futures_net_open_interest,
+                futures_oi_known=row.futures_oi_known,
                 margin_balance=row.margin_balance,
                 short_balance=row.short_balance,
                 available_at=row.available_at,
@@ -1158,11 +1178,7 @@ class PostgresQuantRepository(
         )
         if require is not None:
             # Keep only sessions on which this report column is published.
-            column = getattr(MarketStockDayRow, require)
-            statement = statement.having(
-                func.count(func.distinct(case((column.is_not(None), MarketStockDayRow.market))))
-                == func.count(func.distinct(MarketStockDayRow.market))
-            )
+            statement = statement.having(self._reported(getattr(MarketStockDayRow, require)))
         return list((await self.session.execute(statement)).scalars().all())
 
     async def list_market_stock_days(
@@ -1188,10 +1204,20 @@ class PostgresQuantRepository(
 
     @staticmethod
     def _reported(column) -> object:
-        """True when every market present that day has published this column."""
-        return func.count(
-            func.distinct(case((column.is_not(None), MarketStockDayRow.market)))
-        ) == func.count(func.distinct(MarketStockDayRow.market))
+        """True when every market present that day has published this column.
+
+        Written with per-market FILTER counts rather than ``count(DISTINCT ...)``: the
+        DISTINCT forces a sort of every row in the group (spilling to disk at 60 days).
+        """
+        return and_(
+            *(
+                or_(
+                    ~func.bool_or(MarketStockDayRow.market == exchange),
+                    func.count(column).filter(MarketStockDayRow.market == exchange) > 0,
+                )
+                for exchange in MARKET_EXCHANGES
+            )
+        )
 
     async def market_flow_totals(
         self,
@@ -1253,42 +1279,249 @@ class PostgresQuantRepository(
             for r in (await self.session.execute(statement)).all()
         ]
 
+    async def _market_session_spans(self) -> dict[str, tuple[date, date, int]]:
+        """Per market ``(first, newest, sessions stored)``.
+
+        A loose index scan: hop from one ``(trading_date, market)`` entry to the next with
+        one index probe each (~700), instead of ``count(DISTINCT trading_date)`` over
+        every row of the table.
+        """
+        statement = text(
+            """
+            WITH RECURSIVE p(d, m) AS (
+                (SELECT trading_date, market FROM market_stock_daily
+                 ORDER BY trading_date, market LIMIT 1)
+                UNION ALL
+                SELECT n.trading_date, n.market FROM p, LATERAL (
+                    SELECT trading_date, market FROM market_stock_daily
+                    WHERE (trading_date, market) > (p.d, p.m)
+                    ORDER BY trading_date, market LIMIT 1
+                ) n
+            )
+            SELECT m, min(d), max(d), count(*) FROM p GROUP BY m
+            """
+        )
+        return {
+            market: (first, last, int(days))
+            for market, first, last, days in (await self.session.execute(statement)).all()
+        }
+
+    async def market_session_summary(self, market: str) -> tuple[int, date | None]:
+        span = (await self._market_session_spans()).get(market)
+        return (span[2], span[1]) if span else (0, None)
+
     async def market_data_status(self) -> list[MarketDataStatus]:
         row = MarketStockDayRow
-        summary = (
-            await self.session.execute(
-                select(
-                    row.market,
-                    func.min(row.trading_date),
-                    func.max(row.trading_date),
-                    func.count(func.distinct(row.trading_date)),
-                ).group_by(row.market)
-            )
-        ).all()
-        result: list[MarketDataStatus] = []
-        for market, first, last, days in summary:
-            latest = (
+        spans = await self._market_session_spans()
+        if not spans:
+            return []
+        coverage = {
+            market: (int(total), int(institutional), int(credit))
+            for market, total, institutional, credit in (
                 await self.session.execute(
                     select(
+                        row.market,
                         func.count(),
                         func.count(row.total_net),
                         func.count(row.margin_balance),
-                    ).where(row.market == market, row.trading_date == last)
+                    )
+                    .where(
+                        tuple_(row.trading_date, row.market).in_(
+                            [(last, market) for market, (_, last, _) in spans.items()]
+                        )
+                    )
+                    .group_by(row.market)
                 )
-            ).one()
-            total = max(int(latest[0]), 1)
+            ).all()
+        }
+        result: list[MarketDataStatus] = []
+        for market, (first, last, days) in spans.items():
+            total, institutional, credit = coverage[market]
             result.append(
                 MarketDataStatus(
                     market=market,
                     first_date=first,
                     last_date=last,
-                    trading_days=int(days),
-                    stocks_on_last_day=int(latest[0]),
-                    institutional_coverage=latest[1] / total,
-                    credit_coverage=latest[2] / total,
+                    trading_days=days,
+                    stocks_on_last_day=total,
+                    institutional_coverage=institutional / max(total, 1),
+                    credit_coverage=credit / max(total, 1),
                 )
             )
         return sorted(result, key=lambda item: item.market)
+
+    async def latest_market_observation_date(self, market: str, source: str) -> date | None:
+        statement = select(func.max(MarketObservationRow.trading_date)).where(
+            MarketObservationRow.market == market.upper(), MarketObservationRow.source == source
+        )
+        return (await self.session.execute(statement)).scalar()
+
+    @property
+    def cache_namespace(self) -> str:
+        """Which database this repository reads (the key prefix of in-process caches)."""
+        bind = self.session.bind
+        return "pg:" + (bind.url.render_as_string(hide_password=True) if bind is not None else "")
+
+    async def market_data_version(self) -> MarketDataVersion:
+        """Fingerprint of the whole-market tables, from two cheap indexed probes.
+
+        Per each of the newest two sessions: its row count and newest ``available_at``
+        (a sync adding rows, or the late reports updating yesterday's, change it), plus
+        the industry table's size and newest stamp.
+        """
+        days = (
+            await self.session.execute(
+                text(
+                    """
+                    WITH newest AS (SELECT max(trading_date) AS d FROM market_stock_daily),
+                    prior AS (
+                        SELECT max(trading_date) AS d FROM market_stock_daily
+                        WHERE trading_date < (SELECT d FROM newest)
+                    )
+                    SELECT trading_date, count(*), max(available_at)
+                    FROM market_stock_daily
+                    WHERE trading_date IN ((SELECT d FROM newest), (SELECT d FROM prior))
+                    GROUP BY trading_date ORDER BY trading_date
+                    """
+                )
+            )
+        ).all()
+        industries = (
+            await self.session.execute(
+                select(func.count(), func.max(MarketIndustryRow.available_at))
+            )
+        ).one()
+        return MarketDataVersion(
+            newest_date=days[-1][0] if days else None,
+            fingerprint=(
+                tuple((day, int(count), at) for day, count, at in days),
+                (int(industries[0]), industries[1]),
+            ),
+        )
+
+    async def list_market_sector_days(
+        self, dates: list[date], *, as_of: date | None = None
+    ) -> list[tuple[Any, ...]]:
+        if not dates:
+            return []
+        row = MarketStockDayRow
+        statement = (
+            select(
+                row.symbol,
+                row.trading_date,
+                row.name,
+                row.market,
+                row.close,
+                row.change,
+                row.volume,
+                row.turnover_value,
+                row.total_net,
+                row.available_at,
+            )
+            .where(row.trading_date.in_(dates), *self._market_filters(None, as_of))
+            .execution_options(yield_per=SECTOR_STREAM_BATCH)
+        )
+        # Streamed in batches so the event loop gets a turn between them.
+        result = await self.session.stream(statement)
+        rows: list[tuple[Any, ...]] = []
+        async for batch in result.partitions():
+            rows.extend(batch)  # Row objects index like tuples
+        return rows
+
+    async def market_ranking(
+        self,
+        metric: str,
+        dates: list[date],
+        market: str | None,
+        *,
+        as_of: date | None,
+        order: Literal["desc", "asc"],
+        limit: int,
+    ) -> list[MarketRankingRow]:
+        """One aggregate query over the window; ordering and ``limit`` happen in Postgres."""
+        if not dates:
+            return []
+        row = MarketStockDayRow
+        latest = max(dates)
+        filters = [row.trading_date.in_(dates), *self._market_filters(market, as_of)]
+        newest = aliased(MarketStockDayRow)
+        grouped = select(row.symbol.label("symbol")).where(*filters).group_by(row.symbol)
+        # Names that stopped trading before the newest session are skipped.
+        has_latest = func.max(row.trading_date) == latest
+        if metric == "change_pct":
+            oldest = aliased(MarketStockDayRow)
+            base = oldest.close - oldest.change
+            value = ((newest.close / base - 1) * 100).label("value")
+            ranked = (
+                grouped.add_columns(func.min(row.trading_date).label("first_date"))
+                .having(has_latest)
+                .subquery()
+            )
+            statement = (
+                select(ranked.c.symbol, value)
+                .join(
+                    oldest,
+                    and_(
+                        oldest.symbol == ranked.c.symbol, oldest.trading_date == ranked.c.first_date
+                    ),
+                )
+                .join(newest, and_(newest.symbol == ranked.c.symbol, newest.trading_date == latest))
+                .where(base > 0)
+            )
+            if market and market != "ALL":
+                statement = statement.where(oldest.market == market, newest.market == market)
+        else:
+            if metric in SHARE_COLUMNS or metric in LOT_COLUMNS:
+                aggregate = func.sum(getattr(row, SHARE_COLUMNS.get(metric) or LOT_COLUMNS[metric]))
+            elif metric == "volume":
+                aggregate = func.sum(row.volume)
+            elif metric == "turnover":
+                aggregate = func.sum(row.turnover_value)
+            else:
+                raise ValueError(f"unknown ranking metric: {metric}")
+            ranked = (
+                grouped.add_columns(aggregate.label("value"))
+                .having(has_latest, aggregate.is_not(None))
+                .subquery()
+            )
+            value = ranked.c.value
+            statement = select(ranked.c.symbol, ranked.c.value).join(
+                newest, and_(newest.symbol == ranked.c.symbol, newest.trading_date == latest)
+            )
+            if market and market != "ALL":
+                statement = statement.where(newest.market == market)
+        statement = statement.add_columns(
+            newest.name,
+            newest.market,
+            newest.close,
+            newest.change,
+            newest.volume,
+            newest.turnover_value,
+        )
+        statement = statement.order_by(
+            value.desc() if order == "desc" else value.asc(), ranked.c.symbol
+        ).limit(limit)
+        seen: set[str] = set()
+        entries: list[MarketRankingRow] = []
+        for symbol, raw, name, exchange, close, change, volume, turnover in (
+            await self.session.execute(statement)
+        ).all():
+            if symbol in seen:  # two sources for one session: keep the first
+                continue
+            seen.add(symbol)
+            entries.append(
+                MarketRankingRow(
+                    symbol=symbol,
+                    name=name,
+                    market=exchange,
+                    close=close,
+                    change=change,
+                    volume=volume,
+                    turnover_value=turnover,
+                    value=finalize_ranking_value(metric, raw),
+                )
+            )
+        return entries
 
     async def list_market_closes(
         self, dates: list[date], market: str

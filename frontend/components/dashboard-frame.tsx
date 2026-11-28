@@ -12,7 +12,7 @@ import { Topbar } from "./topbar";
 
 /** Chrome shared by every route: sticky header + query bar, notices, content, footer. */
 export function DashboardFrame({ children }: { children: ReactNode }) {
-  const { error, setError, refresh, signalData } = useDashboard();
+  const { error, setError, refresh, signalData, needsSignal } = useDashboard();
   const { marketEnvironment, syncWait, cancelSync } = signalData;
   // The signal view shows its own countdown inside the quick stock view; the watchlist page
   // is unrelated to a signal load that happens to be retrying in the background.
@@ -110,10 +110,12 @@ export function DashboardFrame({ children }: { children: ReactNode }) {
           <p>
             Quant Signal 是研究工具：分數、信心度與情境皆為模型輸出，不構成投資建議，也不保證未來結果。
           </p>
-          <p className="num">
-            市場資料時間{" "}
-            {marketEnvironment?.data_available_at.replace("T", " ").slice(0, 16) ?? "—"}
-          </p>
+          {needsSignal && (
+            <p className="num">
+              市場資料時間{" "}
+              {marketEnvironment?.data_available_at.replace("T", " ").slice(0, 16) ?? "—"}
+            </p>
+          )}
         </div>
       </footer>
     </div>

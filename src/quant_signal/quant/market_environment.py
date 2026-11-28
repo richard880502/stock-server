@@ -134,9 +134,16 @@ class MarketEnvironmentEngine:
             / item.turnover_value
             for item in observations[-60:]
         ]
-        futures_positions = [item.futures_net_open_interest for item in observations[-60:]]
+        # Foreign TX-equivalent net open interest is in contracts (tens of thousands) and
+        # usually negative; only its z-score matters. Days without TAIFEX data
+        # (``futures_oi_known`` false; the column itself is not nullable) stay out of the
+        # history instead of dragging the mean toward zero; a real zero position counts.
+        futures_positions = [
+            item.futures_net_open_interest for item in observations[-60:] if item.futures_oi_known
+        ]
         cash_z = _z_score(cash_ratios[-1], cash_ratios)
-        futures_z = _z_score(futures_positions[-1], futures_positions)
+        has_futures = observations[-1].futures_oi_known
+        futures_z = _z_score(futures_positions[-1], futures_positions) if has_futures else 0
         return _clamp(50 + cash_z * 12 * 0.7 + futures_z * 12 * 0.3)
 
     @staticmethod

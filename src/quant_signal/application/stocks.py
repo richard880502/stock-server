@@ -192,7 +192,9 @@ class StockOverviewService:
 
     async def get(self, raw_symbol: str, *, sessions: int = OVERVIEW_SESSIONS) -> StockOverview:
         symbol = await normalize_listed_symbol(self.repository, raw_symbol)
-        dates = await self.repository.list_market_trading_dates(None, as_of=None, limit=sessions)
+        dates = await self.repository.list_market_trading_dates(
+            None, as_of=None, limit=sessions
+        )
         rows = await self.repository.list_market_stock_rows([symbol], dates)
         if not rows:
             raise StockNotFound(symbol)
