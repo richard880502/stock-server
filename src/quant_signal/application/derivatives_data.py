@@ -29,7 +29,7 @@ from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.derivatives_observations import refresh_observation_futures
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import taifex as src
-from quant_signal.infrastructure.providers.taifex import TaifexBlocked
+from quant_signal.infrastructure.providers.taifex import TaifexBlocked, TaifexRangeRefused
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,13 @@ SPECS_RETRY_TTL = timedelta(days=1)  # when the adjusted-contract list could not
 MIN_SPECS = 250  # ~326 stock-futures underlying products
 MIN_STOCK_FUTURES_DAY = 150  # underlyings with a row on a normal day (~325)
 SESSION_START = time(8, 30)
+# Longest span (newest - oldest missing session, in calendar days) one request may cover.
+# Verified live 2026-11-28: futContractsDateDown and callsAndPutsDateDown answered a
+# 172-day query (2026/06/10 - 2026/11/27 = the 120-session back-fill window) with the full
+# CSV; pcRatioDown takes at most 30 calendar days INCLUSIVE (2026/10/29 - 2026/11/27 works,
+# 2026/10/27 - 2026/11/27 returns an HTML page), so the span is 29.
+FULL_HISTORY_DAYS = 170
+PC_RATIO_CHUNK_DAYS = 29
 VIX_MONTHS_AVAILABLE = 4  # TAIFEX keeps only the last four monthly files
 
 
@@ -133,7 +140,7 @@ def build_datasets(taifex: Fetcher, cache: dict[str, Any], moment: datetime) -> 
             src.fut_institutional_form,
             src.parse_futures_institutional,
             "upsert_futures_institutional",
-            120,
+            FULL_HISTORY_DAYS,
             _tx_foreign_trust_dealer,
         ),
         RangeDataset(
@@ -142,7 +149,7 @@ def build_datasets(taifex: Fetcher, cache: dict[str, Any], moment: datetime) -> 
             src.range_form,
             src.parse_pc_ratio,
             "upsert_options_pc_ratio",
-            120,
+            PC_RATIO_CHUNK_DAYS,
             bool,
         ),
         RangeDataset(
@@ -151,7 +158,7 @@ def build_datasets(taifex: Fetcher, cache: dict[str, Any], moment: datetime) -> 
             src.calls_puts_form,
             src.parse_options_institutional,
             "upsert_options_institutional",
-            120,
+            FULL_HISTORY_DAYS,
             _all_options_sides,
         ),
         RangeDataset(
@@ -254,7 +261,8 @@ async def _refresh_range_dataset(
         return 0, 0, False
     chunk = _chunk(missing, dataset.chunk_days)
     used = await dataset.prepare() if dataset.prepare else 0
-    text = await taifex.fetch(dataset.url, dataset.form(min(chunk), max(chunk)))
+    form = dataset.form(min(chunk), max(chunk))
+    text = src.ensure_download(await taifex.fetch(dataset.url, form), dataset.url, form)
     parsed = dataset.parse(text)
     by_day: dict[date, list[Any]] = defaultdict(list)
     for row in parsed:
@@ -321,7 +329,9 @@ async def _refresh_oi_levels(
     done = await repository.list_fetch_coverage(SOURCE, "options_oi_levels", "*", [day.isoformat()])
     if done:
         return 0, 0, False
-    rows = src.parse_options_daily(await taifex.fetch(src.OPT_DAILY_URL, src.opt_daily_form(day)))
+    form = src.opt_daily_form(day)
+    text = src.ensure_download(await taifex.fetch(src.OPT_DAILY_URL, form), src.OPT_DAILY_URL, form)
+    rows = src.parse_options_daily(text)
     levels = src.options_oi_levels([row for row in rows if row.trading_date == day])
     if not levels:
         return 0, 1, True  # not published yet
@@ -406,6 +416,19 @@ async def refresh_derivatives_data(
             logger.warning("TAIFEX refused or did not answer (%s); backing off", name)
             await _rollback(repository)
             break
+        except TaifexRangeRefused as exc:
+            # The site is fine, this query is not: no coverage is recorded and the same
+            # range is only asked again after the retry delay (one warning per attempt).
+            failures[name] = moment
+            logger.warning(
+                "TAIFEX refused the %s query (HTML instead of CSV): %s - %s",
+                name,
+                (exc.form or {}).get("queryStartDate"),
+                (exc.form or {}).get("queryEndDate"),
+            )
+            await _rollback(repository)
+            budget -= 1
+            continue
         except Exception:
             failures[name] = moment
             logger.exception("derivatives refresh failed: %s", name)

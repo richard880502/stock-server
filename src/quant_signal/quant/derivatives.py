@@ -138,8 +138,12 @@ def latest_market_summary(
         max_put_oi_strike=monthly.max_put_strike if monthly else None,
         max_call_oi_expiry=monthly.expiry if monthly else None,
         max_put_oi_expiry=monthly.expiry if monthly else None,
+        max_call_oi_contracts=monthly.max_call_oi_contracts if monthly else None,
+        max_put_oi_contracts=monthly.max_put_oi_contracts if monthly else None,
         weekly_max_call_oi_strike=weekly.max_call_strike if weekly else None,
         weekly_max_put_oi_strike=weekly.max_put_strike if weekly else None,
+        weekly_max_call_oi_contracts=weekly.max_call_oi_contracts if weekly else None,
+        weekly_max_put_oi_contracts=weekly.max_put_oi_contracts if weekly else None,
         weekly_expiry=weekly.expiry if weekly else None,
     )
 

@@ -211,6 +211,14 @@ class FactorDataRepositoryMixin:
         await self.session.commit()
         return result.rowcount or 0
 
+    async def delete_other_factor_versions(self, keep_version: str) -> int:
+        """Drop snapshots written by any other scoring version (they are never served)."""
+        result = await self.session.execute(
+            delete(MarketFactorDailyRow).where(MarketFactorDailyRow.version != keep_version)
+        )
+        await self.session.commit()
+        return result.rowcount or 0
+
     async def latest_market_factor_date(
         self, version: str, as_of: date | None = None
     ) -> date | None:

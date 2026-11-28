@@ -51,6 +51,7 @@ def valuation_metrics(
         pe_observations=sum(value is not None for value in pe),
         pb_observations=sum(value is not None for value in pb),
         yield_observations=sum(value is not None for value in dividend),
+        observations=len(recent),
     )
 
 

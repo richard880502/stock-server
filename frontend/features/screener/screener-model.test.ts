@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { META } from "./fixtures";
 import {
+  accumulatingNotice,
   buildScreenerQuery,
   clearFilters,
   describeRange,
@@ -241,5 +242,22 @@ describe("pending vs notice", () => {
     expect(isPending({ snapshot_pending: true, notice: "此日期超出保留範圍" })).toBe(false);
     expect(isPending({ snapshot_pending: false, notice: null })).toBe(false);
     expect(isPending(null)).toBe(false);
+  });
+});
+
+describe("presets that are empty only because history is still filling", () => {
+  const preset = resolveEffective(selectPreset(INITIAL_STATE, "quiet_accumulation"), META).preset;
+  it("names the needed metric when no stock has a value for it yet", () => {
+    const text = accumulatingNotice(preset, ["inst_buy_days_60d", "other"], META);
+    expect(text).toMatch(/^這個策略需要的「.+」資料還在累積中，補齊後才會有結果$/);
+    expect(text).toContain(resolveColumn(META, "inst_buy_days_60d").label);
+  });
+  it("stays silent when the needed metrics exist, the preset has no requirements or the server is older", () => {
+    expect(accumulatingNotice(preset, ["pe_ratio"], META)).toBeNull();
+    expect(accumulatingNotice(preset, [], META)).toBeNull();
+    expect(accumulatingNotice(preset, undefined, META)).toBeNull();
+    const balanced = resolveEffective(selectPreset(INITIAL_STATE, "balanced"), META).preset;
+    expect(accumulatingNotice(balanced, ["inst_buy_days_60d"], META)).toBeNull();
+    expect(accumulatingNotice(null, ["inst_buy_days_60d"], META)).toBeNull();
   });
 });

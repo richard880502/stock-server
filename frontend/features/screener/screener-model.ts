@@ -130,6 +130,22 @@ export function findPreset(meta: ScreenerMeta | null, key: string): ScreenerPres
   );
 }
 
+/**
+ * Why an empty preset is empty because data is still accumulating: the first metric the preset
+ * needs that no stock has a value for yet, as a user-facing sentence; null otherwise.
+ */
+export function accumulatingNotice(
+  preset: ScreenerPreset | null,
+  unavailable: string[] | null | undefined,
+  meta: ScreenerMeta | null,
+): string | null {
+  if (!preset?.requires?.length || !unavailable?.length) return null;
+  const missing = preset.requires.find((key) => unavailable.includes(key));
+  if (!missing) return null;
+  const label = meta?.metrics.find((metric) => metric.key === missing)?.label ?? missing;
+  return `這個策略需要的「${label}」資料還在累積中，補齊後才會有結果`;
+}
+
 export function presetDefaults(
   preset: ScreenerPreset | null,
   meta: ScreenerMeta | null,

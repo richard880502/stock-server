@@ -13,6 +13,7 @@ import { FilterBar } from "./filter-bar";
 import { PresetRow } from "./preset-row";
 import { ResultCards, ResultsSkeleton, ResultsTable, usePhoneLayout } from "./results";
 import {
+  accumulatingNotice,
   applySort,
   buildScreenerQuery,
   clearFilters,
@@ -101,6 +102,7 @@ export function ScreenerView() {
   const dates = data ? resultDates(data) : null;
   const notice = data?.notice ?? null;
   const empty = data !== null && entries.length === 0 && !pending && !results.loading;
+  const accumulating = empty ? accumulatingNotice(effective.preset, data?.unavailable_metrics, meta) : null;
   const refreshing = results.stale || (results.loading && entries.length > 0);
 
   return (
@@ -183,6 +185,10 @@ export function ScreenerView() {
 
         {!meta || (results.loading && entries.length === 0 && !pending && !error) ? (
           <ResultsSkeleton />
+        ) : empty && accumulating ? (
+          <EmptyState icon={<InfoIcon size={22} />} title={accumulating}>
+            這是資料累積的時間問題，不是條件太嚴格；其他策略快選仍可使用。
+          </EmptyState>
         ) : empty ? (
           <EmptyState
             icon={<SearchIcon size={22} />}

@@ -50,6 +50,7 @@ from quant_signal.domain.ranking import (
 )
 from quant_signal.infrastructure.db.derivatives_repository import DerivativesRepositoryMixin
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
+from quant_signal.infrastructure.db.feed_stats_repository import FeedStatsRepositoryMixin
 from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
 from quant_signal.infrastructure.db.models import (
@@ -92,6 +93,7 @@ LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 class PostgresQuantRepository(
     OfficialDataRepositoryMixin,
     FactorDataRepositoryMixin,
+    FeedStatsRepositoryMixin,
     HoldersRepositoryMixin,
     ShortDataRepositoryMixin,
     FundamentalsRepositoryMixin,

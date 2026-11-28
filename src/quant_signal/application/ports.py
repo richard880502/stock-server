@@ -11,6 +11,7 @@ from quant_signal.domain.derivatives import (
     StockFuturesDay,
     StockFuturesMetrics,
 )
+from quant_signal.domain.feed_stats import FeedDayStat
 from quant_signal.domain.fundamentals import (
     EarningsMetrics,
     QuarterlyFinancial,
@@ -330,9 +331,7 @@ class QuantRepository(Protocol):
 
     async def has_stock_futures(self, symbol: str) -> bool: ...
 
-    async def stock_spot_closes(
-        self, symbol: str, start: date, end: date
-    ) -> dict[date, float]: ...
+    async def stock_spot_closes(self, symbol: str, start: date, end: date) -> dict[date, float]: ...
 
     async def foreign_tx_equiv_net_oi_on(self, day: date) -> float | None: ...
 
@@ -395,6 +394,8 @@ class QuantRepository(Protocol):
         self, end: date, sessions: int
     ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]: ...
 
+    async def feed_day_stats(self, start: date, end: date) -> dict[str, list[FeedDayStat]]: ...
+
     async def market_session_calendar(
         self, end: date, sessions: int
     ) -> dict[str, list[MarketSession]]: ...
@@ -410,6 +411,8 @@ class QuantRepository(Protocol):
     ) -> int: ...
 
     async def prune_market_factors(self, version: str, keep: int) -> int: ...
+
+    async def delete_other_factor_versions(self, keep_version: str) -> int: ...
 
     async def latest_market_factor_date(
         self, version: str, as_of: date | None = None

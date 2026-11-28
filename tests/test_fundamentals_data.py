@@ -274,6 +274,7 @@ def test_valuation_metrics_uses_own_newest_250_and_ignores_missing() -> None:
     metrics = valuation_metrics(rows)
     assert metrics is not None and metrics.trading_date == days[-1] and metrics.pe_ratio == 300.0
     assert metrics.pe_percentile_250d == 100.0 and metrics.pe_observations == 250
+    assert metrics.observations == 250  # days in the window, not days with a P/E
     # P/E falls to the window minimum: only itself is <=, 1/250
     low = rows[:-1] + [day_row("2330.TW", days[-1], 0.5)]
     assert valuation_metrics(low).pe_percentile_250d == pytest.approx(0.4)
@@ -553,7 +554,9 @@ async def test_valuation_forward_fetch_is_idempotent_and_stamps_fetch_time() -> 
     assert exchange.valuation_days == ["20261126", "20261127"]
     history = await repo.valuation_history("1101.TW", moment)
     assert [r.trading_date for r in history] == [date(2026, 11, 26), date(2026, 11, 27)]
-    assert all(r.available_at == moment for r in history)
+    # the 27th was fetched on its own day at 18:00 (= publication time): T; the 26th is a
+    # past day fetched late, stamped with its own 18:00, not the fetch time
+    assert [r.available_at for r in history] == [taipei(26, 18), moment]
     again = await sched.refresh_fundamentals_data(
         repo,
         exchange,
@@ -566,6 +569,29 @@ async def test_valuation_forward_fetch_is_idempotent_and_stamps_fetch_time() -> 
         valuation_window=2,
     )
     assert again == {} and exchange.valuation_days == ["20261126", "20261127"]  # no refetch
+
+
+async def test_valuation_rows_of_past_days_fetched_late_get_their_publication_time() -> None:
+    repo, exchange = MemoryQuantRepository(), FakeExchanges()
+    saturday = taipei(28, 10, 55)  # first deploy on the weekend
+    await sched.refresh_fundamentals_data(
+        repo,
+        exchange,
+        exchange,
+        now=saturday,
+        attempts={},
+        request_interval=0,
+        revenue_history_enabled=False,
+        financials_enabled=False,
+        valuation_window=2,
+    )
+    history = await repo.valuation_history("1101.TW", saturday)
+    assert [r.available_at for r in history] == [taipei(26, 18), taipei(27, 18)]
+    # an as-of read for the 27th (evening) sees the 27th, not only the 26th
+    seen = await repo.valuation_history("1101.TW", taipei(27, 19))
+    assert [r.trading_date for r in seen] == [date(2026, 11, 26), date(2026, 11, 27)]
+    # a fetch before the publication time on the day itself keeps the fetch time
+    assert sched.valuation_available_at(date(2026, 11, 27), taipei(27, 15)) == taipei(27, 15)
 
 
 async def test_valuation_today_not_published_yet_is_retried_later() -> None:
@@ -947,6 +973,19 @@ async def test_service_builds_all_sections_with_notes(api_repo) -> None:
     assert "法定申報期限" in joined and "累計" in joined and "百分位" in joined
 
 
+async def test_valuation_says_how_many_days_exist_when_history_is_thin() -> None:
+    repo = MemoryQuantRepository()
+    days = weekdays(23)
+    await repo.upsert_valuation_daily([day_row("2330.TW", d, 10.0 + i) for i, d in enumerate(days)])
+    result = await StockFundamentalsService(repo).get("2330.TW", as_of=date(2026, 11, 28))
+    assert result.valuation is not None
+    assert (result.valuation.observations, result.valuation.observations_required) == (23, 60)
+    assert result.valuation.pe_percentile_250d is None
+    # visible as of the cutoff only: an earlier as-of date counts fewer days
+    early = await StockFundamentalsService(repo).get("2330.TW", as_of=days[9])
+    assert early.valuation is not None and early.valuation.observations == 10
+
+
 async def test_service_sections_are_null_without_data_and_unknown_symbol_404s() -> None:
     repo = MemoryQuantRepository()
     result = await StockFundamentalsService(repo).get("2330.TW", as_of=date(2026, 11, 28))
@@ -977,8 +1016,12 @@ def test_fundamentals_endpoint(api_repo) -> None:
             "pe_percentile_250d",
             "pb_percentile_250d",
             "yield_percentile_250d",
+            "observations",
+            "observations_required",
             "history",
         }
+        assert body["valuation"]["observations"] == 250
+        assert body["valuation"]["observations_required"] == 60
         assert set(body["valuation"]["history"][0]) == {
             "date",
             "pe_ratio",

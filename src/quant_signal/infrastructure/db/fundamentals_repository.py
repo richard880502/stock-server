@@ -97,7 +97,7 @@ class FundamentalsRepositoryMixin:
             f"""{symbol_source}
             SELECT s.symbol, n.trading_date, n.pe_ratio, n.pb_ratio, n.dividend_yield_pct,
                    n.dividend_year, n.fiscal_period,
-                   a.pe_n, a.pe_le, a.pb_n, a.pb_le, a.yd_n, a.yd_le
+                   a.pe_n, a.pe_le, a.pb_n, a.pb_le, a.yd_n, a.yd_le, a.obs
             FROM syms s
             CROSS JOIN LATERAL (
                 SELECT v.trading_date, v.pe_ratio, v.pb_ratio, v.dividend_yield_pct,
@@ -106,7 +106,8 @@ class FundamentalsRepositoryMixin:
                 ORDER BY v.trading_date DESC LIMIT 1
             ) n
             CROSS JOIN LATERAL (
-                SELECT count(r.pe_ratio) AS pe_n,
+                SELECT count(*) AS obs,
+                       count(r.pe_ratio) AS pe_n,
                        count(r.pe_ratio) FILTER (WHERE r.pe_ratio <= n.pe_ratio) AS pe_le,
                        count(r.pb_ratio) AS pb_n,
                        count(r.pb_ratio) FILTER (WHERE r.pb_ratio <= n.pb_ratio) AS pb_le,
@@ -140,6 +141,7 @@ class FundamentalsRepositoryMixin:
                 record[9:11],
                 record[11:13],
             )
+            observed = record[13]
 
             def pct(latest: float | None, total: int, at_most: int) -> float | None:
                 if latest is None or total < MIN_PERCENTILE_OBSERVATIONS:
@@ -160,6 +162,7 @@ class FundamentalsRepositoryMixin:
                 pe_observations=pe_n,
                 pb_observations=pb_n,
                 yield_observations=yd_n,
+                observations=observed,
             )
         return result
 

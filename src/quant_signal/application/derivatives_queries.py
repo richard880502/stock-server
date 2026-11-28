@@ -43,6 +43,19 @@ class MarketDerivativesService:
         rows = await self.repository.derivatives_rows(as_of_cutoff(as_of), days + 1)
         built = build_market_days(rows, days=days)
         latest = latest_market_summary(rows, days=days)
+        if latest is not None:
+            # TAIEX close beside the strikes; a missing observation just leaves it None.
+            observations = await self.repository.list_market_observations(
+                "TW", start=latest.date - timedelta(days=10), end=latest.date
+            )
+            if observations:
+                newest = observations[-1]
+                latest = latest.model_copy(
+                    update={
+                        "index_close": newest.index_close,
+                        "index_close_date": newest.trading_date,
+                    }
+                )
         notes = list(DERIVATIVES_NOTES)
         if not built:
             notes.insert(0, "尚無衍生品資料（尚未抓取或 as_of 太早）。")
