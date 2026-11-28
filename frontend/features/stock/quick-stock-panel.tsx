@@ -336,8 +336,8 @@ export function QuickStockPanel({
         <div className="notice">
           <InfoIcon className="notice-icon" size={20} />
           <div className="notice-body" role="status">
-            <strong>ETF 只提供官方日行情</strong>
-            <p>訊號、回測、預測與法人、融資融券資料不適用 ETF；仍可在模擬交易下單。</p>
+            <strong>這檔 ETF 目前只有官方日行情</strong>
+            <p>尚未追蹤它的歷史行情，所以沒有量化訊號、回測與預測；財報與籌碼資料不適用 ETF。仍可在模擬交易下單。</p>
           </div>
         </div>
       ) : (
