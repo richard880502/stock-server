@@ -14,6 +14,11 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
+from quant_signal.application.paper_actions import (
+    list_corporate_actions,
+    load_book,
+    realized_by_fill,
+)
 from quant_signal.application.paper_market import (
     SYMBOL_RE,
     MarketView,
@@ -47,6 +52,7 @@ from quant_signal.domain.paper import (
     PaperOrderRecord,
     Position,
 )
+from quant_signal.domain.paper_actions import CorporateActionList
 from quant_signal.domain.tw_trading import (
     BOARD_LOT,
     DEFAULT_COSTS,
@@ -55,7 +61,7 @@ from quant_signal.domain.tw_trading import (
     price_limit_pct_for,
     tick_size,
 )
-from quant_signal.quant.paper_book import Book, replay
+from quant_signal.quant.paper_book import Book
 from quant_signal.quant.paper_calendar import (
     SESSION_CLOSE,
     SESSION_OPEN,
@@ -304,15 +310,14 @@ class PaperService:
     ) -> dict[str, MarketView]:
         symbols: set[str] = set(extra or [])
         for account in accounts:
-            fills = await self.repo.list_paper_fills(account.id, epoch=account.epoch)
-            symbols.update(p.symbol for p in replay(fills).open_positions())
+            book = await load_book(self.repo, account.id, account.epoch)
+            symbols.update(p.symbol for p in book.open_positions())
         return await load_market(self.repo, sorted(symbols))
 
     async def _value(
         self, account: PaperAccountRecord, views: dict[str, MarketView], now: datetime
     ) -> Valuation:
-        fills = await self.repo.list_paper_fills(account.id, epoch=account.epoch)
-        book = replay(fills)
+        book = await load_book(self.repo, account.id, account.epoch)
         cash, working = await self.repo.paper_cash_and_working(account.id, account.epoch)
         reserved = sum(o.reserved_cash for o in working if o.side == "buy")
         reserved_sells = _reserved_sells(working)
@@ -357,6 +362,7 @@ class PaperService:
                         round((float(price) / float(reference) - 1) * 100, 2) if reference else None
                     ),
                     weight_pct=_pct(market_value, equity) if equity > 0 else 0.0,
+                    dividend_income=state.dividends,
                 )
             )
         return Valuation(
@@ -394,6 +400,7 @@ class PaperService:
             equity=valuation.equity,
             unrealized_pnl=unrealized,
             realized_pnl=realized,
+            dividend_income=valuation.book.dividend_income,
             total_pnl=total_pnl,
             total_return_pct=_pct(total_pnl, initial),
             day_pnl=day_pnl,
@@ -452,9 +459,7 @@ class PaperService:
         )
         if view is None or not view.known:
             symbol = request.symbol.strip().upper()
-            result.reject_reason = (
-                f"找不到股票 {symbol}（目前只支援上市櫃普通股，ETF 尚未收錄）"
-            )
+            result.reject_reason = f"找不到股票 {symbol}（目前只支援上市櫃普通股，ETF 尚未收錄）"
             return result
         etf = symbol_is_etf(symbol)
         result.tick = tick_size(
@@ -776,14 +781,26 @@ class PaperService:
             has_more=offset + len(page) < len(newest_first),
         )
 
+    async def list_corporate_actions(
+        self,
+        user_id: UUID,
+        account_id: UUID,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        include_archived: bool = False,
+    ) -> CorporateActionList:
+        account = await self._own(user_id, account_id)
+        return await list_corporate_actions(
+            self.repo, account, limit=limit, offset=offset, include_archived=include_archived
+        )
+
     async def _fills_and_pnl(
         self, account: PaperAccountRecord
     ) -> tuple[list[PaperFillRecord], dict[UUID, int]]:
         fills = await self.repo.list_paper_fills(account.id, epoch=None)
-        realized: dict[UUID, int] = {}
-        for epoch in {f.epoch for f in fills}:
-            realized.update(replay([f for f in fills if f.epoch == epoch]).realized_by_fill)
-        return fills, realized
+        actions = await self.repo.list_paper_corporate_actions(account.id, epoch=None)
+        return fills, realized_by_fill(fills, actions)
 
     @staticmethod
     def _fill(fill: PaperFillRecord, realized: int | None) -> Fill:

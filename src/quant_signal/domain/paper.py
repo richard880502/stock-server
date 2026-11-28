@@ -105,6 +105,8 @@ class LedgerEntry(BaseModel):
     kind: LedgerKind
     amount: int
     fill_id: UUID | None = None
+    # Set on dividend postings: the corporate action (paper_corporate_actions) they came from.
+    action_id: UUID | None = None
     note: str | None = None
 
 
@@ -265,6 +267,9 @@ class Position(BaseModel):
     unrealized_pct: float | None
     day_change_pct: float | None
     weight_pct: float
+    # Cash dividends received while holding this position (gross, NT$). Not part of
+    # ``unrealized_pnl`` / ``unrealized_pct``, which are price-only.
+    dividend_income: int = 0
 
 
 class AccountSummary(BaseModel):
@@ -277,6 +282,9 @@ class AccountSummary(BaseModel):
     equity: int
     unrealized_pnl: int
     realized_pnl: int
+    # Cash dividends credited since the last reset (gross, NT$). ``realized_pnl`` is trading
+    # P&L only; total_pnl = realized_pnl + unrealized_pnl + dividend_income.
+    dividend_income: int = 0
     total_pnl: int
     total_return_pct: float
     day_pnl: int

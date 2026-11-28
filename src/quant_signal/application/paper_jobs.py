@@ -21,6 +21,11 @@ from time import perf_counter
 from typing import Protocol
 from uuid import UUID
 
+from quant_signal.application.paper_actions import (
+    apply_due_corporate_actions,
+    cutoff_date,
+    load_book,
+)
 from quant_signal.application.paper_market import (
     MarketView,
     account_start_date,
@@ -38,7 +43,6 @@ from quant_signal.domain.paper import (
 )
 from quant_signal.domain.tw_trading import BOARD_LOT, price_limit_pct_for
 from quant_signal.infrastructure.db.prices import MinuteBar
-from quant_signal.quant.paper_book import replay
 from quant_signal.quant.paper_calendar import (
     is_trading_day,
     local,
@@ -74,6 +78,10 @@ DEMAND_CLOSES = time(13, 35)
 # Paper trading may hold at most this many of the 200 collector subscriptions.
 PAPER_DEMAND_MAX = 60
 OFFICIAL_LAST_MINUTE = time(13, 20)  # an official bar this late means the day is complete
+# Dividend job: outside the session only, at most this often (and once a day it may stop for
+# good: after the close with nothing left over). A restart starts with a catch-up.
+ACTIONS_EVERY_SECONDS = 1800.0
+ACTIONS_SETTLED_AFTER = time(16, 0)  # by then every session's orders are settled
 # Every loop over orders/accounts yields to the event loop at least this often: the matcher
 # shares its loop with the realtime quote collector and must never starve it.
 YIELD_EVERY = 50
@@ -107,6 +115,7 @@ class TickStats:
     expired: int = 0
     rejected: int = 0
     equity_rows: int = 0
+    dividends: int = 0  # corporate actions booked this tick
     demand: list[str] = field(default_factory=list)
 
 
@@ -138,6 +147,12 @@ class PaperJobs:
         self._bar_watermark: dict[str, datetime] = {}
         self._fingerprint: dict[str, tuple] = {}
         self._examined: set[UUID] = set()
+        # Dividend job state. Only a throttle: everything it needs is re-read from the
+        # database, so a fresh instance (a restart) catches up on its own.
+        self._actions_last: datetime | None = None
+        self._actions_more = False
+        self._actions_done_day: date | None = None
+        self._actions_audit: set = set()
 
     # --- entry point ---------------------------------------------------------------
 
@@ -162,6 +177,13 @@ class PaperJobs:
             await self.reconcile(repo, now, stats)
         if stats.matched or stats.expired or stats.rejected:
             working = await repo.list_working_paper_orders()  # what is left after this tick
+        if self._actions_due(now):
+            try:
+                await self.apply_corporate_actions(repo, now, stats)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("Paper dividend pass failed; will retry", exc_info=True)
         await self.write_daily_snapshots(repo, now, stats, working=working)
         return stats
 
@@ -170,6 +192,42 @@ class PaperJobs:
         return (
             is_trading_day(local_now.date()) and DEMAND_OPENS <= local_now.time() <= DEMAND_CLOSES
         )
+
+    # --- dividends -----------------------------------------------------------------
+
+    def _actions_due(self, now: datetime) -> bool:
+        if matcher_open(now):  # nothing heavy during the session
+            return False
+        if self._actions_done_day == local(now).date():
+            return False
+        if self._actions_last is None or self._actions_more:
+            return True
+        if cutoff_date(now) != cutoff_date(self._actions_last):  # 08:00 passed: a new ex-date
+            return True
+        return (now - self._actions_last).total_seconds() >= ACTIONS_EVERY_SECONDS
+
+    async def apply_corporate_actions(
+        self, repo, now: datetime, stats: TickStats | None = None
+    ) -> TickStats:
+        """Credit due dividends, then re-value the snapshot days they touch.
+
+        Runs from 08:00 before the open and again after the close (and once on start as a
+        catch-up), see ``paper_actions.apply_due_corporate_actions``. Idempotent.
+        """
+        stats = stats or TickStats()
+        self._actions_last = now
+        report = await apply_due_corporate_actions(repo, now, audit=self._actions_audit)
+        self._actions_more = not report.complete
+        stats.dividends += len(report.applied)
+        local_now = local(now)
+        if report.complete and local_now.time() >= ACTIONS_SETTLED_AFTER:
+            self._actions_done_day = local_now.date()
+        touched: dict[date, set[UUID]] = {}
+        for account_id, ex_date in report.applied:
+            touched.setdefault(ex_date, set()).add(account_id)
+        if touched:
+            await self._rewrite_snapshots(repo, touched, now, stats)
+        return stats
 
     # --- demand --------------------------------------------------------------------
 
@@ -395,7 +453,7 @@ class PaperJobs:
         day = order.session_date
         dt_qty = 0
         if order.side == "sell":
-            book = replay(await repo.list_paper_fills(account.id, epoch=account.epoch))
+            book = await load_book(repo, account.id, account.epoch)
             if book.held(order.symbol) < shares:
                 if await repo.finish_paper_order(
                     order.id, status="rejected", now=now, reject_reason="成交時持股不足，委託作廢"
@@ -612,12 +670,7 @@ class PaperJobs:
         self, repo: PaperRepository, account: PaperAccountRecord, day: date, now: datetime
     ) -> tuple[SnapshotRecord, bool]:
         """(snapshot, every position valued at the official close)."""
-        fills = [
-            f
-            for f in await repo.list_paper_fills(account.id, epoch=account.epoch)
-            if local(f.filled_at).date() <= day
-        ]
-        book = replay(fills)
+        book = await load_book(repo, account.id, account.epoch, through=day)
         ledger = await repo.list_paper_ledger(account.id, account.epoch)
         cash = sum(e.amount for e in ledger if local(e.at).date() <= day)
         open_positions = book.open_positions()

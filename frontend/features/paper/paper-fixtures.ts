@@ -2,6 +2,7 @@
 import type {
   AccountDetail,
   AccountSummary,
+  CorporateAction,
   EquityPoint,
   Fill,
   Order,
@@ -265,3 +266,35 @@ export const PREVIEW_SELL: OrderPreview = {
   available_cash_after: 1_780_199,
   warnings: [],
 };
+
+/** A cash + stock dividend, and a cash-only one, as the corporate-actions route returns them. */
+export const ACTION_BOTH: CorporateAction = {
+  id: "act-1",
+  symbol: "2330.TW",
+  name: "台積電",
+  ex_date: "2026-11-27",
+  kind: "ex_rights_dividend",
+  entitled_shares: 2000,
+  cash_amount: 5_000,
+  shares_added: 100,
+  cash_dividend_per_share: 2.5,
+  stock_dividend_per_share: 0.05,
+  applied_at: "2026-11-26T23:55:00Z",
+};
+
+export const ACTION_CASH: CorporateAction = {
+  ...ACTION_BOTH,
+  id: "act-2",
+  symbol: "6488.TWO",
+  name: "環球晶",
+  ex_date: "2026-11-20",
+  kind: "ex_dividend",
+  entitled_shares: 1000,
+  cash_amount: 3_000,
+  shares_added: 0,
+  cash_dividend_per_share: 3,
+  stock_dividend_per_share: null,
+};
+
+/** The main account after those dividends were credited. */
+export const DETAIL_WITH_DIVIDENDS: AccountDetail = { ...DETAIL_MAIN, dividend_income: 8_000 };

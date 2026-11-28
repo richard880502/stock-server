@@ -22,6 +22,7 @@ from quant_signal.domain.paper import (
 from quant_signal.domain.tw_trading import TWCostConfig, commission
 from quant_signal.infrastructure.db.paper_models import (
     PaperAccountRow,
+    PaperCorporateActionRow,
     PaperFillRow,
     PaperLedgerRow,
     PaperOrderRow,
@@ -459,21 +460,38 @@ class PaperRepositoryMixin:
         return total, [_order(order) for _, order in rows if order is not None]
 
     async def list_open_position_symbols(self) -> list[str]:
-        """One aggregate for the demand registration: net shares per account and symbol."""
+        """One aggregate for the demand registration: net shares per account and symbol
+        (fills plus the bonus shares of stock dividends)."""
         signed = case((PaperFillRow.side == "buy", PaperFillRow.shares), else_=-PaperFillRow.shares)
-        net = func.sum(signed)
-        rows = await self.session.execute(
-            select(PaperFillRow.symbol)
+        current = and_(
+            PaperAccountRow.id == PaperFillRow.account_id,
+            PaperAccountRow.epoch == PaperFillRow.epoch,
+        )
+        from_fills = (
+            select(PaperFillRow.account_id, PaperFillRow.symbol, signed.label("n"))
+            .join(PaperAccountRow, current)
+            .where(PaperAccountRow.archived.is_(False))
+        )
+        from_actions = (
+            select(
+                PaperCorporateActionRow.account_id,
+                PaperCorporateActionRow.symbol,
+                PaperCorporateActionRow.shares_added.label("n"),
+            )
             .join(
                 PaperAccountRow,
                 and_(
-                    PaperAccountRow.id == PaperFillRow.account_id,
-                    PaperAccountRow.epoch == PaperFillRow.epoch,
+                    PaperAccountRow.id == PaperCorporateActionRow.account_id,
+                    PaperAccountRow.epoch == PaperCorporateActionRow.epoch,
                 ),
             )
             .where(PaperAccountRow.archived.is_(False))
-            .group_by(PaperFillRow.account_id, PaperFillRow.symbol)
-            .having(net > 0)
+        )
+        union = from_fills.union_all(from_actions).subquery()
+        rows = await self.session.execute(
+            select(union.c.symbol)
+            .group_by(union.c.account_id, union.c.symbol)
+            .having(func.sum(union.c.n) > 0)
         )
         return sorted({symbol for (symbol,) in rows})
 
