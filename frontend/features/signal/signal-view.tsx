@@ -10,7 +10,6 @@ import { QuickStockPanel } from "@/features/stock/quick-stock-panel";
 import { useDashboard } from "@/lib/dashboard-context";
 import { ChipPanel } from "./chip-panel";
 import { AlertsCard, FactorsCard, type SourcedAlert } from "./evidence-cards";
-import { MarketOverview } from "./market-overview";
 import { VerdictHero, VerdictSkeleton } from "./verdict-hero";
 
 function SignalSkeleton() {
@@ -43,7 +42,6 @@ export function SignalView() {
       <a className="home-jump button" href="#stock-signal">
         ↓ 直接看 {query.symbol} 的訊號
       </a>
-      <MarketOverview />
       <div id="stock-signal" className="scroll-target">
         <SignalDetail />
       </div>
