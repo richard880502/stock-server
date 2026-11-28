@@ -207,7 +207,7 @@ export function ProposalCard({
         <section className="prop-checks" aria-label="系統檢查">
           <h4 className="prop-title">
             系統檢查
-            {!noisyChecks && <small>沒有需要處理的項目</small>}
+            {!noisyChecks && <small>沒有阻擋或調整的項目</small>}
           </h4>
           {checks.blocked.length > 0 && (
             <ul className="prop-check-list">
@@ -249,7 +249,7 @@ export function ProposalCard({
             <Cell
               label="最大可能虧損"
               value={hasLoss ? `NT$ ${formatMoney(sizing.risk_amount as number)}` : dash}
-              hint={hasLoss ? `${formatRatioPct(sizing.risk_pct)} 的資產` : "未設停損，無法估算"}
+              hint={hasLoss ? `${formatRatioPct(sizing.risk_pct)} 的資產` : proposal.stop_loss == null ? "未設停損，無法估算" : undefined}
             />
             <Cell label="可用現金" value={sizing.cash_available != null ? `NT$ ${formatMoney(sizing.cash_available)}` : dash} />
           </dl>
