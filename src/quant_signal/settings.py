@@ -36,14 +36,10 @@ class Settings(BaseSettings):
     # Taipei local times (24h, comma separated) after which the daily refresh is
     # queued. The second run picks up reports the exchanges publish late in the
     # evening (credit balances).
-    sync_daily_time: str = Field(
-        default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    sync_daily_time: str = Field(default="15:30,21:45", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     # News (消息面) job in the ingest service: Taipei times, like sync_daily_time.
     news_sync_enabled: bool = True
-    news_sync_time: str = Field(
-        default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$"
-    )
+    news_sync_time: str = Field(default="08:30,14:10", pattern=r"^\d{2}:\d{2}(,\d{2}:\d{2})*$")
     news_sync_max_symbols: int = Field(default=60, ge=0)
     # Seconds between per-company queries to Google News (be polite).
     news_sync_delay_seconds: float = Field(default=1.5, ge=1.0)
@@ -136,9 +132,7 @@ class Settings(BaseSettings):
     # Official 1-minute bars (Shioaji kbars) fill the minutes the live feed missed.
     quotes_backfill_enabled: bool = True
     # Taipei time after which the day's minutes are replaced with official kbars.
-    quotes_backfill_after_close: str = Field(
-        default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$"
-    )
+    quotes_backfill_after_close: str = Field(default="14:35", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     # Shioaji allows 270 kbars queries during the session; keep the rest for manual use.
     quotes_backfill_intraday_max: int = Field(default=150, ge=0, le=250)
     # After the close, collect the whole listed + OTC market (~2,000 symbols, watched
@@ -152,6 +146,45 @@ class Settings(BaseSettings):
     quotes_snapshot_minutes: int = Field(default=10, ge=0, le=60)
     # Keep this many months of 1-minute bars (0 keeps everything).
     minute_bars_retention_months: int = Field(default=0, ge=0, le=240)
+    # Securities-lending short selling, day trading, insider pledges and dividend forecasts
+    # (official TWSE/TPEx data, run by the sync worker).
+    short_data_sbl_enabled: bool = True
+    short_data_daytrade_enabled: bool = True
+    short_data_insider_enabled: bool = True
+    short_data_dividend_enabled: bool = True
+    # Past sessions filled gradually (off-session) before the recent window.
+    short_data_backfill_sessions: int = Field(default=60, ge=0, le=500)
+    short_data_backfill_per_tick: int = Field(default=2, ge=1, le=10)
+    short_data_retry_minutes: float = Field(default=10.0, gt=0)
+    # Official valuation (P/E, P/B, dividend yield), monthly-revenue history and quarterly
+    # financial statements (sync worker). The backfills are bounded, gradual and off-session.
+    fundamentals_valuation_enabled: bool = True
+    fundamentals_revenue_history_enabled: bool = True
+    fundamentals_financials_enabled: bool = True
+    # Trading days of valuation history to fill (0 = only the live window).
+    valuation_backfill_sessions: int = Field(default=250, ge=0, le=1500)
+    revenue_backfill_months: int = Field(default=36, ge=0, le=120)
+    financials_backfill_quarters: int = Field(default=12, ge=0, le=40)
+    # Valuation days / revenue months fetched per worker tick during a backfill.
+    fundamentals_backfill_per_tick: int = Field(default=3, ge=1, le=20)
+    fundamentals_retry_minutes: float = Field(default=10.0, gt=0)
+    # Pause between MOPS requests (the site throttles bursts).
+    fundamentals_mops_interval_seconds: float = Field(default=3.0, ge=0.5, le=60)
+    # TAIFEX derivatives (futures/options positioning, P/C ratio, large traders, single-stock
+    # futures, VIX), fetched by the sync worker once the day's reports are published.
+    derivatives_enabled: bool = True
+    # Sessions back-filled gradually and off-session; 0 disables the back-fill.
+    derivatives_backfill_sessions: int = Field(default=120, ge=0, le=500)
+    # Taipei time from which the day's reports are polled (day session closes 13:45).
+    derivatives_after_close: str = Field(default="15:30", pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    # TAIFEX redirects clients that burst, so keep the spacing generous.
+    derivatives_request_interval_seconds: float = Field(default=6.0, ge=1.0)
+    derivatives_requests_per_tick: int = Field(default=4, ge=1, le=50)
+    derivatives_retry_minutes: float = Field(default=15.0, gt=0)
+    # Total wall-clock budget of each official-data side feed inside one worker tick; a feed
+    # that is still running is cancelled (it commits what it finished and resumes from
+    # fetch_coverage next tick) so a hanging exchange cannot delay the price sync.
+    side_feed_budget_seconds: float = Field(default=90.0, gt=0, le=3600)
 
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 
 from quant_signal.application.auth import ApiKeyService
 from quant_signal.application.data_sync import TpexDataSyncService, TwseDataSyncService
+from quant_signal.application.derivatives_queries import MarketDerivativesService
 from quant_signal.application.llm_analysis import (
     AnalysisContextService,
     DebateAnalysisService,
@@ -379,6 +380,20 @@ async def get_stock_events(symbol: str, as_of: str | None = None, days: int = 30
     async with session_factory() as session:
         result = await StockEventsService(PostgresQuantRepository(session)).get(
             symbol.strip().upper(), as_of=_resolve_as_of(as_of), days=max(1, min(days, 365))
+        )
+        return result.model_dump(mode="json")
+
+
+@mcp.tool()
+async def get_market_derivatives(as_of: str | None = None, days: int = 20) -> dict[str, Any]:
+    """Official TAIFEX positioning data, not a forecast: foreign/trust/dealer net open
+    interest in TAIEX futures (and the TX-equivalent), options put/call ratios, foreign
+    call/put net positions, top-5/10 large-trader net positions, VIX and the nearest
+    options open-interest strikes. Point-in-time as of a date; fields are null when a
+    dataset is not available."""
+    async with session_factory() as session:
+        result = await MarketDerivativesService(PostgresQuantRepository(session)).get(
+            as_of=_resolve_as_of(as_of), days=max(1, min(days, 260))
         )
         return result.model_dump(mode="json")
 

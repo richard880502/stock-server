@@ -47,8 +47,7 @@ class DataSyncPending(Exception):
         self.symbol = symbol
         self.retry_after_seconds = retry_after_seconds
         super().__init__(
-            f"資料同步中：{symbol} 的歷史資料已排入背景同步，"
-            f"請約 {retry_after_seconds} 秒後重試。"
+            f"資料同步中：{symbol} 的歷史資料已排入背景同步，請約 {retry_after_seconds} 秒後重試。"
         )
 
 
@@ -59,9 +58,7 @@ def _month_start(day: date) -> date:
 def _month_end(day: date) -> date:
     first = _month_start(day)
     following = (
-        date(first.year + 1, 1, 1)
-        if first.month == 12
-        else date(first.year, first.month + 1, 1)
+        date(first.year + 1, 1, 1) if first.month == 12 else date(first.year, first.month + 1, 1)
     )
     return following - timedelta(days=1)
 
@@ -175,6 +172,7 @@ class OfficialMarketProvider(Protocol):
         concurrency: int = 4,
     ) -> list[InstitutionalFlow]: ...
 
+
 class DataSyncReport(BaseModel):
     provider: str
     started_at: datetime
@@ -242,9 +240,7 @@ class TwseDataSyncService:
         pending = [
             month
             for month in months
-            if not _fetched_after(
-                coverage.get(month.strftime("%Y-%m")), _month_end(month)
-            )
+            if not _fetched_after(coverage.get(month.strftime("%Y-%m")), _month_end(month))
         ]
         trusted: set[date] = set()
         if not is_index:
@@ -265,23 +261,17 @@ class TwseDataSyncService:
                 [month.strftime("%Y-%m") for month in stored_months],
             )
             trusted = {
-                month
-                for month in stored_months
-                if known.get(month.strftime("%Y-%m")) is not None
+                month for month in stored_months if known.get(month.strftime("%Y-%m")) is not None
             }
             pending = sorted(set(pending) | (set(stored_months) - trusted))
         received = inserted = actions_received = adjusted = 0
-        for run in _consecutive_runs(
-            pending, step=lambda day: _month_end(day) + timedelta(days=1)
-        ):
+        for run in _consecutive_runs(pending, step=lambda day: _month_end(day) + timedelta(days=1)):
             run_start = run[0]
             run_end = min(_month_end(run[-1]), end)
             run_bars, run_actions = await self._fetch_run(
                 normalized, run_start, run_end, is_index=is_index, trusted=trusted
             )
-            name = (
-                self.index_name if is_index else self.provider.instrument_names.get(normalized)
-            )
+            name = self.index_name if is_index else self.provider.instrument_names.get(normalized)
             inserted += await self.repository.upsert_bars(
                 run_bars,
                 instrument_name=name,
@@ -308,8 +298,8 @@ class TwseDataSyncService:
                     # A past month cut short by ``end`` must not be marked complete.
                     # The open month is safe to record: it is never treated as
                     # covered until a fetch happens after it has closed.
-                    if _month_end(month) <= end or self._clock().astimezone(TAIPEI).date()
-                    <= _month_end(month)
+                    if _month_end(month) <= end
+                    or self._clock().astimezone(TAIPEI).date() <= _month_end(month)
                 ]
             )
         return DataSyncReport(
@@ -351,9 +341,7 @@ class TwseDataSyncService:
         # bar on the previous day carries no corporate-action history.
         prior = [
             bar
-            for bar in await self.repository.list_bars(
-                symbol, end=run_start - timedelta(days=1)
-            )
+            for bar in await self.repository.list_bars(symbol, end=run_start - timedelta(days=1))
             if bar.source == self.provider_source
         ]
         resume = (
@@ -398,9 +386,7 @@ class TwseDataSyncService:
             [day.isoformat() for day in weekdays],
         )
         pending = [
-            day
-            for day in weekdays
-            if not _fetched_after(coverage.get(day.isoformat()), day)
+            day for day in weekdays if not _fetched_after(coverage.get(day.isoformat()), day)
         ]
         received = inserted = 0
         for run in _consecutive_runs(
@@ -470,9 +456,7 @@ class TwseDataSyncService:
                 if candidate.weekday() < 5:
                     weekdays.append(candidate)
                 candidate += timedelta(days=1)
-            prefetched_quotes = await self.provider.fetch_market_quotes_range(
-                weekdays
-            )
+            prefetched_quotes = await self.provider.fetch_market_quotes_range(weekdays)
         processed_weekdays = 0
         while current <= end:
             if current.weekday() >= 5:
@@ -507,6 +491,16 @@ class TwseDataSyncService:
                 current += timedelta(days=1)
                 continue
             observation = self._build_market_observation(full_day, histories)
+            if observation is not None and self.market_code == "TW":
+                lookup = getattr(self.repository, "foreign_tx_equiv_net_oi_on", None)
+                futures = await lookup(current) if lookup is not None else None
+                if futures is not None:
+                    observation = observation.model_copy(
+                        update={
+                            "futures_net_open_interest": float(futures),
+                            "futures_oi_known": True,
+                        }
+                    )
             if observation is not None:
                 observations.append(observation)
                 checkpoint.append(observation)
@@ -523,8 +517,8 @@ class TwseDataSyncService:
                 "with up to 252 sessions of rolling history."
             ),
             (
-                "Futures open interest is not yet available from this provider "
-                "and is neutralized at 0."
+                "Futures net open interest is the stored TAIFEX foreign TX-equivalent "
+                "position (TW only); it stays 0 for dates without TAIFEX data."
             ),
             (
                 f"Market observations with source {self.provider_source} take precedence "
@@ -552,11 +546,7 @@ class TwseDataSyncService:
         market: TwseDailyMarket,
         histories: dict[str, deque[float]],
     ) -> MarketObservation | None:
-        eligible = [
-            quote
-            for quote in market.quotes
-            if len(histories.get(quote.symbol, ())) >= 60
-        ]
+        eligible = [quote for quote in market.quotes if len(histories.get(quote.symbol, ())) >= 60]
         if not eligible:
             return None
         above_ma20 = above_ma60 = new_high = new_low = 0
@@ -643,9 +633,7 @@ async def _recently_synced(
     source = TPEX_SOURCE if _is_tpex_symbol(symbol) else TWSE_SOURCE
     dataset = INDEX_BARS_DATASET if symbol.startswith("^") else DAILY_BARS_DATASET
     period = now.astimezone(TAIPEI).strftime("%Y-%m")
-    entry = (
-        await repository.list_fetch_coverage(source, dataset, symbol, [period])
-    ).get(period)
+    entry = (await repository.list_fetch_coverage(source, dataset, symbol, [period])).get(period)
     return entry is not None and now - entry.fetched_at < within
 
 

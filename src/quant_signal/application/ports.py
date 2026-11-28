@@ -5,6 +5,19 @@ from datetime import date, datetime
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+from quant_signal.domain.derivatives import (
+    DerivativesRows,
+    MarketDerivativesLatest,
+    StockFuturesDay,
+    StockFuturesMetrics,
+)
+from quant_signal.domain.fundamentals import (
+    EarningsMetrics,
+    QuarterlyFinancial,
+    RevenueTrend,
+    ValuationDay,
+    ValuationMetrics,
+)
 from quant_signal.domain.models import (
     ApiKey,
     BacktestJob,
@@ -272,6 +285,56 @@ class QuantRepository(Protocol):
     async def shareholding_history(
         self, symbol: str, as_of: datetime, weeks: int = 26
     ) -> list[ShareholdingDistribution]: ...
+
+    async def upsert_valuation_daily(self, rows: list[ValuationDay]) -> int: ...
+
+    async def latest_valuation_metrics(
+        self, as_of: datetime, symbols: list[str] | None = None, *, window: int = 250
+    ) -> dict[str, ValuationMetrics]: ...
+
+    async def valuation_history(
+        self, symbol: str, as_of: datetime, sessions: int = 300
+    ) -> list[ValuationDay]: ...
+
+    async def insert_missing_monthly_revenue(self, rows: list[MonthlyRevenue]) -> int: ...
+
+    async def revenue_trends(
+        self, as_of: datetime, symbols: list[str] | None = None, *, include_months: bool = False
+    ) -> dict[str, RevenueTrend]: ...
+
+    async def upsert_quarterly_financials(self, rows: list[QuarterlyFinancial]) -> int: ...
+
+    async def insert_missing_quarterly_financials(self, rows: list[QuarterlyFinancial]) -> int: ...
+
+    async def quarterly_financials(
+        self, symbol: str, as_of: datetime
+    ) -> list[QuarterlyFinancial]: ...
+
+    async def earnings_summaries(
+        self, as_of: datetime, symbols: list[str] | None = None
+    ) -> dict[str, EarningsMetrics]: ...
+    # TAIFEX derivatives (see ``infrastructure/derivatives_queries.py``).
+    async def derivatives_rows(self, as_of: datetime, days: int) -> DerivativesRows: ...
+
+    async def latest_market_derivatives(
+        self, as_of: datetime
+    ) -> MarketDerivativesLatest | None: ...
+
+    async def latest_stock_futures_metrics(
+        self, as_of: datetime
+    ) -> dict[str, StockFuturesMetrics]: ...
+
+    async def stock_futures_history(
+        self, symbol: str, as_of: datetime, days: int
+    ) -> list[StockFuturesDay]: ...
+
+    async def has_stock_futures(self, symbol: str) -> bool: ...
+
+    async def stock_spot_closes(
+        self, symbol: str, start: date, end: date
+    ) -> dict[date, float]: ...
+
+    async def foreign_tx_equiv_net_oi_on(self, day: date) -> float | None: ...
 
     async def latest_quotes(self, symbols: list[str]) -> dict[str, LatestQuote]: ...
 

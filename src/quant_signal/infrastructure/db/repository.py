@@ -48,7 +48,9 @@ from quant_signal.domain.ranking import (
     SHARE_COLUMNS,
     finalize_ranking_value,
 )
+from quant_signal.infrastructure.db.derivatives_repository import DerivativesRepositoryMixin
 from quant_signal.infrastructure.db.factor_repository import FactorDataRepositoryMixin
+from quant_signal.infrastructure.db.fundamentals_repository import FundamentalsRepositoryMixin
 from quant_signal.infrastructure.db.holders_repository import HoldersRepositoryMixin
 from quant_signal.infrastructure.db.models import (
     ApiKeyRow,
@@ -78,6 +80,7 @@ from quant_signal.infrastructure.db.prices import (
     read_latest,
     read_minutes,
 )
+from quant_signal.infrastructure.db.short_data_repository import ShortDataRepositoryMixin
 
 KEEP_FIRST_SEEN = {"available_at", "retrieved_at"}
 MARKET_EXCHANGES = ("TW", "TWO")
@@ -87,7 +90,12 @@ LABEL_FIELDS = ("sentiment_score", "sentiment_label", "classified_at")
 
 
 class PostgresQuantRepository(
-    OfficialDataRepositoryMixin, FactorDataRepositoryMixin, HoldersRepositoryMixin
+    OfficialDataRepositoryMixin,
+    FactorDataRepositoryMixin,
+    HoldersRepositoryMixin,
+    ShortDataRepositoryMixin,
+    FundamentalsRepositoryMixin,
+    DerivativesRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -570,6 +578,7 @@ class PostgresQuantRepository(
                 investment_trust_net_flow=row.investment_trust_net_flow,
                 dealer_net_flow=row.dealer_net_flow,
                 futures_net_open_interest=row.futures_net_open_interest,
+                futures_oi_known=row.futures_oi_known,
                 margin_balance=row.margin_balance,
                 short_balance=row.short_balance,
                 available_at=row.available_at,
@@ -841,25 +850,20 @@ class PostgresQuantRepository(
             values = item.model_dump(mode="python", exclude={"symbol"})
             insert_statement = insert(NewsItemRow).values(instrument_id=instrument_id, **values)
             stmt_excluded = insert_statement.excluded
-            statement = (
-                insert_statement
-                .on_conflict_do_update(
-                    constraint="uq_news_item_version",
-                    set_={
-                        **{
-                            key: value
-                            for key, value in values.items()
-                            if key not in KEEP_FIRST_SEEN and key not in LABEL_FIELDS
-                        },
-                        # A refetch without a label must not erase an existing one.
-                        **{
-                            key: func.coalesce(
-                                getattr(stmt_excluded, key), getattr(NewsItemRow, key)
-                            )
-                            for key in LABEL_FIELDS
-                        },
+            statement = insert_statement.on_conflict_do_update(
+                constraint="uq_news_item_version",
+                set_={
+                    **{
+                        key: value
+                        for key, value in values.items()
+                        if key not in KEEP_FIRST_SEEN and key not in LABEL_FIELDS
                     },
-                )
+                    # A refetch without a label must not erase an existing one.
+                    **{
+                        key: func.coalesce(getattr(stmt_excluded, key), getattr(NewsItemRow, key))
+                        for key in LABEL_FIELDS
+                    },
+                },
             )
             result = await self.session.execute(statement)
             inserted += result.rowcount or 0

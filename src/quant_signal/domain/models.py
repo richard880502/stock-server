@@ -541,11 +541,22 @@ class MarketObservation(BaseModel):
     investment_trust_net_flow: float
     dealer_net_flow: float
     futures_net_open_interest: float
+    # True when ``futures_net_open_interest`` is the real official position (which may be a
+    # genuine 0); False means "no TAIFEX data stored for that date" (the column itself is
+    # not nullable). Rows built without the flag keep the old meaning: 0 = unknown.
+    futures_oi_known: bool = False
     margin_balance: float = Field(ge=0)
     short_balance: float = Field(ge=0)
     available_at: datetime
     source: str
     revision: int = Field(default=1, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_futures_oi_known(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "futures_oi_known" not in data:
+            return {**data, "futures_oi_known": data.get("futures_net_open_interest", 0) != 0}
+        return data
 
     @model_validator(mode="after")
     def validate_issue_counts(self) -> MarketObservation:
