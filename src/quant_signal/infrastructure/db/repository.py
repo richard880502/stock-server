@@ -79,6 +79,7 @@ from quant_signal.infrastructure.db.official_repository import OfficialDataRepos
 from quant_signal.infrastructure.db.paper_actions_repository import PaperActionsRepositoryMixin
 from quant_signal.infrastructure.db.paper_proposal_repository import PaperProposalRepositoryMixin
 from quant_signal.infrastructure.db.paper_repository import PaperRepositoryMixin
+from quant_signal.infrastructure.db.paper_transfers_repository import PaperTransferRepositoryMixin
 from quant_signal.infrastructure.db.prices import (
     LatestQuote,
     MinuteBar,
@@ -105,6 +106,7 @@ class PostgresQuantRepository(
     PaperRepositoryMixin,
     PaperActionsRepositoryMixin,
     PaperProposalRepositoryMixin,
+    PaperTransferRepositoryMixin,
     EtfRepositoryMixin,
 ):
     def __init__(self, session: AsyncSession) -> None:

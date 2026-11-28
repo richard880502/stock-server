@@ -8,6 +8,7 @@ import { SegmentedControl } from "@/components/segmented-control";
 import type { EquityPoint } from "@/lib/api/paper";
 import { shortDate } from "@/lib/format";
 import { type EquityRange, formatMoney, rebaseBenchmark } from "./paper-math";
+import { flowLabel, flowMarks } from "./transfer-math";
 
 const STRATEGY = "var(--series-strategy)";
 const BASELINE = "var(--series-baseline)";
@@ -47,7 +48,7 @@ export function EquityCard({
   return (
     <Card
       title="權益曲線"
-      sub="每日收盤快照加上今天的即時點；加權指數以同一起點換算"
+      sub="每日收盤快照加上今天的即時點；加權指數以同一起點換算，入金／出金視為同日買賣指數"
       aside={<SegmentedControl label="曲線區間" value={range} options={RANGES} onChange={onRange} />}
       className="paper-equity"
     >
@@ -65,7 +66,8 @@ export function EquityCard({
 }
 
 function EquityLines({ series }: { series: ReturnType<typeof rebaseBenchmark> }) {
-  const { dates, equity, benchmark, hasBenchmark } = series;
+  const { dates, equity, benchmark, hasBenchmark, flows, postFlows } = series;
+  const marks = flowMarks(dates, flows, postFlows);
   const n = equity.length;
   const values = [...equity, ...benchmark.filter((v): v is number => v !== null)];
   const ticks = niceTicks(Math.min(...values), Math.max(...values), 4);
@@ -82,6 +84,10 @@ function EquityLines({ series }: { series: ReturnType<typeof rebaseBenchmark> })
           title: dates[i],
           rows: [
             { label: "總權益", value: formatMoney(equity[i]), color: STRATEGY },
+            ...(flowLabel(flows[i]) ? [{ label: flowLabel(flows[i]) as string, value: "不計入損益", color: "var(--text-3)" }] : []),
+            ...(flowLabel(postFlows[i], "post-close")
+              ? [{ label: flowLabel(postFlows[i], "post-close") as string, value: "算在下一個交易日", color: "var(--text-3)" }]
+              : []),
             ...(benchmark[i] != null
               ? [{ label: "加權指數（換算）", value: formatMoney(benchmark[i] as number), color: BASELINE, dashed: true }]
               : []),
@@ -135,6 +141,17 @@ function EquityLines({ series }: { series: ReturnType<typeof rebaseBenchmark> })
                 >
                   {shortDate(dates[i])}
                 </text>
+              ))}
+              {marks.map(({ index, date, label }) => (
+                <g key={`flow-${date}`} className="paper-flow-mark">
+                  <title>{`${date} ${label}`}</title>
+                  <path
+                    d={`M${x(index).toFixed(1)},${plot.bottom - 9} l5,5 l-5,5 l-5,-5 z`}
+                    fill="var(--surface)"
+                    stroke="var(--text-3)"
+                    strokeWidth={1.5}
+                  />
+                </g>
               ))}
               <circle cx={x(n - 1)} cy={y(equity[n - 1])} r={4} fill={STRATEGY} className="chart-dot" />
             </>

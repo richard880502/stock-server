@@ -60,9 +60,10 @@ class PaperRepository(Protocol):
         ...
 
     async def reset_paper_account(
-        self, account_id: UUID, *, now: datetime
+        self, account_id: UUID, *, now: datetime, initial_cash: int | None = None
     ) -> PaperAccountRecord | None:
-        """Cancel working orders, start a new epoch and re-deposit ``initial_cash``."""
+        """Cancel working orders, start a new epoch and re-deposit ``initial_cash`` (a given
+        ``initial_cash`` first replaces the account's)."""
         ...
 
     async def archive_paper_account(self, account_id: UUID, *, now: datetime) -> bool: ...

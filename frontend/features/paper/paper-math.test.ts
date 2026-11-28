@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { AccountDetail } from "@/lib/api/paper";
+import PARITY from "./live-parity.fixture.json";
 import {
   ACCOUNT_MAIN,
+  DETAIL_AFTER_DEPOSIT,
   DETAIL_MAIN,
   EQUITY_POINTS,
   POSITION_LOSS_DELAYED,
@@ -184,6 +187,143 @@ describe("applyLivePrices", () => {
     const live = applyLivePrices(DETAIL_MAIN, new Map());
     expect(live.equity).toBe(DETAIL_MAIN.equity);
     expect(live.positions.map((p) => p.price)).toEqual([1090, 398]);
+  });
+});
+
+describe("applyLivePrices with transfers", () => {
+  it("moves only the open window's time-weighted factor, not the deposit", () => {
+    // previous close 1,000,000; +1,000,000 deposited today; the market made +0.5% so far
+    const quotes = new Map([["2330.TW", { price: 1100, change_pct: 0.0243 }]]);
+    const live = applyLivePrices(DETAIL_AFTER_DEPOSIT, quotes); // +20,000 on 2,000 shares
+    expect(live.equity).toBe(2_025_000);
+    expect(live.total_pnl).toBe(25_000);
+    expect(live.day_pnl).toBe(25_000);
+    // day: 25,000 / (previous close 1,000,000 + the deposit at the start of the window)
+    // = 25,000 / 2,000,000 = 1.25%
+    expect(live.day_return_pct).toBeCloseTo(1.25, 8);
+    // total: factor 1.0025 (= 2,005,000 / 2,000,000) x (2,025,000 / 2,005,000) = 1.0125
+    expect(live.total_return_pct).toBeCloseTo(1.25, 8);
+  });
+
+  it("keeps the plain ratios on an API that does not send the new fields", () => {
+    const live = applyLivePrices(DETAIL_MAIN, new Map([["2330.TW", { price: 1100, change_pct: 0.0243 }]]));
+    expect(live.total_return_pct).toBeCloseTo(((DETAIL_MAIN.total_pnl + 20_000) / 1_000_000) * 100, 8);
+  });
+});
+
+describe("applyLivePrices matches the server in every phase of the day", () => {
+  // Written by tests/test_paper_transfer_windows.py from the real service: the server's detail at
+  // one price, and its figures at another. Re-pricing the first must land on the second.
+  type Case = { detail: AccountDetail; price: number; expected: Record<string, number> };
+  const cases = PARITY as unknown as Record<string, Case>;
+
+  it.each(["pre_open", "in_session", "after_close", "weekend"])("%s", (phase) => {
+    const { detail, price, expected } = cases[phase];
+    // the stream's quote is what triggers re-pricing; the fixture's position is not delayed
+    expect(detail.positions.every((p) => !p.price_delayed)).toBe(true);
+    const live = applyLivePrices(detail, new Map([[detail.positions[0].symbol, { price, change_pct: null }]]));
+    expect(live.equity).toBe(expected.equity);
+    expect(live.total_pnl).toBe(expected.total_pnl);
+    expect(live.day_pnl).toBe(expected.day_pnl);
+    // the server rounds to 0.01 both before and after; the client works from the rounded figure
+    expect(Math.abs(live.day_return_pct - expected.day_return_pct)).toBeLessThan(0.006);
+    expect(Math.abs(live.total_return_pct - expected.total_return_pct)).toBeLessThan(0.011);
+  });
+
+  it("covers a post-close flow in every phase but the session", () => {
+    expect(cases.pre_open.detail.post_close_transfer).not.toBe(0);
+    expect(cases.after_close.detail.post_close_transfer).not.toBe(0);
+    expect(cases.weekend.detail.post_close_transfer).not.toBe(0);
+    expect(cases.in_session.detail.post_close_transfer).toBe(0);
+    expect(cases.in_session.detail.day_net_transfer).not.toBe(0);
+  });
+
+  it("keeps a factor the server pinned to 1 at 1", () => {
+    const pinned = { ...cases.weekend.detail, equity: 300_000, day_pnl: 0, post_close_transfer: 400_000 };
+    const live = applyLivePrices(pinned, new Map([[pinned.positions[0].symbol, { price: 130, change_pct: null }]]));
+    expect(live.total_return_pct).toBe(pinned.total_return_pct);
+    expect(live.day_return_pct).toBe(pinned.day_return_pct);
+  });
+});
+
+describe("rebaseBenchmark with transfers", () => {
+  const point = (date: string, equity: number, close: number | null, flow?: number) => ({
+    date,
+    equity,
+    cash: equity,
+    market_value: 0,
+    benchmark_close: close,
+    live: false,
+    ...(flow === undefined ? {} : { net_transfer: flow }),
+  });
+
+  it("is exactly the plain rebase when nothing was transferred", () => {
+    const plain = rebaseBenchmark(EQUITY_POINTS);
+    const zeros = rebaseBenchmark(EQUITY_POINTS.map((p) => ({ ...p, net_transfer: 0 })));
+    expect(zeros.benchmark).toEqual(plain.benchmark);
+    expect(plain.flows).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("buys and sells the index at the start of each window: B_t = (B_{t-1} + F_t) x idx_t / idx_{t-1}", () => {
+    // 11/23  equity 1,000,000, index 100               -> B = 1,000,000
+    // 11/24  index 110 (+10%)                          -> B = 1,100,000
+    // 11/25  index 110, deposit 1,100,000              -> B = (1,100,000 + 1,100,000) x 1 = 2,200,000
+    // 11/26  index 121 (+10%), withdraw 200,000        -> B = (2,200,000 - 200,000) x 1.1 = 2,200,000
+    // 11/27  no index close, deposit 50,000            -> null, carried
+    // 11/28  index 121                                 -> B = (2,200,000 + 50,000) x 1 = 2,250,000
+    const series = rebaseBenchmark([
+      point("2026-11-23", 1_000_000, 100, 0),
+      point("2026-11-24", 1_100_000, 110, 0),
+      point("2026-11-25", 2_300_000, 110, 1_100_000),
+      point("2026-11-26", 2_400_000, 121, -200_000),
+      point("2026-11-27", 2_460_000, null, 50_000),
+      point("2026-11-28", 2_470_000, 121, 0),
+    ]);
+    expect(series.flows).toEqual([0, 0, 1_100_000, -200_000, 50_000, 0]);
+    const b = series.benchmark;
+    expect(b[0]).toBe(1_000_000);
+    expect(b[1]).toBeCloseTo(1_100_000, 4);
+    expect(b[2]).toBeCloseTo(2_200_000, 4);
+    expect(b[3]).toBeCloseTo(2_200_000, 4);
+    expect(b[4]).toBeNull();
+    expect(b[5]).toBeCloseTo(2_250_000, 4);
+  });
+
+  it("never goes below zero and starts at the first day both series exist", () => {
+    const series = rebaseBenchmark([
+      point("2026-11-23", 1_000_000, null, 0),
+      point("2026-11-24", 1_000_000, 100, 0),
+      point("2026-11-25", 10_000, 50, -1_100_000),
+    ]);
+    expect(series.benchmark[0]).toBeNull();
+    expect(series.benchmark[1]).toBe(1_000_000);
+    expect(series.benchmark[2]).toBe(0);
+  });
+
+  it("a post-close deposit on the live point earns none of that day's index move", () => {
+    // Friday index +10% on 1,000,000; Saturday +1,000,000 (post_close_transfer on Friday's live
+    // point, whose equity already includes it): B = 1,000,000 x 1.10 + 1,000,000 = 2,100,000
+    const series = rebaseBenchmark([
+      point("2026-11-26", 1_000_000, 100, 0),
+      { ...point("2026-11-27", 2_100_000, 110, 0), live: true, post_close_transfer: 1_000_000 },
+    ]);
+    expect(series.benchmark[1]).toBeCloseTo(2_100_000, 4);
+    // and the next window carries it at the start: (2,100,000 + 0) x 1.0
+    const next = rebaseBenchmark([
+      point("2026-11-26", 1_000_000, 100, 0),
+      { ...point("2026-11-27", 2_100_000, 110, 0), post_close_transfer: 1_000_000 },
+      point("2026-11-30", 2_100_000, 110, 0),
+    ]);
+    expect(next.benchmark[2]).toBeCloseTo(2_100_000, 4);
+  });
+
+  it("a deposit earns the day's index move, unlike an end-of-day rule", () => {
+    const series = rebaseBenchmark([
+      point("2026-11-23", 1_000_000, 100, 0),
+      point("2026-11-24", 2_200_000, 110, 1_000_000),
+    ]);
+    // (1,000,000 + 1,000,000) x 1.10 = 2,200,000 (the end-of-day rule gave 2,100,000)
+    expect(series.benchmark[1]).toBeCloseTo(2_200_000, 4);
   });
 });
 

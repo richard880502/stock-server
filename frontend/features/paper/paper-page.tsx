@@ -12,10 +12,12 @@ import {
   getRules,
   listAccounts,
   type NewAccount,
+  postTransfer,
   type AccountPatch,
   type OrderSide,
   type Position,
   resetAccount,
+  type TransferBody,
   updateAccount,
 } from "@/lib/api/paper";
 import { parseProposalParam, PAPER_ACCOUNT_KEY, prefillFromProposal, STATUS_LABEL as PROPOSAL_STATUS } from "@/features/proposals/proposal-math";
@@ -34,6 +36,8 @@ import { OrdersPanel } from "./orders-panel";
 import { applyLivePrices, type EquityRange, maxSellLots, parseDeepLink, RANGE_DAYS } from "./paper-math";
 import { PaperDialog, SIM_DISCLAIMER, SimBadge } from "./paper-ui";
 import { PositionsTable } from "./positions-table";
+import { ResetAmountField, TransferForm } from "./transfer-forms";
+import { parseInitialCash, resetInitialCash } from "./transfer-math";
 import { usePolled } from "./use-paper-data";
 
 const ACCOUNT_KEY = PAPER_ACCOUNT_KEY;
@@ -43,7 +47,8 @@ type Dialog =
   | null
   | { kind: "new" }
   | { kind: "settings"; focus: SettingsFocus }
-  | { kind: "reset"; step: 1 | 2 }
+  | { kind: "reset"; step: 1 | 2; cashText: string }
+  | { kind: "transfer" }
   | { kind: "archive" };
 
 /** 模擬交易: header strip, equity curve, positions, orders, and the order ticket. */
@@ -185,10 +190,17 @@ export function PaperPage() {
       refreshMoney();
       closeDialog();
     });
-  const reset = () =>
+  const reset = (initialCash?: number) =>
     run(async () => {
       if (!accountId) return;
-      await resetAccount(accountId);
+      await resetAccount(accountId, initialCash);
+      afterOrderChange();
+      closeDialog();
+    });
+  const transfer = (body: TransferBody) =>
+    run(async () => {
+      if (!accountId) return;
+      await postTransfer(accountId, body);
       afterOrderChange();
       closeDialog();
     });
@@ -275,8 +287,9 @@ export function PaperPage() {
           onSelect: choose,
           onNew: () => setDialog({ kind: "new" }),
           onSettings: (focus) => setDialog({ kind: "settings", focus }),
-          onReset: () => setDialog({ kind: "reset", step: 1 }),
+          onReset: () => setDialog({ kind: "reset", step: 1, cashText: String(account.initial_cash) }),
           onArchive: () => setDialog({ kind: "archive" }),
+          onTransfer: () => setDialog({ kind: "transfer" }),
         }}
       />
       {proposalNotice && (
@@ -393,12 +406,22 @@ export function PaperPage() {
                 <p>重設「{account.name}」會：</p>
                 <ul className="paper-rule-list">
                   <li>取消所有委託中的單</li>
-                  <li>清除目前持股，並把現金退回初始資金 NT$ {account.initial_cash.toLocaleString("zh-TW")}</li>
+                  <li>清除目前持股，並把現金換成下方的初始資金（過去的入金與出金不再計入）</li>
                   <li>權益曲線與損益從頭開始計算；舊的成交紀錄會封存，不再計入績效</li>
                 </ul>
+                <ResetAmountField
+                  value={dialog.cashText}
+                  current={account.initial_cash}
+                  onChange={(cashText) => setDialog({ ...dialog, cashText })}
+                />
                 <div className="paper-actions">
                   <button type="button" className="button" onClick={closeDialog}>取消</button>
-                  <button type="button" className="button danger" onClick={() => setDialog({ kind: "reset", step: 2 })}>
+                  <button
+                    type="button"
+                    className="button danger"
+                    disabled={parseInitialCash(dialog.cashText) === null}
+                    onClick={() => setDialog({ ...dialog, step: 2 })}
+                  >
                     我了解，繼續
                   </button>
                 </div>
@@ -406,18 +429,38 @@ export function PaperPage() {
             ) : (
               <>
                 <p>
-                  這個動作無法復原。確定要重設「{account.name}」嗎？{SIM_DISCLAIMER}，重設只影響模擬資料。
+                  這個動作無法復原。確定要重設「{account.name}」並以 NT${" "}
+                  {(parseInitialCash(dialog.cashText) ?? account.initial_cash).toLocaleString("zh-TW")}{" "}
+                  作為新的初始資金嗎？{SIM_DISCLAIMER}，重設只影響模擬資料。
                 </p>
                 {formError && <p className="inline-error" role="alert">{formError}</p>}
                 <div className="paper-actions">
                   <button type="button" className="button" onClick={closeDialog} disabled={busy}>取消</button>
-                  <button type="button" className="button danger" onClick={reset} disabled={busy} autoFocus>
+                  <button
+                    type="button"
+                    className="button danger"
+                    onClick={() => reset(resetInitialCash(dialog.cashText, account.initial_cash))}
+                    disabled={busy}
+                    autoFocus
+                  >
                     {busy ? "重設中…" : "確認重設"}
                   </button>
                 </div>
               </>
             )}
           </div>
+        )}
+      </PaperDialog>
+
+      <PaperDialog open={dialog?.kind === "transfer"} onClose={closeDialog} title="入金／出金">
+        {dialog?.kind === "transfer" && (
+          <TransferForm
+            account={live ?? account}
+            busy={busy}
+            error={formError}
+            onSubmit={transfer}
+            onCancel={closeDialog}
+          />
         )}
       </PaperDialog>
 

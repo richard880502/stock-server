@@ -9,6 +9,7 @@ import type {
   OrderPreview,
   PaperRules,
   Position,
+  Transfer,
 } from "@/lib/api/paper";
 
 export const RULES: PaperRules = {
@@ -298,3 +299,30 @@ export const ACTION_CASH: CorporateAction = {
 
 /** The main account after those dividends were credited. */
 export const DETAIL_WITH_DIVIDENDS: AccountDetail = { ...DETAIL_MAIN, dividend_income: 8_000 };
+
+/** A deposit of 1,000,000 at the start of today's window on a 1,000,000 account that is up 5,000. */
+export const DETAIL_AFTER_DEPOSIT: AccountDetail = {
+  ...DETAIL_MAIN,
+  initial_cash: 1_000_000,
+  contributed_capital: 2_000_000,
+  day_net_transfer: 1_000_000,
+  equity: 2_005_000,
+  total_pnl: 5_000,
+  total_return_pct: 0.25,
+  day_pnl: 5_000,
+  day_return_pct: 0.25,
+};
+
+export const TRANSFERS: Transfer[] = [
+  { id: "xfer-2", direction: "out", amount: 200_000, at: "2026-11-27T03:10:00Z", note: null },
+  { id: "xfer-1", direction: "in", amount: 1_000_000, at: "2026-11-26T02:00:00Z", note: "年終獎金" },
+];
+
+/** A deposit of 1,000,000 on 11/25 (flow on that day only). */
+export const EQUITY_POINTS_WITH_DEPOSIT: EquityPoint[] = EQUITY_POINTS.map((point, i) =>
+  i === 2
+    ? { ...point, equity: point.equity + 1_000_000, cash: point.cash + 1_000_000, net_transfer: 1_000_000 }
+    : i > 2
+      ? { ...point, equity: point.equity + 1_000_000, cash: point.cash + 1_000_000, net_transfer: 0 }
+      : { ...point, net_transfer: 0 },
+);

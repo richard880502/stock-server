@@ -12,8 +12,10 @@ import {
   listCorporateActions,
   listFills,
   listOrders,
+  listTransfers,
   type Order,
   type OrderStatus,
+  type Transfer,
 } from "@/lib/api/paper";
 import { formatPrice } from "@/lib/format";
 import { stockHref } from "@/lib/stock-routes";
@@ -27,12 +29,13 @@ import {
   STATUS_LABEL,
   toneClass,
 } from "./paper-math";
+import { DIRECTION_LABEL, transferAmountText } from "./transfer-math";
 import { usePagedList, usePolled } from "./use-paper-data";
 
 const code = (symbol: string) => symbol.replace(/\.TWO?$/, "");
 const PAGE = 20;
 
-type Tab = "working" | "done" | "fills" | "actions";
+type Tab = "working" | "done" | "fills" | "actions" | "transfers";
 
 function Stock({ symbol, name }: { symbol: string; name?: string }) {
   return (
@@ -216,6 +219,36 @@ export function CorporateActionsTable({ actions }: { actions: CorporateAction[] 
   );
 }
 
+/** 資金異動: deposits and withdrawals. Neutral on purpose: a transfer is not profit or loss. */
+export function TransfersTable({ transfers }: { transfers: Transfer[] }) {
+  return (
+    <div className="table-wrap paper-table-wrap" tabIndex={0} role="region" aria-label="資金異動">
+      <table className="data-table paper-table paper-transfers-table">
+        <thead>
+          <tr>
+            <th scope="col">時間</th>
+            <th scope="col">類型</th>
+            <th scope="col">金額</th>
+            <th scope="col">備註</th>
+          </tr>
+        </thead>
+        <tbody>
+          {transfers.map((transfer) => (
+            <tr key={transfer.id}>
+              <td className="num">{formatDateTime(transfer.at)}</td>
+              <td>
+                <span className="chip plain">{DIRECTION_LABEL[transfer.direction]}</span>
+              </td>
+              <td className="num paper-transfer-amount">{transferAmountText(transfer)}</td>
+              <td>{transfer.note || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function LoadMore({ hasMore, loading, onClick }: { hasMore: boolean; loading: boolean; onClick: () => void }) {
   if (!hasMore) return null;
   return (
@@ -232,6 +265,7 @@ const EMPTY: Record<Tab, string> = {
   done: "還沒有已完成的委託。",
   fills: "還沒有成交紀錄。",
   actions: "還沒有除權息紀錄。持股須在除權息日前一個交易日收盤仍持有才會參與。",
+  transfers: "還沒有入金或出金紀錄。",
 };
 
 /**
@@ -282,10 +316,17 @@ export function OrdersPanel({
     PAGE,
   );
 
+  const transfers = usePagedList(
+    tab === "transfers" ? `transfers|${accountId}` : null,
+    (offset, limit, signal) => listTransfers(accountId, { limit, offset }, { signal }),
+    PAGE,
+  );
+
   const { reload: reloadWorking } = working;
   const { reload: reloadDone } = done;
   const { reload: reloadFills } = fills;
   const { reload: reloadActions } = actions;
+  const { reload: reloadTransfers } = transfers;
   const firstToken = useRef(refreshToken);
   useEffect(() => {
     if (refreshToken === firstToken.current) return;
@@ -293,7 +334,8 @@ export function OrdersPanel({
     reloadDone();
     reloadFills();
     reloadActions();
-  }, [refreshToken, reloadWorking, reloadDone, reloadFills, reloadActions]);
+    reloadTransfers();
+  }, [refreshToken, reloadWorking, reloadDone, reloadFills, reloadActions, reloadTransfers]);
 
   const workingCount = working.data?.length ?? null;
   const lastCount = useRef<number | null>(null);
@@ -327,11 +369,13 @@ export function OrdersPanel({
       { value: "done" as const, label: "已完成" },
       { value: "fills" as const, label: "成交紀錄" },
       { value: "actions" as const, label: "除權息" },
+      { value: "transfers" as const, label: "資金異動" },
     ],
     [workingCount],
   );
 
-  const active = tab === "working" ? working : tab === "done" ? done : tab === "fills" ? fills : actions;
+  const active =
+    tab === "working" ? working : tab === "done" ? done : tab === "fills" ? fills : tab === "actions" ? actions : transfers;
   const error = active.error;
   const loading = tab === "working" ? working.loading && !working.data : active.loading;
 
@@ -378,13 +422,22 @@ export function OrdersPanel({
           ) : (
             !error && <p className="paper-empty">{EMPTY.fills}</p>
           )
-        ) : actions.items.length > 0 ? (
+        ) : tab === "actions" ? (
+          actions.items.length > 0 ? (
+            <>
+              <CorporateActionsTable actions={actions.items} />
+              <LoadMore hasMore={actions.hasMore} loading={actions.loadingMore} onClick={actions.loadMore} />
+            </>
+          ) : (
+            !error && <p className="paper-empty">{EMPTY.actions}</p>
+          )
+        ) : transfers.items.length > 0 ? (
           <>
-            <CorporateActionsTable actions={actions.items} />
-            <LoadMore hasMore={actions.hasMore} loading={actions.loadingMore} onClick={actions.loadMore} />
+            <TransfersTable transfers={transfers.items} />
+            <LoadMore hasMore={transfers.hasMore} loading={transfers.loadingMore} onClick={transfers.loadMore} />
           </>
         ) : (
-          !error && <p className="paper-empty">{EMPTY.actions}</p>
+          !error && <p className="paper-empty">{EMPTY.transfers}</p>
         )}
         {tab === "actions" && <p className="paper-note">{DIVIDEND_NOTE}</p>}
       </div>

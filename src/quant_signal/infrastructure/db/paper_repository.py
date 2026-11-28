@@ -97,6 +97,7 @@ def _ledger(row: PaperLedgerRow) -> LedgerEntry:
         kind=row.kind,  # type: ignore[arg-type]
         amount=row.amount,
         fill_id=row.fill_id,
+        request_id=row.request_id,
         note=row.note,
     )
 
@@ -258,7 +259,7 @@ class PaperRepositoryMixin:
         )
 
     async def reset_paper_account(
-        self, account_id: UUID, *, now: datetime
+        self, account_id: UUID, *, now: datetime, initial_cash: int | None = None
     ) -> PaperAccountRecord | None:
         row = await self.session.get(
             PaperAccountRow, account_id, with_for_update=True, populate_existing=True
@@ -270,6 +271,8 @@ class PaperRepositoryMixin:
         await self._pprop_expire_pending(account_id, now)
         row.epoch += 1
         row.reset_at = now
+        if initial_cash is not None:
+            row.initial_cash = initial_cash
         self.session.add(
             PaperLedgerRow(
                 account_id=account_id,

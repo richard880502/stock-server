@@ -133,7 +133,7 @@ class MemoryPaperMixin:
                 order.updated_at = now
 
     async def reset_paper_account(
-        self, account_id: UUID, *, now: datetime
+        self, account_id: UUID, *, now: datetime, initial_cash: int | None = None
     ) -> PaperAccountRecord | None:
         account = self.paper.accounts.get(account_id)
         if account is None or account.archived:
@@ -142,6 +142,8 @@ class MemoryPaperMixin:
         self._pprop_expire_pending(account_id, now)
         account.epoch += 1
         account.reset_at = now
+        if initial_cash is not None:
+            account.initial_cash = initial_cash
         self.paper.ledger.append(
             LedgerEntry(
                 account_id=account_id,

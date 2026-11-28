@@ -12,12 +12,16 @@ import {
 } from "./paper-math";
 import { Figure, PaperMenu, SimBadge } from "./paper-ui";
 
+/** Tooltip on the return figures: deposits and withdrawals do not move them. */
+export const RETURN_TITLE = "時間加權報酬：入金不算獲利、出金不算虧損";
+
 export type AccountActions = {
   onSelect: (id: string) => void;
   onNew: () => void;
   onSettings: (focus: SettingsFocus) => void;
   onReset: () => void;
   onArchive: () => void;
+  onTransfer: () => void;
 };
 
 /** Header strip: account switcher, 「模擬」 badge, and the four figures that matter. */
@@ -38,6 +42,8 @@ export function AccountHeader({
   actions: AccountActions;
 }) {
   const figures = detail ?? account;
+  const capital = figures.contributed_capital;
+  const showCapital = capital != null && capital !== figures.initial_cash;
   const canAdd = accounts.length < maxAccounts;
   return (
     <header className="paper-header card" aria-label="模擬帳戶">
@@ -70,6 +76,8 @@ export function AccountHeader({
           label="帳戶選項"
           trigger={<span>帳戶選項</span>}
           items={[
+            { key: "transfer", label: "入金／出金", onSelect: actions.onTransfer },
+            "separator",
             { key: "rename", label: "改名", onSelect: () => actions.onSettings("name") },
             {
               key: "discount",
@@ -94,10 +102,16 @@ export function AccountHeader({
       </div>
       <dl className={`paper-figures${stale ? " is-refreshing" : ""}`}>
         <Figure label="總權益">{formatMoney(figures.equity)}</Figure>
+        {showCapital && (
+          <Figure label="投入資金" className="text-muted">
+            {formatMoney(capital)}
+          </Figure>
+        )}
         <Figure
           label="今日損益"
           className={toneClass(figures.day_pnl)}
           sub={formatSignedPercent(figures.day_return_pct)}
+          subTitle={RETURN_TITLE}
         >
           {formatSignedMoney(figures.day_pnl)}
         </Figure>
@@ -105,6 +119,7 @@ export function AccountHeader({
           label="累計損益"
           className={toneClass(figures.total_pnl)}
           sub={formatSignedPercent(figures.total_return_pct)}
+          subTitle={RETURN_TITLE}
         >
           {formatSignedMoney(figures.total_pnl)}
         </Figure>

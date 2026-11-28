@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from quant_signal.adapters.rest.paper_actions import install_paper_actions
+from quant_signal.adapters.rest.paper_transfers import install_paper_transfers
 from quant_signal.adapters.rest.security import Principal, require_principal
 from quant_signal.application.paper_ports import PaperRepository
 from quant_signal.application.paper_trading import (
@@ -33,6 +34,7 @@ from quant_signal.domain.paper import (
     OrderList,
     OrderPreview,
     OrderRequest,
+    ResetRequest,
 )
 from quant_signal.settings import Settings, get_settings
 
@@ -107,8 +109,10 @@ def install_paper(app: FastAPI, settings: Settings, get_repository: Callable) ->
         return await svc.update_account(_user_id(principal), account_id, body)
 
     @router.post("/accounts/{account_id}/reset", response_model=AccountSummary)
-    async def reset_account(account_id: UUID, principal: User, svc: Service):
-        return await svc.reset_account(_user_id(principal), account_id)
+    async def reset_account(
+        account_id: UUID, principal: User, svc: Service, body: ResetRequest | None = None
+    ):
+        return await svc.reset_account(_user_id(principal), account_id, body)
 
     @router.delete("/accounts/{account_id}")
     async def delete_account(account_id: UUID, principal: User, svc: Service) -> dict:
@@ -178,4 +182,5 @@ def install_paper(app: FastAPI, settings: Settings, get_repository: Callable) ->
         return await svc.equity(_user_id(principal), account_id, days)
 
     install_paper_actions(router, User, Service, _user_id)
+    install_paper_transfers(router, User, Service, _user_id)
     app.include_router(router)

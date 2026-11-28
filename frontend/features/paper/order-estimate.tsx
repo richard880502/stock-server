@@ -12,6 +12,7 @@ import {
   tickBandsFrom,
 } from "./paper-math";
 import { PaperDialog, SIM_DISCLAIMER, SimBadge } from "./paper-ui";
+import { TRANSFER_RULE } from "./transfer-math";
 
 export const RULE_LINE = "市價單以下一筆成交價加一檔滑價成交；限價單在市場成交價到達你的價格時成交。整股、當日有效。";
 
@@ -222,6 +223,7 @@ export function RulesDialog({
           <li>全部成交或不成交，沒有部分成交；當日未成交的委託收盤後失效。</li>
           <li>買單會先圈存「價格 × 股數 ＋ 手續費」，市價單以漲停價估算。</li>
           <li>現股當沖需在帳戶選項中開啟，否則當天買進的股票當天不能賣。</li>
+          <li>{TRANSFER_RULE}</li>
           <li>債券 ETF（代號尾碼 B）賣出免徵證交稅，現行法定期限至 2026-12-31，之後自動依 ETF 稅率計算。</li>
           <li>
             ETF 的漲跌幅限制無法由代號判斷（例如 0050 實際有 ±10%，國外成分 ETF 則沒有），因此 ETF

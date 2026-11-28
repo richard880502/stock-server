@@ -1064,3 +1064,23 @@
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
+
+/* 入金／出金: a transfer is not profit or loss, so nothing here uses the up/down tones. */
+.paper-transfer-est {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.paper-transfer-note {
+  margin: 0;
+}
+
+.paper-transfer-amount {
+  color: var(--text);
+}
+
+.paper-flow-mark path {
+  pointer-events: all;
+}

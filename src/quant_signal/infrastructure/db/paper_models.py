@@ -143,6 +143,17 @@ class PaperLedgerRow(Base):
         CheckConstraint(
             "(kind = 'dividend') = (action_id IS NOT NULL)", name="ck_paper_ledger_action"
         ),
+        # A user's deposit / withdrawal (migration 0027) carries the client's request id:
+        # unique per account, so a double click can never post twice.
+        UniqueConstraint("account_id", "request_id", name="uq_paper_ledger_request"),
+        CheckConstraint(
+            "(kind IN ('transfer_in','transfer_out')) = (request_id IS NOT NULL)",
+            name="ck_paper_ledger_request",
+        ),
+        CheckConstraint(
+            "(kind <> 'transfer_in' OR amount > 0) AND (kind <> 'transfer_out' OR amount < 0)",
+            name="ck_paper_ledger_transfer_sign",
+        ),
         Index("ix_paper_ledger_account_epoch", "account_id", "epoch"),
     )
 
@@ -160,6 +171,7 @@ class PaperLedgerRow(Base):
     action_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("paper_corporate_actions.id", ondelete="CASCADE")
     )
+    request_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     note: Mapped[str | None] = mapped_column(Text)
 
 
