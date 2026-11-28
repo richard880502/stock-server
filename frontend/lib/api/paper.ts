@@ -143,6 +143,8 @@ export type OrderRequest = {
   limit_price?: number;
   lots: number;
   note?: string;
+  /** The AI proposal this order accepts (sent with the real submit only, never the preview). */
+  proposal_id?: string;
 };
 
 export type NewAccount = {
