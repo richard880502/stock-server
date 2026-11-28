@@ -139,6 +139,7 @@ class MemoryPaperMixin:
         if account is None or account.archived:
             return None
         self._cancel_working(account_id, now)
+        self._pprop_expire_pending(account_id, now)
         account.epoch += 1
         account.reset_at = now
         self.paper.ledger.append(

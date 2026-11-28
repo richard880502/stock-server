@@ -23,6 +23,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -215,3 +216,57 @@ class PaperCorporateActionRow(Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     source_available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PaperProposalRow(Base):
+    """An AI trade proposal (migration 0026); ``payload`` is the rest of the served object."""
+
+    __tablename__ = "paper_proposals"
+    __table_args__ = (
+        Index("ix_paper_proposals_account_created", "account_id", "created_at"),
+        # One pending proposal per account and symbol: the safety net under "supersede".
+        Index(
+            "uq_paper_proposals_pending",
+            "account_id",
+            "symbol",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        # An order belongs to at most one proposal.
+        Index(
+            "uq_paper_proposals_order",
+            "order_id",
+            unique=True,
+            postgresql_where=text("order_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "status IN ('pending','accepted','rejected','expired','superseded')",
+            name="ck_paper_proposals_status",
+        ),
+        CheckConstraint("action IN ('buy','sell','hold')", name="ck_paper_proposals_action"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("paper_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    as_of: Mapped[date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    action: Mapped[str] = mapped_column(String(4), nullable=False)
+    side: Mapped[str | None] = mapped_column(String(4))
+    limit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    lots: Mapped[int | None] = mapped_column(Integer)
+    order_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("paper_orders.id", ondelete="SET NULL")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)

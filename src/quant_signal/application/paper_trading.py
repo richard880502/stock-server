@@ -53,6 +53,7 @@ from quant_signal.domain.paper import (
     Position,
 )
 from quant_signal.domain.paper_actions import CorporateActionList
+from quant_signal.domain.paper_proposals import ProposalRecord
 from quant_signal.domain.tw_trading import (
     BOARD_LOT,
     DEFAULT_COSTS,
@@ -636,10 +637,33 @@ class PaperService:
         if request.order_type == "market" and request.limit_price is not None:
             raise PaperInvalid("市價單不可帶限價")
 
+    async def _proposal_to_accept(
+        self, account: PaperAccountRecord, request: OrderRequest, now: datetime
+    ) -> ProposalRecord:
+        """The pending proposal ``request`` would accept, or ``PaperConflict`` (409)."""
+        assert request.proposal_id is not None
+        # Read-only on purpose: a commit here would release the account lock taken by
+        # ``place_order``. Overdue proposals are caught by the expiry comparison below.
+        proposal = await self.repo.get_paper_proposal(  # type: ignore[attr-defined]
+            request.proposal_id
+        )
+        if proposal is None or proposal.account_id != account.id:
+            raise PaperConflict("找不到這個提案，或它不屬於這個帳戶")
+        if proposal.status != "pending" or proposal.epoch != account.epoch:
+            raise PaperConflict("此提案已不是待決定狀態（已採用、拒絕、過期或被新提案取代）")
+        if proposal.expires_at <= now:
+            raise PaperConflict("此提案已過期")
+        symbol = await self._normalize(request.symbol)
+        if proposal.symbol != symbol or proposal.side != request.side:
+            raise PaperConflict("委託的股票或買賣方向與提案不同，無法以此提案下單")
+        return proposal
+
     async def preview(self, user_id: UUID, account_id: UUID, request: OrderRequest) -> OrderPreview:
         self._check_shape(request)
         account = await self._own(user_id, account_id)
         now = self.clock()
+        if request.proposal_id is not None:
+            await self._proposal_to_accept(account, request, now)  # validates, changes nothing
         result = await self.evaluate(account, request, now=now)
         info = price_info(result.view, now) if result.view else None
         after = None
@@ -684,6 +708,9 @@ class PaperService:
         # The account may have been reset, renamed or archived while we waited for the lock.
         account = await self._own(user_id, account_id)
         now = self.clock()
+        proposal = None
+        if request.proposal_id is not None:
+            proposal = await self._proposal_to_accept(account, request, now)
         result = await self.evaluate(account, request, now=now)
         rejected = result.reject_reason is not None
         order = PaperOrderRecord(
@@ -697,7 +724,7 @@ class PaperService:
             limit_price=request.limit_price if request.order_type == "limit" else None,
             lots=request.lots,
             status="rejected" if rejected else "working",
-            source="manual",
+            source="manual" if proposal is None else "ai",
             session_date=result.session_date,
             created_at=now,
             updated_at=now,
@@ -709,7 +736,14 @@ class PaperService:
         if request.lots < 1:
             # Keep the stored row valid (lots > 0) while still showing what was asked.
             order = order.model_copy(update={"lots": 1})
-        await self.repo.add_paper_order(order)
+        if proposal is not None and not rejected:
+            # The order row and the proposal's "accepted" commit together or not at all.
+            if not await self.repo.accept_paper_proposal(  # type: ignore[attr-defined]
+                proposal.id, order, now=now
+            ):
+                raise PaperConflict("此提案已不是待決定狀態（可能剛被採用、過期或取代）")
+        else:
+            await self.repo.add_paper_order(order)
         return self._order(order, None, None)
 
     async def cancel_order(self, user_id: UUID, account_id: UUID, order_id: UUID) -> Order:

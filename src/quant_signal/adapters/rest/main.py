@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from quant_signal.adapters.rest.derivatives import install_derivatives
 from quant_signal.adapters.rest.fundamentals import install_fundamentals
 from quant_signal.adapters.rest.paper import install_paper
+from quant_signal.adapters.rest.paper_proposals import install_paper_proposals
 from quant_signal.adapters.rest.quotes import install_quotes
 from quant_signal.adapters.rest.security import Principal, enforce_quota, require_principal
 from quant_signal.adapters.rest.short_data import install_short_data
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     install_fundamentals(application)
     install_derivatives(application, get_repository)
     install_paper(application, settings, get_repository)
+    install_paper_proposals(application, settings, get_repository)
 
     @application.exception_handler(DataSyncPending)
     async def data_sync_pending(_: Request, exc: DataSyncPending) -> JSONResponse:
