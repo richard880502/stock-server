@@ -722,7 +722,45 @@ class ScreenerSnapshotService:
         self._settled[trading_date] = (signature, True)
         return written
 
-    async def refresh(self, *, recompute_latest: bool = True) -> list[date]:
+    async def _gaps(
+        self,
+        calendar: dict[str, list[MarketSession]],
+        newest: date,
+        exclude: set[date],
+        limit: int,
+    ) -> list[date]:
+        """Up to ``limit`` publishable dates missing between the oldest and newest snapshot.
+
+        A day whose market rows arrived late (a repaired fetch) sits behind the newest
+        snapshot, where the "newer than the newest" catch-up never looks. Newest first;
+        a date that already computed no rows for its current source is not retried.
+        """
+        window = await self.repository.list_market_trading_dates(
+            None, as_of=newest, limit=self.retention
+        )
+        stored = await self.repository.market_factor_state(VERSION, window)
+        if not stored:
+            return []
+        oldest = min(stored)
+        candidates = [
+            day
+            for day in window  # newest first
+            if oldest < day < newest
+            and day not in stored
+            and day not in exclude
+            and market_day_complete(calendar, day)
+        ]
+        if not candidates:
+            return []
+        feeds = await self._feed_signatures(candidates)
+        gaps = [
+            day
+            for day in candidates
+            if self._settled.get(day) != ((*_signature(calendar, day), feeds[day]), False)
+        ]
+        return gaps[:limit]
+
+    async def refresh(self, *, recompute_latest: bool = True, fill_gaps: int = 0) -> list[date]:
         """Catch up on missing dates, repair stale ones and (optionally) rebuild the newest.
 
         Targets among the newest ``backfill_sessions`` dates: dates newer than the newest
@@ -733,7 +771,9 @@ class ScreenerSnapshotService:
         inputs look different now than when it was built (``feed_signature``; a snapshot
         built before that fingerprint existed is rebuilt once); and the newest date when
         ``recompute_latest``. A date already computed
-        for the same source rows is not retried. Returns the dates published, oldest first.
+        for the same source rows is not retried. With ``fill_gaps``, also up to that many
+        older dates that have no snapshot but are publishable now (see ``_gaps``).
+        Returns the dates published, oldest first.
         """
         repo = self.repository
         dates = await repo.list_market_trading_dates(None, as_of=None, limit=self.backfill)
@@ -764,6 +804,8 @@ class ScreenerSnapshotService:
                 targets.add(day)
         if recompute_latest:
             targets.add(dates[0])
+        if fill_gaps > 0 and newest is not None:
+            targets.update(await self._gaps(calendar, newest, targets, fill_gaps))
         done: list[date] = []
         for day in sorted(targets):
             if await self.compute(day):
@@ -779,6 +821,7 @@ async def refresh_screener(
     backfill_sessions: int,
     recompute_latest: bool = True,
     settled: dict[date, tuple[tuple, bool]] | None = None,
+    fill_gaps: int = 0,
 ) -> list[date]:
     """Worker entry point: never raises, so a factor failure cannot fail a sync job."""
     if not enabled:
@@ -789,7 +832,7 @@ async def refresh_screener(
             retention_sessions=retention_sessions,
             backfill_sessions=backfill_sessions,
             settled=settled,
-        ).refresh(recompute_latest=recompute_latest)
+        ).refresh(recompute_latest=recompute_latest, fill_gaps=fill_gaps)
     except Exception:
         logger.exception("screener snapshot refresh failed")
         return []

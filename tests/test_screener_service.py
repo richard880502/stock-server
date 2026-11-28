@@ -1124,3 +1124,54 @@ async def test_unavailable_metrics_comes_from_the_loaded_snapshot_and_ignores_th
     expected = [m["key"] for m in (await service.meta())["metrics"] if m["key"] not in present]
     assert everything.unavailable_metrics == expected and expected  # e.g. no valuation yet
     assert (await ScreenerService(MemoryQuantRepository()).screen()).unavailable_metrics == []
+
+
+async def test_market_days_repaired_after_newer_snapshots_get_theirs(repository) -> None:
+    """A day whose OTC rows were missing (a failed fetch) and stored later is published."""
+    gaps = [DAYS[-7], DAYS[-6]]
+    removed = {
+        key: row
+        for key, row in repository.market_stock_days.items()
+        if row.market == "TWO" and row.trading_date in gaps
+    }
+    for key in removed:
+        del repository.market_stock_days[key]
+    service = _snapshots(repository, backfill_sessions=5, settled={})
+    for day in DAYS[-9:]:
+        await service.compute(day)
+    assert {d for (_, d) in repository.market_factors}.isdisjoint(gaps)
+
+    await repository.upsert_market_stock_days(list(removed.values()))  # the repair
+    # The newer-than-newest catch-up never looks behind the newest snapshot.
+    assert await service.refresh(recompute_latest=False) == []
+    # Bounded per call, newest gap first; nothing older than the oldest snapshot.
+    assert await service.refresh(recompute_latest=False, fill_gaps=1) == [DAYS[-6]]
+    assert await service.refresh(recompute_latest=False, fill_gaps=1) == [DAYS[-7]]
+    assert await service.refresh(recompute_latest=False, fill_gaps=1) == []
+    assert (VERSION, DAYS[-10]) not in repository.market_factors
+    assert await repository.latest_market_factor_date(VERSION) == LAST
+
+
+async def test_gap_fill_skips_days_still_incomplete_or_computed_empty(repository) -> None:
+    gap = DAYS[-6]
+    for key, row in list(repository.market_stock_days.items()):
+        if row.market == "TWO" and row.trading_date == gap:
+            del repository.market_stock_days[key]
+    service = _snapshots(repository, backfill_sessions=5, settled={})
+    for day in DAYS[-9:]:
+        await service.compute(day)
+
+    calls: list[date] = []
+    original = ScreenerSnapshotService.compute
+
+    async def counting(self, trading_date):
+        calls.append(trading_date)
+        return await original(self, trading_date)
+
+    ScreenerSnapshotService.compute = counting  # type: ignore[method-assign]
+    try:
+        # TWO is still missing: not publishable, so no compute is spent on it.
+        assert await service.refresh(recompute_latest=False, fill_gaps=2) == []
+        assert gap not in calls
+    finally:
+        ScreenerSnapshotService.compute = original  # type: ignore[method-assign]

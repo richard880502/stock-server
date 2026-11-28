@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import date
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
 
 from quant_signal.domain.models import Bar, CorporateAction, InstitutionalFlow, MarketStockDay
-from quant_signal.infrastructure.providers.cache import ReportCache, is_settled
+from quant_signal.infrastructure.providers.cache import TAIPEI, ReportCache, is_settled
 from quant_signal.infrastructure.providers.market_snapshot import (
     StockCredit,
     StockFlow,
@@ -28,6 +29,9 @@ from quant_signal.infrastructure.providers.twse import (
 
 TPEX_BASE_URL = "https://www.tpex.org.tw"
 TPEX_SOURCE = "tpex_official"
+# A cached index month that lacks a past date is refetched at most this often: the month
+# table grows by one row per trading day, and a holiday must not cost a request per call.
+INDEX_MONTH_REFRESH = timedelta(minutes=15)
 
 
 def _signed_change(value: Any) -> float:
@@ -45,6 +49,7 @@ class TpexProvider:
         *,
         client: httpx.AsyncClient | None = None,
         request_interval_seconds: float = 0.35,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._owned_client = client is None
         self.client = client or httpx.AsyncClient(
@@ -58,7 +63,10 @@ class TpexProvider:
         )
         self.request_interval_seconds = request_interval_seconds
         self.instrument_names: dict[str, str] = {}
+        self._clock = clock or (lambda: datetime.now(UTC))
+        # Month start -> {trading date: index close}, and when that month was fetched.
         self._index_month_cache: dict[date, dict[date, float]] = {}
+        self._index_month_fetched: dict[date, datetime] = {}
         self._report_cache = ReportCache()
 
     async def __aenter__(self) -> TpexProvider:
@@ -161,11 +169,14 @@ class TpexProvider:
         actions = self.parse_corporate_actions(payload, f"{code}.TWO")
         return [action for action in actions if start <= action.ex_date <= end]
 
-    async def fetch_market_quotes(self, trading_date: date) -> TwseDailyMarket | None:
-        payload = await self._get_json(
+    async def _daily_quotes_payload(self, trading_date: date) -> dict[str, Any]:
+        return await self._get_json(
             "/www/zh-tw/afterTrading/dailyQuotes",
             {"date": trading_date.strftime("%Y/%m/%d"), "response": "json"},
         )
+
+    async def fetch_market_quotes(self, trading_date: date) -> TwseDailyMarket | None:
+        payload = await self._daily_quotes_payload(trading_date)
         index_close = await self._index_close(trading_date)
         if index_close is None:
             return None
@@ -179,22 +190,14 @@ class TpexProvider:
     ) -> dict[date, TwseDailyMarket | None]:
         """Fetch independent daily quote reports concurrently with a small limit."""
 
-        for month in sorted({item.replace(day=1) for item in trading_dates}):
-            await self._index_close(month)
+        # Sequentially, so a stale month is refetched once rather than by every task.
+        index_closes = {item: await self._index_close(item) for item in trading_dates}
         semaphore = asyncio.Semaphore(concurrency)
 
         async def fetch_one(trading_date: date) -> tuple[date, TwseDailyMarket | None]:
             async with semaphore:
-                payload = await self._get_json(
-                    "/www/zh-tw/afterTrading/dailyQuotes",
-                    {
-                        "date": trading_date.strftime("%Y/%m/%d"),
-                        "response": "json",
-                    },
-                )
-            index_close = self._index_month_cache[
-                trading_date.replace(day=1)
-            ].get(trading_date)
+                payload = await self._daily_quotes_payload(trading_date)
+            index_close = index_closes[trading_date]
             if index_close is None:
                 return trading_date, None
             return trading_date, self.parse_daily_market(
@@ -211,9 +214,13 @@ class TpexProvider:
         return await self.enrich_market_day(parsed)
 
     async def fetch_market_stock_day(self, trading_date: date) -> list[MarketStockDay]:
-        """Every common OTC stock's quote, institutional flow and credit balance."""
-        market = await self.fetch_market_quotes(trading_date)
-        if market is None:
+        """Every common OTC stock's quote, institutional flow and credit balance.
+
+        Needs only the day's quotes: the index close is a market-observation figure, and a
+        missing one must not erase every stock row of a trading day.
+        """
+        parsed = self.parse_daily_quotes(await self._daily_quotes_payload(trading_date))
+        if parsed is None or parsed[0] != trading_date:
             return []
         requested = trading_date.strftime("%Y/%m/%d")
         flow_payload = await self._get_json(
@@ -225,7 +232,7 @@ class TpexProvider:
             {"date": requested, "response": "json"},
         )
         return build_market_stock_days(
-            market.quotes,
+            parsed[1],
             market="TWO",
             source=TPEX_SOURCE,
             available_at=_available_at(trading_date),
@@ -348,13 +355,34 @@ class TpexProvider:
             capital_data_complete=complete,
         )
 
+    def _index_month_may_grow(self, month: date, trading_date: date) -> bool:
+        """Whether refetching ``month`` could now answer ``trading_date``.
+
+        Not for a future date, nor for a month fetched after it ended (complete), nor
+        within ``INDEX_MONTH_REFRESH`` of the last fetch (a holiday stays absent).
+        """
+        now = self._clock()
+        if trading_date > now.astimezone(TAIPEI).date():
+            return False
+        fetched_at = self._index_month_fetched.get(month)
+        if fetched_at is None:
+            return True
+        following = (month + timedelta(days=32)).replace(day=1)
+        if fetched_at.astimezone(TAIPEI).date() >= following:
+            return False
+        return now - fetched_at >= INDEX_MONTH_REFRESH
+
     async def _index_close(self, trading_date: date) -> float | None:
         month = trading_date.replace(day=1)
-        if month not in self._index_month_cache:
+        cached = self._index_month_cache.get(month)
+        if cached is not None and trading_date in cached:
+            return cached[trading_date]
+        if cached is None or self._index_month_may_grow(month, trading_date):
             payload = await self._get_json(
                 "/www/zh-tw/indexInfo/inx",
                 {"date": month.strftime("%Y/%m/%d"), "response": "json"},
             )
+            self._index_month_fetched[month] = self._clock()
             self._index_month_cache[month] = {
                 bar.trading_date: bar.close for bar in self.parse_monthly_index(payload)
             }
@@ -442,17 +470,14 @@ class TpexProvider:
         return result
 
     @staticmethod
-    def parse_daily_market(
+    def parse_daily_quotes(
         payload: dict[str, Any],
-        *,
-        index_close: float,
-    ) -> TwseDailyMarket | None:
+    ) -> tuple[date, tuple[TwseSecurityQuote, ...], float] | None:
+        """``(reported date, common-stock quotes, their turnover)``; None without trades."""
         requested = str(payload.get("date") or "")
         if len(requested) != 8:
             return None
-        trading_date = date.fromisoformat(
-            f"{requested[:4]}-{requested[4:6]}-{requested[6:]}"
-        )
+        trading_date = date.fromisoformat(f"{requested[:4]}-{requested[4:6]}-{requested[6:]}")
         tables = payload.get("tables") or []
         rows = (tables[0].get("data") or []) if tables else []
         quotes: list[TwseSecurityQuote] = []
@@ -485,10 +510,22 @@ class TpexProvider:
                 continue
         if not quotes or turnover <= 0:
             return None
+        return trading_date, tuple(quotes), turnover
+
+    @staticmethod
+    def parse_daily_market(
+        payload: dict[str, Any],
+        *,
+        index_close: float,
+    ) -> TwseDailyMarket | None:
+        parsed = TpexProvider.parse_daily_quotes(payload)
+        if parsed is None:
+            return None
+        trading_date, quotes, turnover = parsed
         return TwseDailyMarket(
             trading_date=trading_date,
             index_close=index_close,
-            quotes=tuple(quotes),
+            quotes=quotes,
             turnover_value=turnover,
             foreign_net_flow=0,
             investment_trust_net_flow=0,

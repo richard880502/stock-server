@@ -10,12 +10,14 @@ from typing import Literal, Protocol
 from quant_signal.application.data_sync import (
     DataSyncReport,
     _fetched_after,
+    _retry_empty,
 )
 from quant_signal.domain.models import FetchCoverage, MarketStockDay
 
 logger = logging.getLogger(__name__)
 
 MARKET_STOCK_DATASET = "market_stock_day"
+MarketCode = Literal["TW", "TWO"]
 
 
 class MarketSnapshotProvider(Protocol):
@@ -37,7 +39,9 @@ class MarketSnapshotSyncService:
 
     A day fetched on the day itself is refetched the next day, because the
     exchanges publish institutional and credit reports after the close.
-    Holidays are recorded as empty so they are asked for once.
+    Holidays are recorded as empty so they are asked for once. An empty day the
+    ``sibling`` exchange (``(source, market)``, same trading calendar) has rows for is not
+    a holiday but a failed fetch, and is retried with a backoff (see ``_retry_empty``).
     """
 
     def __init__(
@@ -47,12 +51,14 @@ class MarketSnapshotSyncService:
         *,
         market: Literal["TW", "TWO"],
         source: str,
+        sibling: tuple[str, MarketCode] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository
         self.provider = provider
         self.market = market
         self.source = source
+        self.sibling = sibling
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def sync(
@@ -69,17 +75,14 @@ class MarketSnapshotSyncService:
             for offset in range((end - start).days + 1)
             if (start + timedelta(days=offset)).weekday() < 5
         ]
-        coverage = await self.repository.list_fetch_coverage(
-            self.source,
-            MARKET_STOCK_DATASET,
-            self.market,
-            [day.isoformat() for day in weekdays],
+        pending = await pending_snapshot_days(
+            self.repository,
+            source=self.source,
+            market=self.market,
+            sibling=self.sibling,
+            weekdays=weekdays,
+            now=started_at,
         )
-        pending = [
-            day
-            for day in weekdays
-            if not _fetched_after(coverage.get(day.isoformat()), day)
-        ]
         stored = 0
         # Newest first: if the run is cut short, the most useful days exist.
         for index, day in enumerate(sorted(pending, reverse=True), start=1):
@@ -122,3 +125,35 @@ class MarketSnapshotSyncService:
             periods_skipped=len(weekdays) - len(pending),
             notes=["Whole-market official quotes, institutional flows and credit balances."],
         )
+
+
+async def pending_snapshot_days(
+    repository: MarketSnapshotRepository,
+    *,
+    source: str,
+    market: MarketCode,
+    sibling: tuple[str, MarketCode] | None,
+    weekdays: list[date],
+    now: datetime,
+    repairs_only: bool = False,
+) -> list[date]:
+    """Weekdays to (re)fetch: not fetched after they ended, or a suspicious ``empty``.
+
+    ``repairs_only`` returns just the suspicious empties (what the worker's repair check
+    looks for; the ordinary pending days are the daily refresh's business).
+    """
+    periods = [day.isoformat() for day in weekdays]
+    coverage = await repository.list_fetch_coverage(source, MARKET_STOCK_DATASET, market, periods)
+    sibling_coverage = (
+        await repository.list_fetch_coverage(sibling[0], MARKET_STOCK_DATASET, sibling[1], periods)
+        if sibling is not None
+        else {}
+    )
+    pending: list[date] = []
+    for day in weekdays:
+        entry = coverage.get(day.isoformat())
+        if _retry_empty(entry, sibling_coverage.get(day.isoformat()), day, now):
+            pending.append(day)
+        elif not repairs_only and not _fetched_after(entry, day):
+            pending.append(day)
+    return pending

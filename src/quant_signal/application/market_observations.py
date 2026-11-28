@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Literal, Protocol
 
-from quant_signal.application.data_sync import DataSyncReport, _fetched_after
+from quant_signal.application.data_sync import DataSyncReport, _fetched_after, _retry_empty
 from quant_signal.domain.models import FetchCoverage, MarketObservation
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,7 @@ class MarketObservationSyncService:
         history_sessions: int = 252,
         minimum_history: int = 252,
         minimum_stock_history: int = 60,
+        sibling: tuple[str, Literal["TW", "TWO"]] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository
@@ -124,6 +125,9 @@ class MarketObservationSyncService:
         # A stock joins the breadth universe after 60 closes, the same rule the
         # full rebuild uses, so new listings are not dropped for a year.
         self.minimum_stock_history = minimum_stock_history
+        # (source, market) of the other exchange: an "empty" day it built an observation
+        # for is retried (see ``_retry_empty``) instead of staying final.
+        self.sibling = sibling
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def sync(self, *, end: date, max_days: int = 150) -> DataSyncReport:
@@ -137,18 +141,32 @@ class MarketObservationSyncService:
             for item in await self.repository.list_market_observations(self.market, end=end)
             if item.source == self.source
         }
+        periods = [day.isoformat() for day in all_dates]
         coverage = await self.repository.list_fetch_coverage(
-            self.source,
-            OBSERVATION_DATASET,
-            self.market,
-            [day.isoformat() for day in all_dates],
+            self.source, OBSERVATION_DATASET, self.market, periods
+        )
+        sibling_coverage = (
+            await self.repository.list_fetch_coverage(
+                self.sibling[0], OBSERVATION_DATASET, self.sibling[1], periods
+            )
+            if self.sibling is not None
+            else {}
         )
         # A session needs `minimum_history` sessions of closes behind it (itself included).
         feasible = all_dates[self.minimum_history - 1 :]
         targets = [
             day
             for day in feasible
-            if day not in have and not _fetched_after(coverage.get(day.isoformat()), day)
+            if day not in have
+            and (
+                not _fetched_after(coverage.get(day.isoformat()), day)
+                or _retry_empty(
+                    coverage.get(day.isoformat()),
+                    sibling_coverage.get(day.isoformat()),
+                    day,
+                    started_at,
+                )
+            )
         ][-max_days:]
         built: list[MarketObservation] = []
         incomplete: list[date] = []

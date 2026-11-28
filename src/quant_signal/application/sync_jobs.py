@@ -20,7 +20,11 @@ from quant_signal.application.data_sync import (
     _is_tpex_symbol,
 )
 from quant_signal.application.market_observations import MarketObservationSyncService
-from quant_signal.application.market_sync import MarketSnapshotSyncService
+from quant_signal.application.market_sync import (
+    MarketCode,
+    MarketSnapshotSyncService,
+    pending_snapshot_days,
+)
 from quant_signal.application.ports import QuantRepository
 from quant_signal.domain.models import FetchCoverage, SyncJob, SyncJobKind
 from quant_signal.infrastructure.providers.tpex import TPEX_SOURCE, TpexProvider
@@ -33,6 +37,13 @@ SCHEDULER_DATASET = "daily_enqueue"
 # Flow requests are per day, so a first-time backfill is capped well below the
 # price lookback; later runs only fetch the days not yet recorded.
 INSTITUTION_LOOKBACK_DAYS = 120
+MARKET_SOURCES: dict[MarketCode, str] = {"TW": TWSE_SOURCE, "TWO": TPEX_SOURCE}
+
+
+def market_sibling(market: MarketCode) -> tuple[str, MarketCode]:
+    """``(source, market)`` of the other exchange; both share one trading calendar."""
+    other: MarketCode = "TW" if market == "TWO" else "TWO"
+    return MARKET_SOURCES[other], other
 
 
 async def run_sync_job(
@@ -46,18 +57,20 @@ async def run_sync_job(
     end = today or datetime.now(UTC).astimezone(TAIPEI).date()
     start = end - timedelta(days=job.lookback_days)
     if job.kind is SyncJobKind.MARKET:
-        is_otc = job.symbol == "TWO"
+        market: MarketCode = "TWO" if job.symbol == "TWO" else "TW"
         snapshot = MarketSnapshotSyncService(
             repository,  # type: ignore[arg-type]
-            tpex if is_otc else twse,
-            market="TWO" if is_otc else "TW",
-            source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
+            tpex if market == "TWO" else twse,
+            market=market,
+            source=MARKET_SOURCES[market],
+            sibling=market_sibling(market),
         )
         observer = MarketObservationSyncService(
             repository,  # type: ignore[arg-type]
-            tpex if is_otc else twse,  # type: ignore[arg-type]
-            market="TWO" if is_otc else "TW",
-            source=TPEX_SOURCE if is_otc else TWSE_SOURCE,
+            tpex if market == "TWO" else twse,  # type: ignore[arg-type]
+            market=market,
+            source=MARKET_SOURCES[market],
+            sibling=market_sibling(market),
         )
 
         async def build_scores() -> None:
@@ -142,12 +155,10 @@ async def process_next_job(
     return True
 
 
-MARKET_CODES = ("TW", "TWO")
+MARKET_CODES: tuple[MarketCode, ...] = ("TW", "TWO")
 
 
-async def enqueue_market_snapshots(
-    repository: QuantRepository, *, lookback_days: int
-) -> int:
+async def enqueue_market_snapshots(repository: QuantRepository, *, lookback_days: int) -> int:
     created = 0
     for market in MARKET_CODES:
         _, was_created = await repository.enqueue_sync_job(
@@ -171,13 +182,54 @@ async def request_symbol_sync(repository: QuantRepository, symbol: str) -> None:
         )
 
 
-async def ensure_market_snapshots(
-    repository: QuantRepository, *, lookback_days: int
-) -> int:
+async def ensure_market_snapshots(repository: QuantRepository, *, lookback_days: int) -> int:
     """Queue the first backfill when no whole-market data exists yet."""
     if await repository.list_market_trading_dates(None, as_of=None, limit=1):
         return 0
     return await enqueue_market_snapshots(repository, lookback_days=lookback_days)
+
+
+async def enqueue_market_repairs(
+    repository: QuantRepository, *, now: datetime, lookback_days: int
+) -> list[str]:
+    """Queue a MARKET job for each market with a suspicious ``empty`` day in its window.
+
+    Such a day (the other exchange traded, this one stored nothing) is otherwise only
+    retried by the next daily refresh; this lets the worker heal it on its own. Returns
+    the markets queued. Cheap: two coverage reads per market, no exchange request.
+    """
+    today = now.astimezone(TAIPEI).date()
+    start = today - timedelta(days=lookback_days)
+    weekdays = [
+        start + timedelta(days=offset)
+        for offset in range((today - start).days)  # today itself is never a repair
+        if (start + timedelta(days=offset)).weekday() < 5
+    ]
+    queued: list[str] = []
+    for market in MARKET_CODES:
+        repairs = await pending_snapshot_days(
+            repository,  # type: ignore[arg-type]
+            source=MARKET_SOURCES[market],
+            market=market,
+            sibling=market_sibling(market),
+            weekdays=weekdays,
+            now=now,
+            repairs_only=True,
+        )
+        if not repairs:
+            continue
+        _, created = await repository.enqueue_sync_job(
+            SyncJobKind.MARKET, market, lookback_days=lookback_days
+        )
+        logger.warning(
+            "%s market: %s day(s) stored empty while the other exchange traded (%s)%s",
+            market,
+            len(repairs),
+            ", ".join(day.isoformat() for day in repairs[:12]),
+            "; repair job queued" if created else "; a market job is already queued",
+        )
+        queued.append(market)
+    return queued
 
 
 async def enqueue_daily_refresh(
@@ -204,9 +256,7 @@ async def enqueue_daily_refresh(
             due.append(f"{local.date().isoformat()}@{stamp}")
     if not due:
         return 0
-    done = await repository.list_fetch_coverage(
-        SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", due
-    )
+    done = await repository.list_fetch_coverage(SCHEDULER_SOURCE, SCHEDULER_DATASET, "*", due)
     todo = [period for period in due if period not in done]
     if not todo:
         return 0
@@ -246,6 +296,7 @@ def retry_delay_seconds(base: float, attempts: int, *, cap: float = 120.0) -> fl
 __all__ = [
     "INSTITUTION_LOOKBACK_DAYS",
     "enqueue_daily_refresh",
+    "enqueue_market_repairs",
     "enqueue_market_snapshots",
     "ensure_market_snapshots",
     "process_next_job",
