@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import math as stdmath
+import zlib
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -18,7 +19,9 @@ from pydantic import BaseModel
 from quant_signal.application.official_queries import as_of_cutoff
 from quant_signal.application.ports import QuantRepository
 from quant_signal.application.stocks import StockNotFound, normalize_listed_symbol
+from quant_signal.domain.feed_stats import FEEDS, FeedDayStat
 from quant_signal.domain.models import (
+    FetchCoverage,
     MarketFactorSnapshot,
     MarketFactorState,
     MarketSession,
@@ -280,6 +283,18 @@ PRESETS: list[dict[str, Any]] = [
 ]
 for _preset in PRESETS:
     _preset["exclude_risk"] = True  # every preset leaves out 處置股 by default
+    # The metrics its filters and sort depend on (scores are always computed): when every
+    # stock has none of one of them yet, an empty result only means history is still filling.
+    _preset.setdefault(
+        "requires",
+        list(
+            dict.fromkeys(
+                key
+                for key in [*(item["key"] for item in _preset["filters"]), _preset["sort"]]
+                if key in METRIC_BY_KEY
+            )
+        ),
+    )
 PRESET_BY_KEY = {preset["key"]: preset for preset in PRESETS}
 
 # Metrics the MCP tool always includes next to a preset's own columns.
@@ -346,6 +361,9 @@ class ScreenerResult(BaseModel):
     offset: int
     snapshot_pending: bool
     notice: str | None = None
+    # metric keys with no value for any stock of the snapshot (history still filling);
+    # compared with a preset's ``requires`` by the UI to explain an empty result
+    unavailable_metrics: list[str] = []
     entries: list[ScreenerEntry]
 
 
@@ -436,6 +454,12 @@ def _entry(row: MarketFactorSnapshot, rank: int | None = None) -> ScreenerEntry:
 
 COMPLETE_RATIO = 0.6  # a market day needs this share of the previous session's rows
 MARKETS = ("TW", "TWO")
+# The official feeds a snapshot reads are fingerprinted per date; the fingerprint of the
+# snapshot as built is kept in fetch_coverage (one row per date, ``row_count`` = fingerprint).
+SIGNATURE_SOURCE = "screener_snapshot"
+SIGNATURE_DATASET = "feed_signature"
+FEED_LOOKBACK_DAYS = 45  # calendar days of feed history that can reach a 60-session metric
+FEED_RECENT_DATES = 30  # newest visible dates per feed that enter the fingerprint
 
 
 def _session(
@@ -486,6 +510,35 @@ def _signature(calendar: dict[str, list[MarketSession]], day: date) -> tuple:
     return tuple(parts)
 
 
+def feed_signature(stats: dict[str, list[FeedDayStat]], day: date) -> int:
+    """Fingerprint of what the feeds show as of the end of ``day`` (what ``compute`` reads).
+
+    Per feed, its newest visible trading dates with their row counts and last
+    ``available_at``. It changes when rows appear, vanish or get a different ``available_at``
+    within the visible range - including a re-stamp that *lowers* an ``available_at`` so a
+    row becomes visible to this date, which a "written after the snapshot" test would miss.
+    Rows of a date only partly visible at the cutoff contribute the cutoff, not their count,
+    so later writes for that date do not change the fingerprint.
+    """
+    cutoff = as_of_cutoff(day)
+    parts: list[tuple[str, tuple]] = []
+    for name in FEEDS:
+        seen = []
+        for item in stats.get(name, []):
+            if item.trading_date > day or item.first_available_at > cutoff:
+                continue
+            complete = item.last_available_at <= cutoff
+            seen.append(
+                (
+                    item.trading_date.isoformat(),
+                    item.rows if complete else None,
+                    min(item.last_available_at, cutoff).isoformat(),
+                )
+            )
+        parts.append((name, tuple(seen[-FEED_RECENT_DATES:])))
+    return zlib.crc32(repr(parts).encode()) & 0x7FFFFFFF
+
+
 def _is_stale(
     calendar: dict[str, list[MarketSession]], day: date, state: MarketFactorState
 ) -> bool:
@@ -528,6 +581,13 @@ class ScreenerSnapshotService:
         # (the worker) pass their own dict.
         self._settled = settled if settled is not None else {}
 
+    async def _feed_signatures(self, days: list[date]) -> dict[date, int]:
+        """One grouped query per feed for the whole range, then a fingerprint per date."""
+        stats = await self.repository.feed_day_stats(
+            min(days) - timedelta(days=FEED_LOOKBACK_DAYS), max(days)
+        )
+        return {day: feed_signature(stats, day) for day in days}
+
     async def compute(self, trading_date: date) -> int:
         """(Re)build the snapshot for ``trading_date``; returns the rows written.
 
@@ -545,6 +605,9 @@ class ScreenerSnapshotService:
                 " (stored snapshot removed)" if removed else "",
             )
             return 0
+        # Fingerprint first: rows written while the snapshot is being built make the next
+        # refresh see a different fingerprint and rebuild it.
+        feed_signature_now = (await self._feed_signatures([trading_date]))[trading_date]
         sessions = {m: [i.trading_date for i in items] for m, items in calendar.items()}
         reported = {
             m: {i.trading_date for i in items if i.reported} for m, items in calendar.items()
@@ -606,7 +669,7 @@ class ScreenerSnapshotService:
             flags = sorted(flag_set)
             staged.append((symbol, name, market, close, metrics, flags, through))
 
-        signature = _signature(calendar, trading_date)
+        signature = (*_signature(calendar, trading_date), feed_signature_now)
         if not staged:
             self._settled[trading_date] = (signature, False)
             logger.info("screener: %s computed no rows, nothing stored", trading_date)
@@ -643,6 +706,19 @@ class ScreenerSnapshotService:
         written = await repo.replace_market_factors(trading_date, VERSION, snapshots)
         await repo.prune_market_factors(VERSION, self.retention)
         await repo.delete_other_factor_versions(VERSION)  # old scoring versions are never served
+        await repo.record_fetch_coverage(
+            [
+                FetchCoverage(
+                    source=SIGNATURE_SOURCE,
+                    dataset=SIGNATURE_DATASET,
+                    symbol="*",
+                    period=trading_date.isoformat(),
+                    status="ok",
+                    row_count=feed_signature_now,
+                    fetched_at=now,
+                )
+            ]
+        )
         self._settled[trading_date] = (signature, True)
         return written
 
@@ -653,7 +729,10 @@ class ScreenerSnapshotService:
         snapshot; dates whose snapshot fails the both-markets-complete rule (``compute``
         deletes it); dates whose source rows changed after the snapshot was written
         (newer ``available_at``, per-market row counts or institutional report dates that
-        differ); and the newest date when ``recompute_latest``. A date already computed
+        differ), or whose valuation / 借券 / 當沖 / foreign-holding / stock-futures / TDCC
+        inputs look different now than when it was built (``feed_signature``; a snapshot
+        built before that fingerprint existed is rebuilt once); and the newest date when
+        ``recompute_latest``. A date already computed
         for the same source rows is not retried. Returns the dates published, oldest first.
         """
         repo = self.repository
@@ -663,10 +742,16 @@ class ScreenerSnapshotService:
         newest = await repo.latest_market_factor_date(VERSION)
         calendar = await repo.market_session_calendar(dates[0], HISTORY_SESSIONS)
         states = await repo.market_factor_state(VERSION, dates)
+        feeds_now = await self._feed_signatures(dates)
+        built_with = await repo.list_fetch_coverage(
+            SIGNATURE_SOURCE, SIGNATURE_DATASET, "*", [day.isoformat() for day in dates]
+        )
         targets: set[date] = set()
         for day in dates:
             state = states.get(day)
-            signature = _signature(calendar, day)
+            signature = (*_signature(calendar, day), feeds_now[day])
+            entry = built_with.get(day.isoformat())
+            feeds_changed = entry is None or entry.row_count != feeds_now[day]
             seen = self._settled.get(day)
             fresh = seen is not None and seen[0] == signature
             if state is None:
@@ -675,7 +760,7 @@ class ScreenerSnapshotService:
                     targets.add(day)
             elif not market_day_complete(calendar, day):
                 targets.add(day)
-            elif not fresh and _is_stale(calendar, day, state):
+            elif not fresh and (_is_stale(calendar, day, state) or feeds_changed):
                 targets.add(day)
         if recompute_latest:
             targets.add(dates[0])
@@ -759,6 +844,16 @@ def screener_meta_metrics() -> list[dict[str, Any]]:
         }
         for m in METRICS
     ]
+
+
+def unavailable_metrics(rows: list[MarketFactorSnapshot]) -> list[str]:
+    """Metric keys that are None for every stock of the snapshot (one pass over loaded rows)."""
+    present: set[str] = set()
+    for row in rows:
+        present.update(key for key, value in row.metrics.items() if value is not None)
+    if not rows:
+        return []
+    return [metric.key for metric in METRICS if metric.key not in present]
 
 
 class ScreenerService:
@@ -877,6 +972,7 @@ class ScreenerService:
                 notice=notice,
                 entries=[],
             )
+        unavailable = unavailable_metrics(rows)
         if market != "ALL":
             rows = [row for row in rows if row.market == market]
         universe = len(rows)
@@ -926,6 +1022,7 @@ class ScreenerService:
             limit=limit,
             offset=offset,
             snapshot_pending=False,
+            unavailable_metrics=unavailable,
             entries=[_entry(row, offset + i + 1) for i, row in enumerate(page)],
         )
 

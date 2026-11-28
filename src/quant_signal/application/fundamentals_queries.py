@@ -73,6 +73,7 @@ class StockFundamentalsService:
                 pe_percentile_250d=metrics.pe_percentile_250d,
                 pb_percentile_250d=metrics.pb_percentile_250d,
                 yield_percentile_250d=metrics.yield_percentile_250d,
+                observations=metrics.observations,
                 history=[
                     ValuationPoint(
                         date=day.trading_date,

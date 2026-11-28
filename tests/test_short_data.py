@@ -494,6 +494,27 @@ async def test_evening_refresh_stores_today_and_is_idempotent_per_slot() -> None
     assert not ex.requests and again == {}  # same slot, same day: nothing re-requested
 
 
+async def test_past_days_fetched_late_are_stamped_with_their_publication_time() -> None:
+    repo, ex = MemoryQuantRepository(), FakeExchanges()
+    saturday = taipei(28, 10, 55)  # first deploy on the weekend
+    await sched.refresh_short_data(
+        repo, ex, ex, now=saturday, attempts={}, backfill_sessions=0, request_interval=0
+    )
+    sbl_rows = await repo.sd_sbl_rows(date(2026, 11, 1), FAR)
+    assert sbl_rows and all(r.trading_date == date(2026, 11, 27) for r in sbl_rows)
+    # 借券 of Friday is final at 22:35 that day, not "Saturday 10:55"
+    assert {r.available_at for r in sbl_rows} == {taipei(27, 22, 35)}
+    # 當沖 is only final on T+2 (Tuesday 23:00): a Saturday fetch keeps the fetch time
+    dt_rows = await repo.sd_day_trade_rows(date(2026, 11, 1), FAR)
+    assert dt_rows and {r.available_at for r in dt_rows} == {saturday}
+    # an as-of read at Friday 23:00 already sees the Friday 借券 rows
+    assert await repo.sd_sbl_rows(date(2026, 11, 1), taipei(27, 23))
+    # same-day fetch before the publication time keeps the fetch time
+    assert sched.stamp_available_at(
+        sched.documented_available_at(sched.SBL, date(2026, 11, 27)), taipei(27, 21)
+    ) == taipei(27, 21)
+
+
 async def test_later_slot_adds_a_revision_when_numbers_change() -> None:
     repo, ex = MemoryQuantRepository(), FakeExchanges()
     await sched.refresh_short_data(

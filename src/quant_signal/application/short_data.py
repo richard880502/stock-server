@@ -30,6 +30,12 @@ import httpx
 
 from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.holders_data import _rollback, tdcc_slot
+from quant_signal.application.publication_time import (
+    DAYTRADE_PUBLISHED,
+    SBL_PUBLISHED,
+    publication_moment,
+    stamp_available_at,
+)
 from quant_signal.application.source_guard import Backoff, MissingSources, SourceBlocked, retrying
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import short_data as src
@@ -115,10 +121,9 @@ def backfill_allowed(now: datetime) -> bool:
 def documented_available_at(kind: str, day: date) -> datetime:
     """When a past session's table was final, for backfilled rows (Taipei -> UTC)."""
     if kind == SBL:
-        moment = datetime.combine(day, time(22, 35), TAIPEI)
-    else:  # day trade is final on T+2
-        moment = datetime.combine(add_weekdays(day, 2), time(23, 0), TAIPEI)
-    return moment.astimezone(UTC)
+        return publication_moment(day, SBL_PUBLISHED)
+    # day trade is final on T+2
+    return publication_moment(add_weekdays(day, 2), DAYTRADE_PUBLISHED)
 
 
 # Sources per dataset. Day trading is published by TWSE only; never wait for TPEx there.
@@ -205,9 +210,10 @@ async def _refresh_day(
     counts: dict[Source, int] = {}
     written = {name: 0 for name, _ in sources}
     failed: list[Source] = []
-    sbl_at = documented_available_at(SBL, day) if backfill else moment
-    dt_at = documented_available_at(DAYTRADE, day) if backfill else moment
-    sbl_at, dt_at = min(sbl_at, moment), min(dt_at, moment)
+    # Same rule for the live window and the back-fill: a past day fetched late is stamped
+    # with its documented publication time, never with the fetch time.
+    sbl_at = stamp_available_at(documented_available_at(SBL, day), moment)
+    dt_at = stamp_available_at(documented_available_at(DAYTRADE, day), moment)
     plan: dict[Source, tuple[_HasClient, str, dict[str, str], Callable, int, Callable]] = {
         (SBL, "twse"): (
             twse,

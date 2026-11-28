@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 import httpx
 
 from quant_signal.application.data_sync import TAIPEI
+from quant_signal.application.publication_time import (
+    FOREIGN_PUBLISHED,
+    publication_moment,
+    stamp_available_at,
+)
 from quant_signal.application.source_guard import Backoff, MissingSources, SourceBlocked, retrying
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import holders as src
@@ -36,7 +41,6 @@ RETRY_AFTER = timedelta(minutes=10)
 MIN_TDCC_ROWS = 1500  # ~1,900 listed + OTC common stocks
 MIN_FOREIGN_ROWS = 400  # TWSE alone has ~1,000 common stocks, TPEx ~800
 FOREIGN_EXCHANGES = ("twse", "tpex")
-FOREIGN_PUBLISHED = time(21, 0)  # Taipei: the day's foreign-holding tables are out by then
 FINAL_HOUR = 22  # Taipei: after this a still-empty exchange counts as "not published today"
 
 
@@ -49,9 +53,7 @@ def foreign_available_at(day: date, moment: datetime) -> datetime:
     """Stamp for a day's foreign-holding rows: the fetch time for the live same-day fetch,
     otherwise the day's publication time (21:00 Taipei, never later than the fetch), so a
     snapshot recomputed for a past date can see rows we only fetched afterwards."""
-    if day >= moment.astimezone(TAIPEI).date():
-        return moment
-    return min(moment, datetime.combine(day, FOREIGN_PUBLISHED, TAIPEI))
+    return stamp_available_at(publication_moment(day, FOREIGN_PUBLISHED), moment)
 
 
 class _HasClient(Protocol):

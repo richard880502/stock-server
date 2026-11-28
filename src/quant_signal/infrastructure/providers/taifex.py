@@ -605,6 +605,32 @@ class TaifexBlocked(RuntimeError):
     the caller must stop sending requests for this tick."""
 
 
+class TaifexRangeRefused(RuntimeError):
+    """HTTP 200 but an HTML page instead of the CSV: TAIFEX rejected the query (almost
+    always a date range wider than the dataset allows, e.g. ``pcRatioDown`` takes at most
+    30 calendar days). Unlike ``TaifexBlocked`` the site is healthy, so other datasets may
+    still be fetched; the same request will be refused again."""
+
+    def __init__(self, url: str, form: dict[str, str] | None) -> None:
+        self.url, self.form = url, form
+        window = ""
+        if form and "queryStartDate" in form:
+            window = f" ({form['queryStartDate']} - {form.get('queryEndDate', '?')})"
+        super().__init__(f"TAIFEX returned an HTML page instead of a download: {url}{window}")
+
+
+def looks_like_html(text: str) -> bool:
+    head = text.lstrip("\ufeff \t\r\n")[:200].lower()
+    return head.startswith(("<!doctype", "<html", "<head", "<script"))
+
+
+def ensure_download(text: str, url: str, form: dict[str, str] | None) -> str:
+    """Raise ``TaifexRangeRefused`` when a query answered with an HTML page, not a file."""
+    if looks_like_html(text):
+        raise TaifexRangeRefused(url, form)
+    return text
+
+
 class TaifexClient:
     """Shared, throttled client for TAIFEX downloads (one instance per worker)."""
 
@@ -657,4 +683,7 @@ class TaifexClient:
                 f"TAIFEX answered {response.status_code} for {url} "
                 f"(location={response.headers.get('location')})"
             )
-        return decode(response.content)
+        body = decode(response.content)
+        # The query pages answer a refused request with a 200 HTML page. Only the form
+        # downloads are CSV; the GET pages (stock list) are legitimately HTML.
+        return ensure_download(body, url, form) if form is not None else body

@@ -72,6 +72,8 @@ class ValuationMetrics(BaseModel):
     pe_observations: int = 0
     pb_observations: int = 0
     yield_observations: int = 0
+    # valuation days visible among the newest 250 sessions (any metric), for "23 / 60 days"
+    observations: int = 0
 
 
 class ValuationPoint(BaseModel):
@@ -203,6 +205,10 @@ class ValuationSection(BaseModel):
     pe_percentile_250d: float | None = None
     pb_percentile_250d: float | None = None
     yield_percentile_250d: float | None = None
+    # valuation days visible as of the cutoff within the newest 250 sessions, and how many a
+    # percentile needs (``MIN_PERCENTILE_OBSERVATIONS``), so the UI can say "23 / 60 days"
+    observations: int = 0
+    observations_required: int = MIN_PERCENTILE_OBSERVATIONS
     history: list[ValuationPoint] = Field(default_factory=list)
 
 

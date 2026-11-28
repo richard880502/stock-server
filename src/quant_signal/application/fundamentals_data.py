@@ -34,13 +34,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 import httpx
 
 from quant_signal.application.data_sync import TAIPEI
 from quant_signal.application.holders_data import foreign_days
+from quant_signal.application.publication_time import (
+    VALUATION_PUBLISHED,
+    publication_moment,
+    stamp_available_at,
+)
 from quant_signal.application.source_guard import Backoff, MissingSources, SourceBlocked, retrying
 from quant_signal.domain.models import FetchCoverage
 from quant_signal.infrastructure.providers import fundamentals as fnd
@@ -79,7 +84,12 @@ def trading_session_open(now: datetime) -> bool:
 
 def stamped_close(day: date) -> datetime:
     """18:00 Taipei of the trading day, when the end-of-day reports can be assumed out."""
-    return datetime.combine(day, time(18, 0), TAIPEI)
+    return publication_moment(day, VALUATION_PUBLISHED)
+
+
+def valuation_available_at(day: date, fetched_at: datetime) -> datetime:
+    """``min(fetched, 18:00 on the day)``: a late-fetched past day is not stamped "now"."""
+    return stamp_available_at(stamped_close(day), fetched_at)
 
 
 def financials_slot(now: datetime) -> str:
@@ -343,7 +353,7 @@ async def _refresh_valuation(
                 tpex,
                 day,
                 exchanges=due,
-                available_at=moment,
+                available_at=valuation_available_at(day, moment),
                 fetch_attempts=fetch_attempts,
                 request_interval=request_interval,
                 backoff=backoff,
@@ -395,7 +405,7 @@ async def _refresh_valuation(
             tpex,
             day,
             exchanges=due,
-            available_at=stamped_close(day),
+            available_at=valuation_available_at(day, moment),
             fetch_attempts=fetch_attempts,
             request_interval=request_interval,
             backoff=backoff,

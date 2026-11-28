@@ -25,7 +25,7 @@ from quant_signal.domain.models import MarketObservation, MarketStockDay
 from quant_signal.infrastructure.db.models import Base
 from quant_signal.infrastructure.memory import MemoryQuantRepository
 from quant_signal.infrastructure.providers import taifex as src
-from quant_signal.infrastructure.providers.taifex import TaifexBlocked
+from quant_signal.infrastructure.providers.taifex import TaifexBlocked, TaifexRangeRefused
 from quant_signal.quant import derivatives as calc
 from quant_signal.quant.market_environment import MarketEnvironmentEngine
 
@@ -306,6 +306,17 @@ def test_market_days_combine_every_dataset(fixture_rows) -> None:
     assert latest is not None and latest.date == date(2026, 11, 27)
     assert (latest.max_call_oi_strike, latest.max_put_oi_strike) == (50000.0, 49800.0)
     assert latest.weekly_max_call_oi_strike == 38800.0
+    # the open interest at those strikes comes straight from options_oi_levels_daily
+    monthly = next(item for item in fixture_rows.oi_levels if item.kind == "monthly")
+    assert (latest.max_call_oi_contracts, latest.max_put_oi_contracts) == (
+        monthly.max_call_oi_contracts,
+        monthly.max_put_oi_contracts,
+    )
+    assert (latest.weekly_max_call_oi_contracts, latest.weekly_max_put_oi_contracts) == (
+        3611,
+        1575,
+    )
+    assert latest.max_call_oi_contracts and latest.max_put_oi_contracts
     assert calc.latest_market_summary(DerivativesRows()) is None
 
 
@@ -1258,3 +1269,109 @@ def test_derived_derivatives_figures_do_not_show_float_noise() -> None:
     )
     assert calc.basis_pct(2159.0, 2150.0) == 0.42
     assert calc.pct_change(1010.0, 1000.0) == 1.0
+
+
+# --- TAIFEX range limits (verified live 2026-11-28) --------------------------------------
+
+
+def refusal_html() -> str:
+    # trimmed copy of the real page pcRatioDown returned for 2026/10/27 - 2026/11/27
+    return (FIXTURES / "range_refused.html").read_text(encoding="utf-8")
+
+
+def inclusive_days(form: dict[str, str]) -> int:
+    start = datetime.strptime(form["queryStartDate"], "%Y/%m/%d").date()
+    end = datetime.strptime(form["queryEndDate"], "%Y/%m/%d").date()
+    return (end - start).days + 1
+
+
+class RangeLimitedTaifex(FakeTaifex):
+    """pcRatioDown answers an HTML page for a query longer than 30 calendar days."""
+
+    async def fetch(self, url: str, form: dict[str, str] | None = None) -> str:
+        if url == src.PC_RATIO_URL and form is not None and inclusive_days(form) > 30:
+            self.requests.append((url, form))
+            return refusal_html()
+        return await super().fetch(url, form)
+
+
+def test_the_real_refusal_page_is_html_and_a_typed_error() -> None:
+    page = refusal_html()
+    assert page.startswith("<!DOCTYPE") and src.looks_like_html(page)
+    assert not src.looks_like_html(text("pc_ratio.csv"))
+    with pytest.raises(ValueError):
+        src.parse_pc_ratio(page)  # what production used to hit on every tick
+    form = src.range_form(date(2026, 10, 27), date(2026, 11, 27))
+    with pytest.raises(TaifexRangeRefused, match="2026/10/27"):
+        src.ensure_download(page, src.PC_RATIO_URL, form)
+
+
+async def test_client_flags_html_answers_to_downloads_but_not_to_pages() -> None:
+    import httpx
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=refusal_html().encode())
+
+    client = src.TaifexClient(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(answer)),
+        request_interval_seconds=0,
+    )
+    with pytest.raises(TaifexRangeRefused):
+        await client.fetch(src.PC_RATIO_URL, src.range_form(date(2026, 10, 1), date(2026, 11, 27)))
+    assert "<html" in (await client.fetch(src.STOCK_LISTS_URL)).lower()  # a GET page is HTML
+
+
+async def test_pc_ratio_backfill_is_chunked_to_thirty_days_newest_first_and_resumable() -> None:
+    repo, taifex, attempts, cache = MemoryQuantRepository(), RangeLimitedTaifex(), {}, {}
+    now = taipei(28, 11)
+    for _ in range(8):
+        await run(
+            repo,
+            taifex,
+            now,
+            attempts=attempts,
+            specs_cache=cache,
+            backfill_sessions=120,
+            request_budget=1,
+        )
+        attempts.clear()
+    forms = [f for u, f in taifex.requests if u == src.PC_RATIO_URL and f]
+    assert forms, "the P/C ratio was never requested"
+    assert all(inclusive_days(f) <= 30 for f in forms)
+    ends = [datetime.strptime(f["queryEndDate"], "%Y/%m/%d").date() for f in forms]
+    assert ends[0] == date(2026, 11, 27) and ends == sorted(ends, reverse=True)
+    assert len(set(ends)) == len(ends)  # resumed from coverage: no chunk asked twice
+    starts = [datetime.strptime(f["queryStartDate"], "%Y/%m/%d").date() for f in forms]
+    assert starts[-1] <= sched.recent_sessions(date(2026, 11, 27), 120)[0] + timedelta(days=3)
+    assert (await repo.derivatives_rows(FAR, 200)).pc_ratio  # rows got stored
+
+
+async def test_a_refused_range_is_typed_not_recorded_logged_once_and_backed_off(caplog) -> None:
+    class AlwaysRefused(FakeTaifex):
+        async def fetch(self, url, form=None):
+            if url == src.PC_RATIO_URL:
+                self.requests.append((url, form))
+                return refusal_html()
+            return await super().fetch(url, form)
+
+    repo, taifex, attempts = MemoryQuantRepository(), AlwaysRefused(), {}
+    with caplog.at_level("WARNING"):
+        written = await run(repo, taifex, taipei(27, 18), attempts=attempts)
+    assert "options_pc_ratio" not in written and written["futures_institutional"] == 18
+    assert written["options_institutional"] == 12  # the pass went on: not a site-wide block
+    assert "options_pc_ratio" in attempts and sched.BLOCKED not in attempts
+    refusals = [r for r in caplog.records if "refused the options_pc_ratio" in r.getMessage()]
+    assert len(refusals) == 1 and "2026/11/26" in refusals[0].getMessage()
+    assert not await repo.list_fetch_coverage(
+        sched.SOURCE, "options_pc_ratio", "*", ["2026-11-26", "2026-11-27"]
+    )
+    taifex.requests.clear()
+    await run(repo, taifex, taipei(27, 18, 5), attempts=attempts)
+    assert taifex.count(src.PC_RATIO_URL) == 0  # not retried every tick
+
+
+def test_full_history_datasets_stay_within_the_proven_range() -> None:
+    chunk = {ds.name: ds.chunk_days for ds in sched.build_datasets(FakeTaifex(), {}, FAR)}
+    assert chunk["options_pc_ratio"] == 29  # 30 calendar days inclusive
+    # a 172-day query (the 120-session window) was answered with CSV for these two
+    assert chunk["futures_institutional"] <= 172 and chunk["options_institutional"] <= 172

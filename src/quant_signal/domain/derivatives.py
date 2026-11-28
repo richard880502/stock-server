@@ -194,8 +194,13 @@ class MarketDerivativesLatest(MarketDerivativesDay):
     max_put_oi_strike: float | None = None
     max_call_oi_expiry: str | None = None
     max_put_oi_expiry: str | None = None
+    # open interest (contracts) at those strikes, straight from options_oi_levels_daily
+    max_call_oi_contracts: int | None = None
+    max_put_oi_contracts: int | None = None
     weekly_max_call_oi_strike: float | None = None
     weekly_max_put_oi_strike: float | None = None
+    weekly_max_call_oi_contracts: int | None = None
+    weekly_max_put_oi_contracts: int | None = None
     weekly_expiry: str | None = None
 
 

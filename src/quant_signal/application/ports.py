@@ -11,6 +11,7 @@ from quant_signal.domain.derivatives import (
     StockFuturesDay,
     StockFuturesMetrics,
 )
+from quant_signal.domain.feed_stats import FeedDayStat
 from quant_signal.domain.fundamentals import (
     EarningsMetrics,
     QuarterlyFinancial,
@@ -392,6 +393,8 @@ class QuantRepository(Protocol):
     def iter_market_histories(
         self, end: date, sessions: int
     ) -> AsyncIterator[tuple[str, str, str, list[tuple[Any, ...]]]]: ...
+
+    async def feed_day_stats(self, start: date, end: date) -> dict[str, list[FeedDayStat]]: ...
 
     async def market_session_calendar(
         self, end: date, sessions: int

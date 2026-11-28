@@ -631,9 +631,10 @@ def test_past_foreign_rows_are_stamped_with_their_publication_time() -> None:
     early_fetch = datetime(2026, 11, 27, 5, 0, tzinfo=sched.TAIPEI)  # Friday 05:00 Taipei
     assert sched.foreign_available_at(thursday, early_fetch) == published
     assert sched.foreign_available_at(thursday, taipei(26, 20)) == taipei(26, 20)
-    # the live same-day fetch keeps the fetch time, even after 21:00
+    # the shared rule min(fetch, publication): a same-day fetch before 21:00 keeps its time,
+    # one after 21:00 is stamped with the documented publication time
     friday = date(2026, 11, 27)
-    assert sched.foreign_available_at(friday, taipei(27, 22)) == taipei(27, 22)
+    assert sched.foreign_available_at(friday, taipei(27, 22)) == taipei(27, 21)
     assert sched.foreign_available_at(friday, taipei(27, 17, 5)) == taipei(27, 17, 5)
 
 
